@@ -15,6 +15,7 @@ import {
   removeColumn,
   renameKey,
   reorder,
+  splits,
   typeLine,
   withMoved,
   wrapLabel,
@@ -269,5 +270,38 @@ describe("draft edits", () => {
     ]);
     expect(renameKey(ts, "qa", "review")[0]!.from).toEqual(["doing", "review"]);
     expect(renameKey(ts, "doing", "work")[1]!.to).toBe("work");
+  });
+});
+
+describe("splits", () => {
+  it("cuts a list into k non-empty runs in order, every way", () => {
+    expect(splits([1, 2, 3, 4], 2)).toEqual([
+      [[1], [2, 3, 4]],
+      [
+        [1, 2],
+        [3, 4],
+      ],
+      [[1, 2, 3], [4]],
+    ]);
+    expect(splits([1, 2, 3], 3)).toEqual([[[1], [2], [3]]]);
+    expect(splits([1, 2, 3], 1)).toEqual([[[1, 2, 3]]]);
+    expect(splits([1, 2], 3)).toEqual([]);
+    expect(splits([1, 2], 0)).toEqual([]);
+  });
+  it("no cap: C(14, 4) = 1001 ways for 15 ranks in 5 rows, every one", () => {
+    const ranks = Array.from({ length: 15 }, (_, i) => i);
+    expect(splits(ranks, 4)).toHaveLength(364);
+    expect(splits(ranks, 5)).toHaveLength(1001);
+  });
+  it("only the runs that fit: a run that does not fit is never extended, and a split's last run must fit too", () => {
+    const sum = (run: number[]) => run.reduce((a, b) => a + b, 0);
+    const fits = (run: number[]) => sum(run) <= 5;
+    expect(splits([1, 2, 3, 4], 2, fits)).toEqual([]); // 1 | 2+3+4 and 1+2 | 3+4 and 1+2+3 | 4: a run over 5 in each
+    expect(splits([1, 2, 3, 4], 3, fits)).toEqual([
+      [[1], [2, 3], [4]],
+      [[1, 2], [3], [4]],
+    ]);
+    const all = splits([1, 2, 3, 4], 3);
+    expect(all.filter((sp) => sp.every(fits))).toEqual(splits([1, 2, 3, 4], 3, fits));
   });
 });

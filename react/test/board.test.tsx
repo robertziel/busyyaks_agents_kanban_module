@@ -13,7 +13,7 @@ import { boardData, fixture } from "./fixtures";
 
 const coding = fixture("coding");
 const content = fixture("content");
-const localV3 = fixture("local_v3");
+const localV4 = fixture("local_v4");
 
 const card = (o: Partial<Card>): Card => ({
   id: 1,
@@ -408,7 +408,7 @@ describe("Board", () => {
       card({ id: 5, column: "local_human_review", title: "HC", owner_session: "s1" }),
       card({ id: 6, column: "public_human_review", title: "PUB", owner_session: "s1" }),
     ];
-    const api = fakeApi(boardData(localV3, cards), cards);
+    const api = fakeApi(boardData(localV4, cards), cards);
     const { unmount } = render(<Host api={api} view={{ card: 5, panel: null, archived: false }} />);
     const localBtn = await screen.findByText("✓ Approve → Local: Merged");
     expect(localBtn).toHaveAttribute(
@@ -430,6 +430,21 @@ describe("Board", () => {
     await waitFor(() => expect(api.calls).toContain("approve 6 true"));
   });
 
+  // card #271: the button names the step — Local: Deploy check's exit is "Open public PR", into Public: Create PR
+  it("the approve button on Local: Deploy check names its step: Open public PR → Public: Create PR", async () => {
+    const cards = [card({ id: 9, column: "deploy_check", title: "DC", owner_session: "s1" })];
+    const api = fakeApi(boardData(localV4, cards), cards);
+    render(<Host api={api} view={{ card: 9, panel: null, archived: false }} />);
+    const btn = await screen.findByText("✓ Open public PR → Public: Create PR");
+    expect(btn).toHaveAttribute(
+      "title",
+      "Open public PR: the card moves Local: Deploy check → Public: Create PR; the owner agent is pinged to carry on and move the card to Public: Agent review",
+    );
+    expect(screen.queryByText(/✓ Approve/)).toBeNull();
+    fireEvent.click(btn);
+    await waitFor(() => expect(api.calls).toContain("approve 9 true"));
+  });
+
   it("an approved card in Awaiting merge shows who approved and withdraws; one dragged in without approval shows nothing", async () => {
     const cards = [
       card({
@@ -442,7 +457,7 @@ describe("Board", () => {
       }),
       card({ id: 8, column: "awaiting_merge", title: "DR", owner_session: "s1" }),
     ];
-    const api = fakeApi(boardData(localV3, cards), cards);
+    const api = fakeApi(boardData(localV4, cards), cards);
     const { unmount } = render(<Host api={api} view={{ card: 7, panel: null, archived: false }} />);
     expect(await screen.findByText(/its agent merges and moves it to Done/)).toBeInTheDocument();
     const w = screen.getByText("Withdraw approval");

@@ -20,7 +20,7 @@ import { AgentLinks, Avatar, ErrorState, Html, Loading } from "./Bits";
 import { CardLinks } from "./CardLinkRow";
 import { KbIcon, type IconName } from "./KbIcon";
 import { MarkdownEditor, UploadChips } from "./MarkdownEditor";
-import { approvedNext, approveTitle, operatorMoves } from "../lib/workflow";
+import { approvedNext, approveLabel, approveTitle, operatorMoves } from "../lib/workflow";
 import { Select } from "./Select";
 
 export type Panel = "labels" | "due" | "members" | "checklist" | "cover" | null;
@@ -993,7 +993,7 @@ function CardDetail({ id, slug, board, panel, setPanel, onClose, onChanged, proj
                   onClick={() => void run(() => api.approve(id, true))}
                   title={approveTitle(step, colLabel)}
                 >
-                  {step.final ? "✓ Approve to merge" : `✓ Approve → ${colLabel(step.to)}`}
+                  {approveLabel(step, colLabel)}
                 </button>
               )}
               {!c.owner_session && !c.approved && (

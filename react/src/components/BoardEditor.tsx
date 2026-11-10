@@ -44,6 +44,8 @@ import type {
 } from "../types";
 import { Select } from "./Select";
 
+const RESIZE_SETTLE_MS = 120; // the graph box's size is read again this long after its last resize
+
 const ACTORS: { value: WorkflowActor; label: string }[] = [
   { value: "any", label: "anyone" },
   { value: "operator", label: "operator" },
@@ -114,7 +116,8 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
   const labelOf = (k: string) => draft.columns.find((c) => c.key === k)?.label ?? k;
   const typeOf = (k: ColumnTypeKey) => data.types.find((t) => t.key === k);
   const typeOptions = data.types.map((t) => ({ value: t.key, label: t.label }));
-  // the box's width decides the fold (rows no wider than the box at MIN_TEXT_ZOOM) and the default zoom (the whole graph)
+  // the box decides the fold (rows no wider than the box at MIN_TEXT_ZOOM, the split that fits its height best) and the
+  // default zoom (the whole graph)
   useLayoutEffect(() => {
     const el = graphRef.current;
     if (!el) return;
@@ -123,9 +126,18 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
       setBox({ w: el.clientWidth, maxH: Number.isFinite(maxH) ? maxH : 0 });
     };
     measure();
-    const ro = new ResizeObserver(measure);
+    // a resize re-folds once it settles (RESIZE_SETTLE_MS), not on every frame of a drag: the fold for a height draws
+    // up to a few hundred row splits
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ro = new ResizeObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(measure, RESIZE_SETTLE_MS);
+    });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => {
+      clearTimeout(timer);
+      ro.disconnect();
+    };
   }, []);
   // dagre once per draft; a resize only re-folds the same ranks
   const ranked = useMemo(
@@ -135,7 +147,15 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
       }),
     [draft, data.types],
   );
-  const base = useMemo(() => foldGraph(ranked, box.w > 0 ? (box.w - 2) / MIN_TEXT_ZOOM : Infinity), [ranked, box.w]);
+  const base = useMemo(
+    () =>
+      foldGraph(
+        ranked,
+        box.w > 0 ? (box.w - 2) / MIN_TEXT_ZOOM : Infinity,
+        box.maxH > 0 ? (box.maxH - 2) / MIN_TEXT_ZOOM : Infinity,
+      ),
+    [ranked, box.w, box.maxH],
+  );
   const layout = useMemo(() => withMoved(base, moved), [base, moved]);
   // the zoom that shows the whole graph, never below readable text (the box scrolls instead); 1 when the box is unknown
   const fitted = useMemo(() => {

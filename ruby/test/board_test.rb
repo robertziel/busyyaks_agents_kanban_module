@@ -6,7 +6,7 @@ require "test_helper"
 # (BoardRepo: boards / board_columns / board_transitions + the template row), every rule derived from the types in one
 # place (Board#rules). The coding board fixture derives exactly the rules busyyaks's board runs on (workflow v3: a
 # question is a FLAG, Human Check and Ready to merge are gates); the content board the same for content_app's; the
-# local v3 board (fixtures/boards/local_v3.board.json) is the private local-repo flow with its two agent review loops.
+# local v4 board (fixtures/boards/local_v4.board.json) is the private local-repo flow with its two agent review loops.
 class BoardTest < Minitest::Test
   include KanbanTest::Setup
   Invalid = AgentsKanban::Invalid
@@ -15,7 +15,7 @@ class BoardTest < Minitest::Test
 
   def coding = B.new(KanbanTest.board_hash("coding"), host: config)
   def content = B.new(KanbanTest.board_hash("content"), host: KanbanTest.config("content"))
-  def local = B.new(KanbanTest.board_hash("local_v3"), host: config)
+  def local = B.new(KanbanTest.board_hash("local_v4"), host: config)
   def raw = KanbanTest.board_hash("coding")
   def host_raw = JSON.parse(JSON.generate(config.to_h))
   def col(key, type, label: key.capitalize) = { "key" => key, "label" => label, "type" => type }
@@ -24,13 +24,14 @@ class BoardTest < Minitest::Test
 
   # ── approval steps: a gate's ONE forward operator exit ────────────────────────────────────────
 
-  # The local v3 board asks the operator three times: Local: Human review → Local: Merged (the agent then deploys
-  # and hands the card to Local: Deploy check), Local: Deploy check → Public: Agent review (OK → open public PR), and
+  # The local v4 board asks the operator three times: Local: Human review → Local: Merged (the agent then deploys
+  # and hands the card to Local: Deploy check), Local: Deploy check → Public: Create PR (Open public PR: the agent
+  # builds, audits and opens it, then moves the card on to Public: Agent review — card #271), and
   # Public: Human review → Awaiting merge (final: the agent merges and moves the card to Done). Backward exits
   # (Changes requested, Deploy failed, Rework) and Cancel approve nothing.
-  def test_local_v3_derives_three_approval_steps
+  def test_local_v4_derives_three_approval_steps
     assert_equal [%w[local_human_review local_merged_pr deploy_check Approve] + [false],
-                  %w[deploy_check public_agent_review public_human_review] + ["Open public PR", false],
+                  %w[deploy_check public_create_pr public_agent_review] + ["Open public PR", false],
                   %w[public_human_review awaiting_merge done Approve] + [true],],
                  steps(local)
     assert_equal %w[local_human_review deploy_check public_human_review awaiting_merge], local.gate_columns
@@ -39,7 +40,7 @@ class BoardTest < Minitest::Test
     assert_nil local.approval_for("local_human_review", "local_author"), "Changes requested is no approval"
     assert_nil local.approval_for("deploy_check", "doing"), "Deploy failed is no approval"
     assert_nil local.approval_from("awaiting_merge"), "Merge is the agent's move, not an approval"
-    assert_equal %w[doing local_author public_author], local.working_columns
+    assert_equal %w[doing local_author public_create_pr public_author], local.working_columns
     assert_equal %w[local_agent_review local_merged_pr public_agent_review], local.review_columns
     assert_equal %w[doing todo], [local.watchdog.from, local.watchdog.to], "the FIRST working column"
     assert_equal "doing", local.idle_column

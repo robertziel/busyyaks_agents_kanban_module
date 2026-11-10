@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   foldGraph,
+  foldRows,
   layoutGraph,
   LABEL_CHAR_W,
   MIN_TEXT_PX,
@@ -15,7 +16,9 @@ import {
   planTransitions,
   rankGraph,
   SMALLEST_FONT_PX,
+  splits,
   type Box,
+  type FoldedRows,
   type Layout,
   type Pt,
   type Route,
@@ -145,7 +148,7 @@ const PHONE_BOX_W = 322;
 const fold = (boxW: number) => (boxW - 2) / MIN_TEXT_ZOOM;
 
 describe("the workflow graph is readable on every board shape, at every fold", () => {
-  for (const name of ["legacy_v2_prereview", "local_v3", "legacy_v2", "coding", "content"]) {
+  for (const name of ["legacy_v2_prereview", "local_v4", "legacy_v2", "coding", "content"]) {
     for (const [what, maxWidth] of [
       ["one row", Infinity],
       ["1920px desktop", fold(DESKTOP_BOX_W)],
@@ -164,6 +167,85 @@ describe("the workflow graph is readable on every board shape, at every fold", (
   }
 });
 
+// the editor's own fold: its box's width AND height (card #271: the split into rows that fits the height best, among
+// the fewest rows and one more) — as readable as the width-only fold, never wider than the box, never taller than the
+// greedy fold of the same width
+describe("the fold for a box's width and height", () => {
+  const BOXES = [
+    [1434, 850],
+    [1434, 600],
+    [1100, 700],
+    [900, 900],
+    [700, 500],
+    [PHONE_BOX_W, 390],
+  ] as const;
+  for (const name of ["legacy_v2_prereview", "local_v4", "legacy_v2", "coding", "content"]) {
+    it(`${name}: no problems at ${BOXES.length} boxes`, () => {
+      const s = shape(name);
+      const ranked = rankGraph(s.columns, s.transitions, { typeLabel });
+      for (const [w, h] of BOXES) {
+        const byWidth = foldGraph(ranked, fold(w));
+        const l = foldGraph(ranked, fold(w), fold(h));
+        expect(problems(l, s), `${w} × ${h}`).toEqual([]);
+        if (byWidth.w <= fold(w)) expect(l.w, `${w} × ${h}`).toBeLessThanOrEqual(fold(w));
+        expect(l.h, `${w} × ${h}`).toBeLessThanOrEqual(Math.max(byWidth.h, fold(h)));
+      }
+    });
+  }
+});
+
+// the height search keeps the best split of all: every split into the width fold's rows and one more is drawn here,
+// unpruned (no width filter), and the best that fits the width by the same order (the largest share of the height up
+// to zoom 1, then the fewer rows, the lower, the narrower) is the one foldGraph returned
+describe("the height fold picks the best split", () => {
+  const BOXES = [
+    [1434, 850],
+    [1100, 700],
+    [900, 900],
+  ] as const;
+  for (const name of ["legacy_v2_prereview", "local_v4", "legacy_v2", "coding", "content"]) {
+    it(`${name}: the best of every split at ${BOXES.length} boxes`, () => {
+      const s = shape(name);
+      const ranked = rankGraph(s.columns, s.transitions, { typeLabel });
+      for (const [w, h] of BOXES) {
+        const maxW = fold(w);
+        const maxH = fold(h);
+        const byWidth = foldGraph(ranked, maxW);
+        const l = foldGraph(ranked, maxW, maxH);
+        expect(l.w, `${w} × ${h}`).toBeLessThanOrEqual(Math.max(maxW, byWidth.w));
+        if (byWidth.w > maxW || byWidth.rows < 2) continue; // no height search: the width fold stands
+        const fit = (o: { h: number }) => Math.min(1 / MIN_TEXT_ZOOM, maxH / o.h);
+        const better = (o: FoldedRows, b: FoldedRows) =>
+          fit(o) !== fit(b)
+            ? fit(o) > fit(b)
+            : o.rows !== b.rows
+              ? o.rows < b.rows
+              : o.h !== b.h
+                ? o.h < b.h
+                : o.w < b.w;
+        let best: FoldedRows = byWidth;
+        for (let k = byWidth.rows; k <= Math.min(byWidth.rows + 1, ranked.ranks.length - 1); k++)
+          for (const rows of splits(ranked.ranks, k)) {
+            const o = foldRows(ranked, rows);
+            if (o.w <= maxW && better(o, best)) best = o;
+          }
+        expect({ rows: l.rows, w: l.w, h: l.h }, `${w} × ${h}`).toEqual({ rows: best.rows, w: best.w, h: best.h });
+      }
+    });
+  }
+});
+
+// the height-aware fold draws many splits; the ones too wide are skipped undrawn, so the 15-column local board folds
+// for the desktop box in a few ms (≈ 10 ms measured; 42 ms before the skip) — the bound is 10× that, for slow CI hosts
+it("the fold for the desktop box takes under 100 ms on the 15-column local board", () => {
+  const s = shape("local_v4");
+  const ranked = rankGraph(s.columns, s.transitions, { typeLabel });
+  foldGraph(ranked, fold(1434), fold(850)); // warm-up
+  const t = performance.now();
+  for (let i = 0; i < 5; i++) foldGraph(ranked, fold(1434), fold(850));
+  expect((performance.now() - t) / 5).toBeLessThan(100);
+});
+
 // every graph box width from a phone to a wide screen, in 10px steps: the fold changes at many of them. dagre runs once
 // per board (rankGraph: the width does not reach it) and every width folds that one drawing (foldGraph, what layoutGraph
 // does); a fold equal to one already checked has the same problems (problems() is a pure function of the layout), so
@@ -174,7 +256,7 @@ describe("readable at every box width from 300 to 2400px", () => {
     [910, 1600],
     [1610, 2400],
   ] as const;
-  for (const name of ["legacy_v2_prereview", "local_v3", "legacy_v2", "coding", "content"]) {
+  for (const name of ["legacy_v2_prereview", "local_v4", "legacy_v2", "coding", "content"]) {
     const s = shape(name);
     let ranked: ReturnType<typeof rankGraph> | undefined;
     const checked = new Map<string, string[]>();
@@ -273,10 +355,15 @@ describe("the default view at 1920 × 1080 shows the whole graph at a readable s
   const m = /\.ak-root \.kb-be-graph \{[^}]*max-height:\s*calc\(\s*100vh - (\d+)px\s*\)/.exec(css);
   if (!m) throw new Error(".kb-be-graph max-height is not calc(100vh - Npx): update this test with the new rule");
   const BOX_H = 1080 - Number(m[1]);
-  for (const name of ["legacy_v2_prereview", "local_v3"]) {
+  for (const name of ["legacy_v2_prereview", "local_v4"]) {
     it(`${name}: folded into rows, no horizontal scroll, the whole height inside the box, text ≥ ${MIN_TEXT_PX}px`, () => {
       const s = shape(name);
-      const l = layoutGraph(s.columns, s.transitions, { typeLabel, maxWidth: fold(DESKTOP_BOX_W) });
+      // the editor folds for its box: the width and the height at MIN_TEXT_ZOOM (BoardEditor)
+      const l = layoutGraph(s.columns, s.transitions, {
+        typeLabel,
+        maxWidth: fold(DESKTOP_BOX_W),
+        maxHeight: (BOX_H - 2) / MIN_TEXT_ZOOM,
+      });
       expect(l.rows).toBeGreaterThan(1);
       const zoom = Math.min(1, (DESKTOP_BOX_W - 2) / l.w, (BOX_H - 2) / l.h);
       expect(zoom).toBeGreaterThanOrEqual(MIN_TEXT_ZOOM);
@@ -316,11 +403,12 @@ describe("hubs on the real boards", () => {
     expect(plan.filter((p) => p.kind === "arrow")).toHaveLength(12);
     expect(plan.filter((p) => p.kind === "note")).toHaveLength(0);
   });
-  it("local v3 (14 columns): Cancel (12 of 14 sources) is a note, Rework (7) one bundle; both review loops are arrows both ways", () => {
-    const s = shape("local_v3");
+  it("local v4 (15 columns): Cancel (13 of 15 sources) and Rework (8) are notes — more than half; both review loops are arrows both ways", () => {
+    const s = shape("local_v4");
     const l = layoutGraph(s.columns, s.transitions, { typeLabel, maxWidth: fold(DESKTOP_BOX_W) });
     expect(l.notes.cancelled!.map((n) => n.name)).toEqual(["Cancel"]);
-    expect(Object.keys(l.junctions).map((ti) => s.transitions[Number(ti)]!.name)).toEqual(["Rework"]);
+    expect(l.notes.doing!.map((n) => n.name)).toEqual(["Rework"]);
+    expect(Object.keys(l.junctions)).toEqual([]);
     const names = (from: string, to: string) =>
       l.routes.filter((r) => r.from === from && r.to === to).map((r) => s.transitions[r.ti]!.name);
     expect(names("local_agent_review", "local_author")).toEqual(["Comments posted"]);

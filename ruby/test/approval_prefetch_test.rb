@@ -22,7 +22,7 @@ class ApprovalPrefetchTest < Minitest::Test
 
   def setup
     super
-    @m = store(board: KanbanTest.board_hash("local_v3"))
+    @m = store(board: KanbanTest.board_hash("local_v4"))
     @log = StringIO.new
     @n = AgentsKanban::Notifier.new(@m, client: FakeClient.new, ci: NoCi.new, clock: -> { @now }, grace: 60, log: @log)
   end

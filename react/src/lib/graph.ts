@@ -153,6 +153,7 @@ const junctionKey = (ti: number) => `j:${ti}`;
 export type LayoutOpts = {
   typeLabel?: (c: BoardColumnDef) => string;
   maxWidth?: number; // fold the ranks into rows no wider than this (Infinity = one row)
+  maxHeight?: number; // the box's height in the same units: the fold that shows the most of it is chosen (Infinity = the lowest)
 };
 export const MIN_TEXT_PX = 11; // no text of the default view is drawn smaller than this
 export const SMALLEST_FONT_PX = 11.5; // the smallest font the graph's CSS sets (.kb-be-ntype / .kb-be-note; tested)
@@ -171,7 +172,7 @@ const GUTTER = 22; // a gutter's own margin
 // The drawing in two stages: rankGraph runs dagre (the costly part, independent of the box width) and fixes the routes
 // into the ranks; foldGraph folds that one flat drawing into rows for a width. The editor re-folds on a resize without
 // laying out again; layoutGraph is both at once.
-type Rank = { keys: string[]; left: number; right: number };
+export type Rank = { keys: string[]; left: number; right: number };
 export type Ranked = {
   lines: Record<string, string[]>;
   notes: Record<string, Note[]>;
@@ -187,7 +188,7 @@ export function layoutGraph(
   transitions: WorkflowTransition[],
   opts: LayoutOpts = {},
 ): Layout {
-  return foldGraph(rankGraph(columns, transitions, opts), opts.maxWidth ?? Infinity);
+  return foldGraph(rankGraph(columns, transitions, opts), opts.maxWidth ?? Infinity, opts.maxHeight ?? Infinity);
 }
 
 export function rankGraph(
@@ -336,252 +337,315 @@ export function rankGraph(
 }
 
 // The flat drawing folded into rows for `maxWidth` (Infinity = one row). Pure: one Ranked folds for any number of widths.
-export function foldGraph(base: Ranked, maxWidth = Infinity): Layout {
-  const { lines, notes, transitions, spine, flat, flatRoutes, ranks } = base;
+export function foldGraph(base: Ranked, maxWidth = Infinity, maxHeight = Infinity): Layout {
+  const { lines, notes, ranks } = base;
   // rows no wider than `limit`; the drawing can still come out wider (the right-margin lanes of routes between rows
   // that are not adjacent), so the limit is lowered by the overflow until it fits or every rank has a row of its own
-  const fold = (limit: number) => {
+  const greedy = (limit: number) => {
     const rows: Rank[][] = [];
     for (const r of ranks) {
       const cur = rows[rows.length - 1];
       if (cur && r.right - cur[0]!.left + 2 * PAD <= limit) cur.push(r);
       else rows.push([r]);
     }
-    const rowOf: Record<string, number> = {};
-    const rankOf: Record<string, Rank> = {};
-    rows.forEach((row, ri) => row.forEach((r) => r.keys.forEach((k) => ((rowOf[k] = ri), (rankOf[k] = r)))));
-    const sameRow = (r: Route) => rowOf[r.from] === rowOf[r.to];
-
-    // each row's own vertical extent in the flat drawing (its boxes and its in-row routes), then rows stacked with a
-    // gutter sized for the cross-row routes that run through it
-    const ext = rows.map(() => ({ top: Infinity, bottom: -Infinity }));
-    const grow = (ri: number, y: number) => {
-      ext[ri]!.top = Math.min(ext[ri]!.top, y);
-      ext[ri]!.bottom = Math.max(ext[ri]!.bottom, y);
-    };
-    for (const k of spine) {
-      grow(rowOf[k]!, flat[k]!.y);
-      grow(rowOf[k]!, flat[k]!.y + flat[k]!.h);
-    }
-    for (const r of flatRoutes)
-      if (sameRow(r))
-        for (const p of [
-          ...r.points,
-          ...(r.label
-            ? [
-                { x: r.label.x, y: r.label.y - 9 },
-                { x: r.label.x, y: r.label.y + 9 },
-              ]
-            : []),
-        ])
-          grow(rowOf[r.from]!, p.y);
-    const cross = flatRoutes.filter((r) => !sameRow(r));
-    // the gutter under row i carries the routes between rows i and i+1 (adjacent) and, via the right margin, the farther ones
-    const gutterOf = (r: Route) => Math.min(rowOf[r.from]!, rowOf[r.to]!);
-    const lanes: Record<number, Route[]> = {};
-    for (const r of cross) (lanes[gutterOf(r)] ??= []).push(r);
-    for (const r of cross)
-      if (Math.abs(rowOf[r.from]! - rowOf[r.to]!) > 1)
-        for (let gi = gutterOf(r) + 1; gi < Math.max(rowOf[r.from]!, rowOf[r.to]!); gi++) (lanes[gi] ??= []).push(r);
-    // a route's label sits on the gutter it ENTERS its target from (below the target's row going up: that row's own)
-    const labelGutter = (r: Route) => (rowOf[r.from]! < rowOf[r.to]! ? rowOf[r.to]! - 1 : rowOf[r.to]!);
-    const labelled = (gi: number, r: Route) => r.kind === "arrow" && labelGutter(r) === gi;
-    // each lane's offset in its gutter: the sum of the gaps between it and the lanes above it
-    const laneOff = new Map<string, number>();
-    for (const [gi, rs] of Object.entries(lanes)) {
-      let off = 0;
-      rs.forEach((r, i) => {
-        if (i > 0) {
-          const a = labelled(Number(gi), rs[i - 1]!);
-          const b = labelled(Number(gi), r);
-          off += a && b ? LANE : a || b ? LANE_HALF : LANE_BARE;
-        }
-        laneOff.set(`${gi}:${r.id}`, off);
-      });
-    }
-    const gutterH = (gi: number) => {
-      const rs = lanes[gi];
-      return rs?.length ? GUTTER + laneOff.get(`${gi}:${rs[rs.length - 1]!.id}`)! + GUTTER : GUTTER;
-    };
-    // The cross-row routes leaving / entering each rank: each runs vertically in a channel of its own, in a STRIPE
-    // inserted right of the rank (leaving) or left of it (entering), so a vertical run never meets a box or a label
-    // (dagre's gap between two ranks is too narrow for them, and holds the labels). A channel is a SLOT of its stripe:
-    // first in route order (the stripes left of the rows' first ranks, which all sit at one x, share one numbering);
-    // then any run that lies along another transition's run (two stripes of different rows that land on one x) is
-    // moved to a new slot of its stripe and the drawing redone, until no two runs share a line.
-    const outs = new Map<Rank, Route[]>();
-    const ins = new Map<Rank, Route[]>();
-    for (const r of cross) {
-      outs.set(rankOf[r.from]!, [...(outs.get(rankOf[r.from]!) ?? []), r]);
-      ins.set(rankOf[r.to]!, [...(ins.get(rankOf[r.to]!) ?? []), r]);
-    }
-    const firsts = new Set(rows.map((row) => row[0]!));
-    const firstIns = cross.filter((r) => firsts.has(rankOf[r.to]!));
-    const outSlot = new Map<Route, number>();
-    const inSlot = new Map<Route, number>();
-    for (const [, rs] of outs) rs.forEach((r, i) => outSlot.set(r, i));
-    for (const [rk, rs] of ins) rs.forEach((r, i) => inSlot.set(r, firsts.has(rk) ? firstIns.indexOf(r) : i));
-    const room = (n: number) => (n ? CHANNEL + CHANNEL_STEP * (n - 1) + CHANNEL : 0);
-    const slots = (rs: Route[] | undefined, at: Map<Route, number>) =>
-      rs?.length ? Math.max(...rs.map((r) => at.get(r)!)) + 1 : 0;
-    // the routes into or out of one node: they leave / enter its border at their own heights, never on one stub
-    const ends = new Map<string, Route[]>();
-    for (const r of cross) {
-      ends.set(`o:${r.from}`, [...(ends.get(`o:${r.from}`) ?? []), r]);
-      ends.set(`i:${r.to}`, [...(ends.get(`i:${r.to}`) ?? []), r]);
-    }
-    const rowTop: number[] = [];
-    const rowDx: number[] = [];
-    let y = PAD;
-    rows.forEach((row, ri) => {
-      rowTop.push(y);
-      rowDx.push(PAD - row[0]!.left);
-      y += ext[ri]!.bottom - ext[ri]!.top + (ri < rows.length - 1 ? gutterH(ri) : 0);
-    });
-    const Y = (ri: number, yy: number) => r1(yy - ext[ri]!.top + rowTop[ri]!);
-    const gutterY = (gi: number, r: Route) => rowTop[gi + 1]! - gutterH(gi) + GUTTER + laneOff.get(`${gi}:${r.id}`)!;
-    // the routes between rows that are not adjacent run down the right margin: one lane each, over all gutters
-    const far = cross.filter((r) => Math.abs(rowOf[r.from]! - rowOf[r.to]!) > 1);
-
-    const draw = () => {
-      const inRoom = (rk: Rank) =>
-        room(
-          firsts.has(rk)
-            ? Math.max(slots(firstIns, inSlot), ...rows.map((row) => slots(ins.get(row[0]!), inSlot)))
-            : slots(ins.get(rk), inSlot),
-        );
-      const outRoom = (rk: Rank) => room(slots(outs.get(rk), outSlot));
-      // flat x → drawn x on row ri: the row's offset plus every stripe inserted before x (a rank's entering stripe moves
-      // the rank itself and what follows; its leaving stripe moves what lies right of the rank's right edge)
-      const X = (ri: number, x: number) => {
-        let dx = rowDx[ri]!;
-        for (const rk of rows[ri]!) {
-          if (x >= rk.left - 0.5) dx += inRoom(rk);
-          if (x > rk.right + 0.5) dx += outRoom(rk);
-        }
-        return r1(x + dx);
-      };
-      const nodes: Record<string, Box> = {};
-      const junctions: Record<number, Box> = {};
-      for (const k of spine) {
-        const b = flat[k]!;
-        const ri = rowOf[k]!;
-        const box = { key: k, x: X(ri, b.x), y: Y(ri, b.y), w: b.w, h: b.h };
-        if (k.startsWith("j:")) junctions[Number(k.slice(2))] = box;
-        else nodes[k] = box;
-      }
-      const boxOf = (k: string): Box => nodes[k] ?? junctions[Number(k.slice(2))]!;
-      const rowRight = rows.map((row, ri) => X(ri, row[row.length - 1]!.right) + outRoom(row[row.length - 1]!));
-      const width = Math.max(...rowRight, NODE_MIN_W + PAD) + PAD;
-      const endY = (key: string, b: Box, r: Route) => {
-        const list = ends.get(key)!;
-        const step = Math.min(6, (b.h - 8) / Math.max(1, list.length));
-        return r1(b.y + b.h / 2 + (list.indexOf(r) - (list.length - 1) / 2) * step);
-      };
-      // a cross-row route: out of the source rank's right channel, to the gutter lane, (via the right margin when the
-      // rows are not adjacent), to the target rank's left channel, into the target's left border
-      const route = (r: Route): Route => {
-        const s = boxOf(r.from);
-        const t = boxOf(r.to);
-        const rs = rowOf[r.from]!;
-        const rt = rowOf[r.to]!;
-        const sx = X(rs, rankOf[r.from]!.right) + CHANNEL + CHANNEL_STEP * outSlot.get(r)!;
-        const tx = X(rt, rankOf[r.to]!.left) - CHANNEL - CHANNEL_STEP * inSlot.get(r)!;
-        const sy = endY(`o:${r.from}`, s, r);
-        const ty = endY(`i:${r.to}`, t, r);
-        const gS = rs < rt ? rs : rs - 1; // the gutter the source leaves into (below it going down, above it going up)
-        const gT = rs < rt ? rt - 1 : rt; // the gutter the target is entered from
-        const pts: Pt[] = [
-          { x: r1(s.x + s.w), y: sy },
-          { x: sx, y: sy },
-          { x: sx, y: gutterY(gS, r) },
-        ];
-        if (gS !== gT) {
-          const mx = width + CHANNEL + CHANNEL_STEP * 2 * far.indexOf(r);
-          pts.push({ x: mx, y: gutterY(gS, r) }, { x: mx, y: gutterY(gT, r) });
-        }
-        pts.push({ x: tx, y: gutterY(gT, r) }, { x: tx, y: ty }, { x: t.x, y: ty });
-        const label = r.kind === "arrow" ? { x: r1((pts[gS === gT ? 2 : 4]!.x + tx) / 2), y: gutterY(gT, r) } : null;
-        return { ...r, points: pts, label, ortho: true };
-      };
-      const routes = flatRoutes.map((r) => {
-        if (!sameRow(r)) return route(r);
-        const ri = rowOf[r.from]!;
-        const mv = (p: Pt) => ({ x: X(ri, p.x), y: Y(ri, p.y) });
-        return { ...r, points: r.points.map(mv), label: r.label ? mv(r.label) : null };
-      });
-      return { nodes, junctions, routes };
-    };
-
-    // the first pair of runs (different transitions) along one line: [the route to move, which of its ends]
-    const clash = (routes: Route[]): [Route, "out" | "in"] | null => {
-      type Run = { r: Route; end: "out" | "in" | "mid"; x: number; y0: number; y1: number };
-      const runs: Run[] = [];
-      for (const r of routes) {
-        if (!r.ortho) continue;
-        const v = r.points
-          .slice(1)
-          .map((q, i) => [r.points[i]!, q] as const)
-          .filter(([p, q]) => Math.abs(p.x - q.x) < 0.5);
-        v.forEach(([p, q], i) =>
-          runs.push({
-            r,
-            end: i === 0 ? "out" : i === v.length - 1 ? "in" : "mid",
-            x: p.x,
-            y0: Math.min(p.y, q.y),
-            y1: Math.max(p.y, q.y),
-          }),
-        );
-      }
-      for (let i = 0; i < runs.length; i++)
-        for (let j = i + 1; j < runs.length; j++) {
-          const a = runs[i]!;
-          const b = runs[j]!;
-          if (a.r.ti === b.r.ti || Math.abs(a.x - b.x) >= RUN_GAP || Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) <= 0)
-            continue;
-          const mv = b.end !== "mid" ? b : a.end !== "mid" ? a : null;
-          // the drawn route is a copy: its slots are kept on the route of `cross` with its id
-          if (mv) return [cross.find((x) => x.id === mv.r.id)!, mv.end as "out" | "in"];
-        }
-      return null;
-    };
-    let drawn = draw();
-    for (let n = 0, c = clash(drawn.routes); c && n < 4 * cross.length + 4; n++, c = clash(drawn.routes)) {
-      const [r, end] = c;
-      if (end === "out") outSlot.set(r, slots(outs.get(rankOf[r.from]!), outSlot));
-      else
-        inSlot.set(
-          r,
-          firsts.has(rankOf[r.to]!) ? Math.max(...[...inSlot.values()]) + 1 : slots(ins.get(rankOf[r.to]!), inSlot),
-        );
-      drawn = draw();
-    }
-    const { nodes, junctions, routes } = drawn;
-
-    let w = NODE_MIN_W + 2 * PAD;
-    let h = 12 + LINE_H + 16 + 2 * PAD;
-    for (const b of [...Object.values(nodes), ...Object.values(junctions)]) {
-      w = Math.max(w, b.x + b.w + PAD);
-      h = Math.max(h, b.y + b.h + PAD);
-    }
-    for (const r of routes)
-      for (const p of r.points) {
-        w = Math.max(w, p.x + PAD);
-        h = Math.max(h, p.y + PAD);
-      }
-    for (const r of routes)
-      if (r.label) {
-        w = Math.max(w, r.label.x + labelW(transitions[r.ti]?.name ?? "") / 2 + PAD);
-        h = Math.max(h, r.label.y + 9 + PAD);
-      }
-    return { nodes, junctions, routes, rows: rows.length, w: Math.ceil(w), h: Math.ceil(h) };
+    return rows;
   };
+  const fold = (limit: number) => foldRowsOf(greedy(limit));
+  const foldRowsOf = (rows: Rank[][]) => foldRows(base, rows);
   let out = fold(maxWidth);
   for (let limit = maxWidth; Number.isFinite(maxWidth) && out.w > maxWidth && out.rows < ranks.length;) {
     limit -= out.w - maxWidth;
     out = fold(limit);
   }
+  // The greedy fold fills each row to the width, so where a row ends is chance: a loop's two columns split over two
+  // rows make two gutters taller, and one row more can be lower than the fewest rows. Given the box's height
+  // (`maxHeight`), every split into as many rows as the greedy fold, or one more, that keeps the width (no horizontal
+  // scroll) is drawn and the one that fits the height best is kept: the largest share of it, capped where the drawing
+  // fits at its natural size (MIN_TEXT_ZOOM ↔ zoom 1); on a tie the fewer rows, then the lower, then the narrower.
+  // Card #271: one more column made the greedy split of the local board too tall for 11px text at 1920 × 1080; 4 rows
+  // fit it at zoom 1. Every width-feasible split is drawn (no cap: the width prunes them to a few); without a height
+  // the greedy fold stands.
+  if (Number.isFinite(maxWidth) && Number.isFinite(maxHeight) && out.w <= maxWidth && out.rows > 1) {
+    const cap = 1 / MIN_TEXT_ZOOM;
+    const fit = (o: { h: number }) => Math.min(cap, maxHeight / o.h);
+    const better = (o: FoldedRows, b: FoldedRows) =>
+      fit(o) !== fit(b) ? fit(o) > fit(b) : o.rows !== b.rows ? o.rows < b.rows : o.h !== b.h ? o.h < b.h : o.w < b.w;
+    const fewest = out.rows;
+    for (let k = fewest; k <= Math.min(fewest + 1, ranks.length - 1); k++) {
+      // only the splits whose every row fits the width before any stripe is added (a wider one cannot fit once drawn)
+      for (const rows of splits(ranks, k, (row) => row[row.length - 1]!.right - row[0]!.left + 2 * PAD <= maxWidth)) {
+        const o = foldRowsOf(rows);
+        if (o.w <= maxWidth && better(o, out)) out = o;
+      }
+    }
+  }
   return { lines, notes, ...out, ranks: ranks.length };
+}
+
+export type FoldedRows = {
+  nodes: Record<string, Box>;
+  junctions: Record<number, Box>;
+  routes: Route[];
+  rows: number;
+  w: number;
+  h: number;
+};
+
+// One fold of the ranked drawing into these rows (in order, every rank once): the rows stacked with their gutters,
+// the cross-row routes in their channels. foldGraph picks the rows; a test can fold any split itself.
+export function foldRows(base: Ranked, rows: Rank[][]): FoldedRows {
+  const { transitions, spine, flat, flatRoutes } = base;
+  const rowOf: Record<string, number> = {};
+  const rankOf: Record<string, Rank> = {};
+  rows.forEach((row, ri) => row.forEach((r) => r.keys.forEach((k) => ((rowOf[k] = ri), (rankOf[k] = r)))));
+  const sameRow = (r: Route) => rowOf[r.from] === rowOf[r.to];
+
+  // each row's own vertical extent in the flat drawing (its boxes and its in-row routes), then rows stacked with a
+  // gutter sized for the cross-row routes that run through it
+  const ext = rows.map(() => ({ top: Infinity, bottom: -Infinity }));
+  const grow = (ri: number, y: number) => {
+    ext[ri]!.top = Math.min(ext[ri]!.top, y);
+    ext[ri]!.bottom = Math.max(ext[ri]!.bottom, y);
+  };
+  for (const k of spine) {
+    grow(rowOf[k]!, flat[k]!.y);
+    grow(rowOf[k]!, flat[k]!.y + flat[k]!.h);
+  }
+  for (const r of flatRoutes)
+    if (sameRow(r))
+      for (const p of [
+        ...r.points,
+        ...(r.label
+          ? [
+              { x: r.label.x, y: r.label.y - 9 },
+              { x: r.label.x, y: r.label.y + 9 },
+            ]
+          : []),
+      ])
+        grow(rowOf[r.from]!, p.y);
+  const cross = flatRoutes.filter((r) => !sameRow(r));
+  // the gutter under row i carries the routes between rows i and i+1 (adjacent) and, via the right margin, the farther ones
+  const gutterOf = (r: Route) => Math.min(rowOf[r.from]!, rowOf[r.to]!);
+  const lanes: Record<number, Route[]> = {};
+  for (const r of cross) (lanes[gutterOf(r)] ??= []).push(r);
+  for (const r of cross)
+    if (Math.abs(rowOf[r.from]! - rowOf[r.to]!) > 1)
+      for (let gi = gutterOf(r) + 1; gi < Math.max(rowOf[r.from]!, rowOf[r.to]!); gi++) (lanes[gi] ??= []).push(r);
+  // a route's label sits on the gutter it ENTERS its target from (below the target's row going up: that row's own)
+  const labelGutter = (r: Route) => (rowOf[r.from]! < rowOf[r.to]! ? rowOf[r.to]! - 1 : rowOf[r.to]!);
+  const labelled = (gi: number, r: Route) => r.kind === "arrow" && labelGutter(r) === gi;
+  // each lane's offset in its gutter: the sum of the gaps between it and the lanes above it
+  const laneOff = new Map<string, number>();
+  for (const [gi, rs] of Object.entries(lanes)) {
+    let off = 0;
+    rs.forEach((r, i) => {
+      if (i > 0) {
+        const a = labelled(Number(gi), rs[i - 1]!);
+        const b = labelled(Number(gi), r);
+        off += a && b ? LANE : a || b ? LANE_HALF : LANE_BARE;
+      }
+      laneOff.set(`${gi}:${r.id}`, off);
+    });
+  }
+  const gutterH = (gi: number) => {
+    const rs = lanes[gi];
+    return rs?.length ? GUTTER + laneOff.get(`${gi}:${rs[rs.length - 1]!.id}`)! + GUTTER : GUTTER;
+  };
+  // The cross-row routes leaving / entering each rank: each runs vertically in a channel of its own, in a STRIPE
+  // inserted right of the rank (leaving) or left of it (entering), so a vertical run never meets a box or a label
+  // (dagre's gap between two ranks is too narrow for them, and holds the labels). A channel is a SLOT of its stripe:
+  // first in route order (the stripes left of the rows' first ranks, which all sit at one x, share one numbering);
+  // then any run that lies along another transition's run (two stripes of different rows that land on one x) is
+  // moved to a new slot of its stripe and the drawing redone, until no two runs share a line.
+  const outs = new Map<Rank, Route[]>();
+  const ins = new Map<Rank, Route[]>();
+  for (const r of cross) {
+    outs.set(rankOf[r.from]!, [...(outs.get(rankOf[r.from]!) ?? []), r]);
+    ins.set(rankOf[r.to]!, [...(ins.get(rankOf[r.to]!) ?? []), r]);
+  }
+  const firsts = new Set(rows.map((row) => row[0]!));
+  const firstIns = cross.filter((r) => firsts.has(rankOf[r.to]!));
+  const outSlot = new Map<Route, number>();
+  const inSlot = new Map<Route, number>();
+  for (const [, rs] of outs) rs.forEach((r, i) => outSlot.set(r, i));
+  for (const [rk, rs] of ins) rs.forEach((r, i) => inSlot.set(r, firsts.has(rk) ? firstIns.indexOf(r) : i));
+  const room = (n: number) => (n ? CHANNEL + CHANNEL_STEP * (n - 1) + CHANNEL : 0);
+  const slots = (rs: Route[] | undefined, at: Map<Route, number>) =>
+    rs?.length ? Math.max(...rs.map((r) => at.get(r)!)) + 1 : 0;
+  // the routes into or out of one node: they leave / enter its border at their own heights, never on one stub
+  const ends = new Map<string, Route[]>();
+  for (const r of cross) {
+    ends.set(`o:${r.from}`, [...(ends.get(`o:${r.from}`) ?? []), r]);
+    ends.set(`i:${r.to}`, [...(ends.get(`i:${r.to}`) ?? []), r]);
+  }
+  const rowTop: number[] = [];
+  const rowDx: number[] = [];
+  let y = PAD;
+  rows.forEach((row, ri) => {
+    rowTop.push(y);
+    rowDx.push(PAD - row[0]!.left);
+    y += ext[ri]!.bottom - ext[ri]!.top + (ri < rows.length - 1 ? gutterH(ri) : 0);
+  });
+  const Y = (ri: number, yy: number) => r1(yy - ext[ri]!.top + rowTop[ri]!);
+  const gutterY = (gi: number, r: Route) => rowTop[gi + 1]! - gutterH(gi) + GUTTER + laneOff.get(`${gi}:${r.id}`)!;
+  // the routes between rows that are not adjacent run down the right margin: one lane each, over all gutters
+  const far = cross.filter((r) => Math.abs(rowOf[r.from]! - rowOf[r.to]!) > 1);
+
+  const draw = () => {
+    const inRoom = (rk: Rank) =>
+      room(
+        firsts.has(rk)
+          ? Math.max(slots(firstIns, inSlot), ...rows.map((row) => slots(ins.get(row[0]!), inSlot)))
+          : slots(ins.get(rk), inSlot),
+      );
+    const outRoom = (rk: Rank) => room(slots(outs.get(rk), outSlot));
+    // flat x → drawn x on row ri: the row's offset plus every stripe inserted before x (a rank's entering stripe moves
+    // the rank itself and what follows; its leaving stripe moves what lies right of the rank's right edge)
+    const X = (ri: number, x: number) => {
+      let dx = rowDx[ri]!;
+      for (const rk of rows[ri]!) {
+        if (x >= rk.left - 0.5) dx += inRoom(rk);
+        if (x > rk.right + 0.5) dx += outRoom(rk);
+      }
+      return r1(x + dx);
+    };
+    const nodes: Record<string, Box> = {};
+    const junctions: Record<number, Box> = {};
+    for (const k of spine) {
+      const b = flat[k]!;
+      const ri = rowOf[k]!;
+      const box = { key: k, x: X(ri, b.x), y: Y(ri, b.y), w: b.w, h: b.h };
+      if (k.startsWith("j:")) junctions[Number(k.slice(2))] = box;
+      else nodes[k] = box;
+    }
+    const boxOf = (k: string): Box => nodes[k] ?? junctions[Number(k.slice(2))]!;
+    const rowRight = rows.map((row, ri) => X(ri, row[row.length - 1]!.right) + outRoom(row[row.length - 1]!));
+    const width = Math.max(...rowRight, NODE_MIN_W + PAD) + PAD;
+    const endY = (key: string, b: Box, r: Route) => {
+      const list = ends.get(key)!;
+      const step = Math.min(6, (b.h - 8) / Math.max(1, list.length));
+      return r1(b.y + b.h / 2 + (list.indexOf(r) - (list.length - 1) / 2) * step);
+    };
+    // a cross-row route: out of the source rank's right channel, to the gutter lane, (via the right margin when the
+    // rows are not adjacent), to the target rank's left channel, into the target's left border
+    const route = (r: Route): Route => {
+      const s = boxOf(r.from);
+      const t = boxOf(r.to);
+      const rs = rowOf[r.from]!;
+      const rt = rowOf[r.to]!;
+      const sx = X(rs, rankOf[r.from]!.right) + CHANNEL + CHANNEL_STEP * outSlot.get(r)!;
+      const tx = X(rt, rankOf[r.to]!.left) - CHANNEL - CHANNEL_STEP * inSlot.get(r)!;
+      const sy = endY(`o:${r.from}`, s, r);
+      const ty = endY(`i:${r.to}`, t, r);
+      const gS = rs < rt ? rs : rs - 1; // the gutter the source leaves into (below it going down, above it going up)
+      const gT = rs < rt ? rt - 1 : rt; // the gutter the target is entered from
+      const pts: Pt[] = [
+        { x: r1(s.x + s.w), y: sy },
+        { x: sx, y: sy },
+        { x: sx, y: gutterY(gS, r) },
+      ];
+      if (gS !== gT) {
+        const mx = width + CHANNEL + CHANNEL_STEP * 2 * far.indexOf(r);
+        pts.push({ x: mx, y: gutterY(gS, r) }, { x: mx, y: gutterY(gT, r) });
+      }
+      pts.push({ x: tx, y: gutterY(gT, r) }, { x: tx, y: ty }, { x: t.x, y: ty });
+      const label = r.kind === "arrow" ? { x: r1((pts[gS === gT ? 2 : 4]!.x + tx) / 2), y: gutterY(gT, r) } : null;
+      return { ...r, points: pts, label, ortho: true };
+    };
+    const routes = flatRoutes.map((r) => {
+      if (!sameRow(r)) return route(r);
+      const ri = rowOf[r.from]!;
+      const mv = (p: Pt) => ({ x: X(ri, p.x), y: Y(ri, p.y) });
+      return { ...r, points: r.points.map(mv), label: r.label ? mv(r.label) : null };
+    });
+    return { nodes, junctions, routes };
+  };
+
+  // the first pair of runs (different transitions) along one line: [the route to move, which of its ends]
+  const clash = (routes: Route[]): [Route, "out" | "in"] | null => {
+    type Run = { r: Route; end: "out" | "in" | "mid"; x: number; y0: number; y1: number };
+    const runs: Run[] = [];
+    for (const r of routes) {
+      if (!r.ortho) continue;
+      const v = r.points
+        .slice(1)
+        .map((q, i) => [r.points[i]!, q] as const)
+        .filter(([p, q]) => Math.abs(p.x - q.x) < 0.5);
+      v.forEach(([p, q], i) =>
+        runs.push({
+          r,
+          end: i === 0 ? "out" : i === v.length - 1 ? "in" : "mid",
+          x: p.x,
+          y0: Math.min(p.y, q.y),
+          y1: Math.max(p.y, q.y),
+        }),
+      );
+    }
+    for (let i = 0; i < runs.length; i++)
+      for (let j = i + 1; j < runs.length; j++) {
+        const a = runs[i]!;
+        const b = runs[j]!;
+        if (a.r.ti === b.r.ti || Math.abs(a.x - b.x) >= RUN_GAP || Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) <= 0)
+          continue;
+        const mv = b.end !== "mid" ? b : a.end !== "mid" ? a : null;
+        // the drawn route is a copy: its slots are kept on the route of `cross` with its id
+        if (mv) return [cross.find((x) => x.id === mv.r.id)!, mv.end as "out" | "in"];
+      }
+    return null;
+  };
+  let drawn = draw();
+  for (let n = 0, c = clash(drawn.routes); c && n < 4 * cross.length + 4; n++, c = clash(drawn.routes)) {
+    const [r, end] = c;
+    if (end === "out") outSlot.set(r, slots(outs.get(rankOf[r.from]!), outSlot));
+    else
+      inSlot.set(
+        r,
+        firsts.has(rankOf[r.to]!) ? Math.max(...[...inSlot.values()]) + 1 : slots(ins.get(rankOf[r.to]!), inSlot),
+      );
+    drawn = draw();
+  }
+  const { nodes, junctions, routes } = drawn;
+
+  let w = NODE_MIN_W + 2 * PAD;
+  let h = 12 + LINE_H + 16 + 2 * PAD;
+  for (const b of [...Object.values(nodes), ...Object.values(junctions)]) {
+    w = Math.max(w, b.x + b.w + PAD);
+    h = Math.max(h, b.y + b.h + PAD);
+  }
+  for (const r of routes)
+    for (const p of r.points) {
+      w = Math.max(w, p.x + PAD);
+      h = Math.max(h, p.y + PAD);
+    }
+  for (const r of routes)
+    if (r.label) {
+      w = Math.max(w, r.label.x + labelW(transitions[r.ti]?.name ?? "") / 2 + PAD);
+      h = Math.max(h, r.label.y + 9 + PAD);
+    }
+  return { nodes, junctions, routes, rows: rows.length, w: Math.ceil(w), h: Math.ceil(h) };
+}
+
+// Every way to cut `items` into `k` non-empty runs in order, each run one that `fits` (default: any). A run that does
+// not fit is never extended (`fits` must be monotone: a run that fails, longer, fails too — a row's width), so the
+// search grows with the feasible splits, not with C(n-1, k-1).
+export function splits<T>(items: T[], k: number, fits: (run: T[]) => boolean = () => true): T[][][] {
+  const n = items.length;
+  const out: T[][][] = [];
+  if (k < 1 || k > n) return out;
+  const cut = (start: number, left: number, acc: T[][]) => {
+    if (left === 1) {
+      const last = items.slice(start);
+      if (fits(last)) out.push([...acc, last]);
+      return;
+    }
+    for (let end = start + 1; end <= n - left + 1; end++) {
+      const run = items.slice(start, end);
+      if (!fits(run)) break; // longer runs from `start` do not fit either
+      cut(end, left - 1, [...acc, run]);
+    }
+  };
+  cut(0, k, []);
+  return out;
 }
 
 // The layout with this session's nudges: a moved node keeps its position and the routes touching it end on its new

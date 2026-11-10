@@ -455,7 +455,7 @@ class StoreTest < Minitest::Test
     assert_nil kb.card(third)[:approved_at], "leaving the approved column withdraws it"
   end
 
-  # The local v3 board (fixtures/boards/local_v3.board.json): two agent review loops, three operator gates, Cancel.
+  # The local v4 board (fixtures/boards/local_v4.board.json): two agent review loops, three operator gates, Cancel.
   def local_card(m)
     id = m.create(slug: "p", title: "t", by: "me", column: "doing")
     m.update(id, { "assignee" => "claude-shop-lead" }, by: "claude-shop-lead")
@@ -463,8 +463,8 @@ class StoreTest < Minitest::Test
     id
   end
 
-  def test_local_v3_walks_from_in_progress_to_done_through_both_loops
-    m = store(board: KanbanTest.board_hash("local_v3"))
+  def test_local_v4_walks_from_in_progress_to_done_through_both_loops
+    m = store(board: KanbanTest.board_hash("local_v4"))
     id = local_card(m)
     m.move(id, transition: "Open local PR", by: "claude-shop-lead", agent: true)
     assert_equal ["local_agent_review", 1], [m.card(id)[:column], m.card_json(m.card(id))[:review_round]]
@@ -504,10 +504,16 @@ class StoreTest < Minitest::Test
     m.handoff(id, **handoff_ok, by: "reviewer")
     m.approve(id, by: "operator@x")
     m.handoff(id, **handoff_ok, by: "claude-shop-lead")
-    m.approve(id, by: "operator@x") # OK → open public PR
-    assert_equal ["public_agent_review", "operator@x"], m.card(id).values_at(:column, :approved_by)
-    assert_equal 1, m.card_json(m.card(id))[:review_round], "entering the public loop from its gate is round 1"
-    assert_includes m.pending_pings.last[:text], "kanban_handoff id=#{id} column=public_human_review"
+    m.approve(id, by: "operator@x") # Open public PR: the agent creates it in Public: Create PR (card #271)
+    assert_equal ["public_create_pr", "operator@x"], m.card(id).values_at(:column, :approved_by)
+    assert_nil m.card_json(m.card(id))[:review_round], "creating the public PR is no review round"
+    assert_includes m.pending_pings.last[:text],
+                    "move the card to Public: Agent review with kanban_move id=#{id} column=public_agent_review"
+    e = assert_raises(Denied) { m.handoff(id, **handoff_ok, by: "reviewer") }
+    assert_match(/Public: Create PR/, e.message, "no review of a public PR that is not open yet")
+    m.move(id, transition: "Public PR opened", by: "claude-shop-lead", agent: true)
+    assert_equal ["public_agent_review", nil], m.card(id).values_at(:column, :approved_at), "moving on ended the approval"
+    assert_equal 1, m.card_json(m.card(id))[:review_round], "entering the public loop from Public: Create PR is round 1"
     m.handoff(id, **handoff_ok, by: "reviewer")
     assert_nil m.card(id)[:approved_at]
     e = assert_raises(Denied) { m.move(id, column: "awaiting_merge", by: "claude-shop-lead", agent: true) }
@@ -535,7 +541,7 @@ class StoreTest < Minitest::Test
   # An agent leaves a gate only once approved and only along a named agent edge; a card approved into a gate (the
   # operator's drag along the step) may then take that edge.
   def test_gate_exit_needs_the_approval_and_a_named_agent_edge
-    m = store(board: KanbanTest.board_hash("local_v3"))
+    m = store(board: KanbanTest.board_hash("local_v4"))
     id = local_card(m)
     m.move(id, column: "awaiting_merge", by: "operator@x") # a plain drag: no approval
     e = assert_raises(Denied) { m.move(id, transition: "Merge", by: "claude-shop-lead", agent: true) }
@@ -579,7 +585,7 @@ class StoreTest < Minitest::Test
   # review_loop.max_rounds: entries into a review column from a work column are counted; at the limit the agent's loop
   # moves are refused and the handoff out of the review column carries the unresolved label (created on the board).
   def test_review_round_limit_ends_the_loop_with_the_unresolved_label
-    m = store(board: KanbanTest.board_hash("local_v3"))
+    m = store(board: KanbanTest.board_hash("local_v4"))
     id = local_card(m)
     m.move(id, transition: "Open local PR", by: "claude-shop-lead", agent: true)
     2.times do
@@ -651,13 +657,15 @@ class StoreTest < Minitest::Test
     assert_equal 6, s.card_json(s.card(x))[:review_round]
   end
 
-  # The public loop is entered from a gate (Local: Deploy check → Open public PR): that entry is round 1, so the
-  # public loop has the same max_rounds as the local one.
-  def test_public_loop_counts_its_entry_from_the_gate
-    m = store(board: KanbanTest.board_hash("local_v3"))
+  # The public loop is entered from Public: Create PR (Local: Deploy check → Open public PR → the agent opens it →
+  # Public PR opened): that entry is round 1, so the public loop has the same max_rounds as the local one.
+  def test_public_loop_counts_its_entry_from_public_create_pr
+    m = store(board: KanbanTest.board_hash("local_v4"))
     id = local_card(m)
     m.move(id, column: "deploy_check", by: "operator@x")
     m.move(id, transition: "Open public PR", by: "operator@x")
+    assert_equal "public_create_pr", m.card(id)[:column]
+    m.move(id, transition: "Public PR opened", by: "claude-shop-lead", agent: true)
     2.times do
       m.move(id, transition: "Comments posted", by: "reviewer", agent: true)
       m.move(id, transition: "All threads answered", by: "claude-shop-lead", agent: true)
@@ -682,7 +690,7 @@ class StoreTest < Minitest::Test
   # Rework out of a review column (Local: Merged, an Agent review) is a fresh start: the rounds of the old loop do not
   # block the next "Open local PR"; the operator's drag back along the loop's own edge keeps them.
   def test_rework_from_a_review_column_starts_the_rounds_over
-    m = store(board: KanbanTest.board_hash("local_v3"))
+    m = store(board: KanbanTest.board_hash("local_v4"))
     id = local_card(m)
     m.move(id, transition: "Open local PR", by: "claude-shop-lead", agent: true)
     2.times do
@@ -704,7 +712,7 @@ class StoreTest < Minitest::Test
   # A card that reaches a terminal column waits for nobody: its flags are cleared (waiting counts, reminders, the
   # Agents sidebar stop seeing it).
   def test_done_or_cancelled_clears_the_flags
-    m = store(board: KanbanTest.board_hash("local_v3"))
+    m = store(board: KanbanTest.board_hash("local_v4"))
     id = local_card(m)
     m.ask(id, question: "which colour?", by: "claude-shop-lead")
     m.block(id, reason: "CI runner offline", url: "https://ci.example.com/1", by: "claude-shop-lead")
@@ -720,7 +728,7 @@ class StoreTest < Minitest::Test
   # The operator's comment on an externally blocked card clears blocked_external (the operator's way; agents use
   # kanban_unblock); an agent's comment does not.
   def test_the_operators_comment_clears_blocked_external
-    m = store(board: KanbanTest.board_hash("local_v3"))
+    m = store(board: KanbanTest.board_hash("local_v4"))
     id = local_card(m)
     m.block(id, reason: "waiting on the vendor API", url: "https://status.example.com", by: "claude-shop-lead")
     m.comment(id, body: "still down", author: "claude-shop-lead")
@@ -734,7 +742,7 @@ class StoreTest < Minitest::Test
   # approval.requires_green_ci — every approval step (button or drag along it) asks the ci: port for
   # that step and is refused, nothing moved or logged, unless the card's PR checks are green.
   def test_approval_waits_for_green_ci_at_every_step
-    m = store(board: KanbanTest.board_hash("local_v3"))
+    m = store(board: KanbanTest.board_hash("local_v4"))
     id = local_card(m)
     m.move(id, transition: "Open local PR", by: "claude-shop-lead", agent: true)
     m.handoff(id, **handoff_ok, by: "claude-shop-lead")

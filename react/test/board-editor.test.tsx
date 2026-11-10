@@ -380,7 +380,7 @@ describe("BoardEditor", () => {
   });
 
   // the default view at 1920 × 1080: the graph box measured 1435 wide, max-height calc(100vh − 230px) = 850
-  for (const name of ["legacy_v2_prereview", "local_v3"] as const) {
+  for (const name of ["legacy_v2_prereview", "local_v4"] as const) {
     it(`the default view shows the whole ${name} graph at a readable size: folded into rows, no horizontal scroll`, async () => {
       const box = { w: 1435, maxH: 850 };
       const gcs = window.getComputedStyle.bind(window);
@@ -401,8 +401,9 @@ describe("BoardEditor", () => {
         const l = layoutGraph(f.shape.columns, f.shape.transitions, {
           typeLabel: (c) => TYPES.find((t) => t.key === c.type)!.label,
           maxWidth: (box.w - 2) / MIN_TEXT_ZOOM,
+          maxHeight: (box.maxH - 2) / MIN_TEXT_ZOOM,
         });
-        expect([vw, vh]).toEqual([l.w, l.h]); // the folded layout
+        expect([vw, vh]).toEqual([l.w, l.h]); // the folded layout, for the box's width and height
         expect(l.rows).toBeGreaterThan(1);
         expect(Number(svg.getAttribute("width"))).toBeLessThanOrEqual(box.w - 2); // no horizontal scroll (the box has a 1px border)
         expect(Number(svg.getAttribute("height"))).toBeLessThanOrEqual(box.maxH - 2); // the whole graph, no vertical scroll

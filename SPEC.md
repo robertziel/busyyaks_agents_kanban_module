@@ -78,8 +78,8 @@ Local: Deploy check, Awaiting merge — operator.
 column later in board order — two or more forward exits are a choice of route, a backward exit (Changes requested,
 Rework) or Cancel is never an approval: no step); `then` = the ONE named transition agents may take out of `to` that
 is not into a working column (else null); `final` = `then` is the done column (the agent merges and finishes). Local
-v3: Local: Human review → Local: Merged (then Local: Deploy check), Local: Deploy check → Public: Agent review, Public:
-Human review → Awaiting merge (then Done, final); coding board: Human Check → Ready to merge (then Merged, final).
+v4: Local: Human review → Local: Merged (then Local: Deploy check), Local: Deploy check → Public: Create PR ("Open
+public PR"; then Public: Agent review), Public: Human review → Awaiting merge (then Done, final); coding board: Human Check → Ready to merge (then Merged, final).
 `gates.watchdog` = the first working column → the queued column; `dependencies` (only when the host enforces them) =
 done / blocked (queued + working + review) / promote (parked → queued); `idle_column` = the first working column;
 `review_columns`; the watchdog's watched columns = the listened ones; `spawn_columns` = the columns of the types some
@@ -261,8 +261,10 @@ transition with one or two sources is one labelled arrow per source; `BUNDLE_FRO
 columns, join a junction pill carrying the one label with a single arrow into the target; more than half the columns
 ("Cancel from every state") is a note on the target node, no lines; `"*"` ones are listed, not drawn. **The layout is
 automatic and nothing about the drawing is stored** (schema v9 dropped `board_columns.x` / `y`): every open lays the
-graph out again. The ranks are **folded into rows** that fit the graph box (`maxWidth` = box width ÷ `MIN_TEXT_ZOOM`),
-so the default view shows the whole board — no horizontal scroll, the zoom (≤ 1) never below `MIN_TEXT_ZOOM` = 11 px ÷
+graph out again. The ranks are **folded into rows** that fit the graph box (`maxWidth` = box width ÷ `MIN_TEXT_ZOOM`;
+`maxHeight` = its height ÷ the same: of every split into the greedy fold's number of rows or one more that keeps the
+width — all of them, no cap: a split is grown only from rows that fit the width (`splits(items, k, fits)`) —, the one
+that fits the height best), so the default view shows the whole board — no horizontal scroll, the zoom (≤ 1) never below `MIN_TEXT_ZOOM` = 11 px ÷
 the smallest graph font, i.e. no text under 11 px; an arrow between two rows runs orthogonally through the gutter
 between them (its own lane and channel, its label on the gutter run); − / + leave that zoom, Fit returns to it. A node
 can be dragged aside for the session only (the arrows follow, Auto-layout puts it back; never saved) — add / rename / retype (Select) / delete a
@@ -305,6 +307,28 @@ primitives, for a host without its own).
 
 Newest first; a heading names the `Schema::VERSION` step when the change brought one.
 
+### Public: Create PR on the local board (no schema step)
+
+- Fixture `local_v4.board.json` = the private local-repo board: `local_v3` + column `public_create_pr` "Public:
+  Create PR" (type working) between Local: Deploy check and Public: Agent review. The operator's "Open public PR"
+  now goes Local: Deploy check → Public: Create PR (its approval step's `then` = Public: Agent review); the agent
+  builds, audits and opens the public PR there, then takes the new agent transition "Public PR opened" → Public:
+  Agent review (round 1 of the public loop: entered from a work column). Cancel and Rework list the new column.
+  `local_v3.board.json` stays, frozen: the column rename's target, read by hosts' pinned migrations. A board is
+  data: a host reshapes a stored board with the editor's own call (`BoardRepo#save`).
+- "Public PR opened" is a plain agent transition: the engine checks no PR on a move (no transition carries a
+  condition). The public PR is enforced one step on, where it matters: the handoff into Public: Human review is
+  refused until the final approval step's checks — the public PR's — are read and green (§ 2 `approval`, Handoff
+  on green CI), so no card reaches the operator's public review without an open public PR. The scope, accepted: the
+  agent review loop (Public: Agent review ↔ Author response) can be entered before a public PR exists, by an agent
+  that takes the transition early; the host's worker prompt orders it after the PR is opened, and nothing it does
+  there reaches the operator before that check.
+- The card dialog's approve button names its step: `✓ <transition name> → <column>` ("✓ Open public PR →
+  Public: Create PR"; a final step `✓ <name> to merge`), `approveLabel` in `lib/workflow`; the tooltip starts with
+  the name.
+- `foldGraph(base, maxWidth, maxHeight = Infinity)` / `layoutGraph` `maxHeight`: the editor passes its box
+  height (read again 120 ms after a resize settles); splits whose rows are wider than the box are skipped undrawn.
+
 ### Card URLs for agents; the links rule
 
 - `Tools.new` takes a required `card_url: ->(slug, id) { the absolute URL that opens the card on the host's board }`
@@ -320,7 +344,7 @@ Newest first; a heading names the `Schema::VERSION` step when the change brought
   (`{old name => new name}`, on the boards holding a renamed column) on every stored board (the template too), or on
   `slugs` only. Cards (archived too), their `review_rounds` keys and their move / create entries follow; a board that
   already holds a new key is refused. Its down calls it again with the inverse maps.
-- Fixtures: `local_v3.board.json` is the private local-repo board (keys `local_agent_review`, `local_author`,
+- Fixtures: `local_v3.board.json` was the private local-repo board (now `local_v4`, above; keys `local_agent_review`, `local_author`,
   `local_human_review`, `local_merged_pr`; labels `Local: …`; transition `Open local PR`). `mirror_v3.board.json` stays,
   frozen: the workflow v3 migration's target, read by hosts' pinned v3 migrations. `mirror_v2*.board.json` are now
   `legacy_v2*.board.json`. A host whose `review_loop.columns` named `mirror_agent_review` renames it with its boards.
@@ -364,8 +388,8 @@ Newest first; a heading names the `Schema::VERSION` step when the change brought
   (`Schema.migrate!(to: 9)`; rollback `Schema.restore_xy!`, which puts the v8 shape back).
 - React: `BoardEditor` lays the graph out with dagre on every open, folded into rows that fit its box, at the zoom that
   shows the whole graph (never below `MIN_TEXT_ZOOM`); Save sends no position; a drag is a nudge for the session.
-  `lib/graph` exports `layoutGraph(columns, transitions, {typeLabel, maxWidth})` = `foldGraph(rankGraph(columns,
-  transitions, {typeLabel}), maxWidth)` (dagre runs in `rankGraph`, once per draft; a resize only re-folds), `withMoved`,
+  `lib/graph` exports `layoutGraph(columns, transitions, {typeLabel, maxWidth, maxHeight})` = `foldGraph(rankGraph(columns,
+  transitions, {typeLabel}), maxWidth, maxHeight)` (dagre runs in `rankGraph`, once per draft; a resize only re-folds), `withMoved`,
   `pathOf` (a polyline with rounded corners), `MIN_TEXT_ZOOM`; `@dagrejs/dagre` is the port's one runtime dependency.
 
 ### Schema v8 — workflow v3: a fixed type set, gates, flags, review loops

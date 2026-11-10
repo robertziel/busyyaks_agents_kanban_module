@@ -6,6 +6,20 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ## [Unreleased]
 
+### Changed
+
+- **Public: Create PR** on the private local-repo board (`fixtures/boards/local_v4.board.json`): "Open public PR" moves
+  the card from Local: Deploy check into the new working column Public: Create PR, where the agent opens the public
+  PR; the agent's "Public PR opened" moves it on to Public: Agent review; Cancel and Rework list it.
+  `local_v3.board.json` is kept, frozen.
+- The approve button names its step ("✓ Open public PR → Public: Create PR"), not always "Approve"; `ApprovalStep.name` is a
+  `string` (a step is a named transition), no default.
+- `splits(items, k, fits?)` has no cap: it yields only the splits whose runs fit, so the height fold searches every
+  width-feasible split. `foldRows(base, rows)` is exported (one fold of a given split).
+- The workflow graph's fold takes the box height too (`foldGraph(base, maxWidth, maxHeight)`): of the splits into rows
+  that keep the width, the one that fits the height best — the 15-column local board shows whole at 1920 × 1080.
+  Splits too wide are skipped undrawn; the editor re-folds 120 ms after a resize settles.
+
 ## [1.0.0-beta.1] - 2026-11-10
 
 Everything below ships as **1.0.0-beta.1**, the first public release, together with
