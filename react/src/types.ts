@@ -164,6 +164,18 @@ export type Concurrency = {
   types: Record<string, { running: number; max: number | null; max_per_project: number | null }>;
 };
 export type LaunchesData = { types: LaunchType[]; concurrency: Concurrency | null; sessions_error: string | null };
+// Api#waiting `launch_failures`: the registrations whose start failed (claude never came up) in the last day, newest
+// first — a launch from the bar or a spawn for a card; `reason` = the host's, verbatim
+export type LaunchFailure = {
+  id: number;
+  session: string;
+  project: string;
+  type: string;
+  launcher: string | null;
+  launched_by: string;
+  ended: string;
+  reason: string;
+};
 // Api#launch 201: the registration + what the host's start answered (`result`, the host's own shape)
 export type LaunchResult = {
   session: string;

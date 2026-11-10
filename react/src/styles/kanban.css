@@ -3069,3 +3069,59 @@
     overflow: visible;
   }
 }
+
+/* the failed-start alert (LaunchFailureAlert): a native modal <dialog> in the top layer */
+.ak-alert::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+}
+.ak-root.ak-alert {
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  margin: auto;
+  border: 0;
+  overflow: auto;
+  padding: 18px 20px;
+  border-radius: var(--ak-radius-card);
+  border-top: 4px solid var(--ak-bad);
+  background: var(--ak-panel);
+  color: var(--ak-ink);
+  box-shadow: var(--ak-menu-shadow);
+}
+.ak-root.ak-alert h2 {
+  margin: 0 0 10px;
+  font-size: 17px;
+  color: var(--ak-bad);
+}
+.ak-root.ak-alert ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 12px;
+}
+.ak-root .ak-alert-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: baseline;
+  font-size: 13px;
+}
+.ak-root .ak-alert-head code {
+  font-family: var(--ak-mono);
+  font-weight: 600;
+}
+.ak-root .ak-alert-reason {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--ak-radius-ctl-sm);
+  background: rgba(var(--ak-bad-rgb), 0.08);
+  font-family: var(--ak-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ak-root .ak-alert-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}

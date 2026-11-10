@@ -1,6 +1,6 @@
 // The Launch bar's pure rules: why a type cannot start now (the cap it hits), the cap line, the launcher a viewer
 // last picked per type. Every number comes from the engine's Api#launches — nothing is counted here.
-import type { Concurrency, LaunchType } from "../types";
+import type { Concurrency, LaunchFailure, LaunchType } from "../types";
 
 // null = may start; else the reason, worded like the engine's refusal (the server is the judge; this only greys the button).
 export function launchBlocked(t: LaunchType, conc: Concurrency | null, sessionsError: string | null): string | null {
@@ -38,4 +38,10 @@ export function pickLauncher(t: LaunchType, remembered: string | null): string {
   if (t.follows) return t.follows.launcher;
   if (remembered && t.launchers.some((l) => l.key === remembered)) return remembered;
   return t.launchers[0]?.key ?? "";
+}
+
+// The failed starts this viewer has not dismissed: every row whose id is not in the dismissed set (the engine orders
+// by when the start ended, so a set — not a highest id — keeps a lower id that ended later), newest first as sent.
+export function unseenFailures(failures: LaunchFailure[], dismissed: ReadonlySet<number>): LaunchFailure[] {
+  return failures.filter((f) => !dismissed.has(f.id));
 }

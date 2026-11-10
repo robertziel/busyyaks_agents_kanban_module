@@ -121,6 +121,9 @@ class SpawnTest < Minitest::Test
     assert_equal [nil, nil], kb.card(id).values_at(:owner_session, :assignee)
     assert_match(/spawn failed: tmux failed: no server/, kb.activity(id).last[:body])
     assert_equal "start failed: tmux failed: no server", kb.sessions_t.where(session: "g_r_worker_1").first[:end_reason]
+    assert_equal [["g_r_worker_1", "worker", "tmux failed: no server"]],
+                 kb.launch_failures(["g/r"]).map { |f| f.values_at(:session, :type, :reason) },
+                 "the failed spawn is a launch failure the operator is shown"
     @l.fail = false
     assert_empty @api.spawn_pass, "inside the backoff: no new session every pass"
     @now += AgentsKanban::Store::SPAWN_RETRY_S
