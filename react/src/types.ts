@@ -63,7 +63,8 @@ export type BoardColumnDef = {
 };
 export type BoardShape = { columns: BoardColumnDef[]; transitions: WorkflowTransition[] };
 // one approval step: the operator's move from → to approves; `then` = where its agent takes the card next (null = no single way)
-export type ApprovalStep = { from: ColumnKey; to: ColumnKey; name: string | null } & (
+// `name` = the gate's named exit (Board#derive_approvals reads it off the transition; a transition always has a name)
+export type ApprovalStep = { from: ColumnKey; to: ColumnKey; name: string } & (
   { final: true; then: ColumnKey } | { final: false; then: ColumnKey | null }
 );
 // AgentsKanban::Board#rules — the same derivation the engine enforces, for the client to render from

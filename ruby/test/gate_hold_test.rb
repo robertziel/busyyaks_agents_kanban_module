@@ -24,7 +24,7 @@ class GateHoldTest < Minitest::Test
 
   def setup
     super
-    @m = store(board: KanbanTest.board_hash("local_v3"))
+    @m = store(board: KanbanTest.board_hash("local_v4"))
     @projects = { "p" => { slug: "p", path: "/nonexistent", remote: nil } }
     att = AgentsKanban::Attachments.new(@m, root: Dir.mktmpdir,
                                             policy: AgentsKanban::AttachmentPolicy.new(max_bytes: 100, types: "image/png"))

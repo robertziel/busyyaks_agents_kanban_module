@@ -68,7 +68,7 @@ re-vendors it. It lives in **its own repo with its own history** so other projec
 
 | Host | Stack | Board |
 |---|---|---|
-| busyyaks (reference) | Hanami 2.3 + SQLite | one coding board per repo: Backlog → To do → In progress → QA → Human Check → Ready to merge → Merged; its private local-repo boards run two agent review loops (workflow v3, `fixtures/boards/local_v3.board.json`) |
+| busyyaks (reference) | Hanami 2.3 + SQLite | one coding board per repo: Backlog → To do → In progress → QA → Human Check → Ready to merge → Merged; its private local-repo boards run two agent review loops (workflow v3, `fixtures/boards/local_v4.board.json`) |
 | a content app | Rails + Postgres | a content board: Waiting → Queued → Running → Done, translation cards waiting for their article card |
 
 ## What a host gets
@@ -134,7 +134,7 @@ attachment route.
 |---|---|
 | `ruby/` | `AgentsKanban`: `HostConfig`, `ColumnTypes`, `Board` + `Workflow`, `BoardRepo` (boards in the DB), `Schema`, `Store` (cards + session registry), `Api`, `Tools` (MCP), `Attachments`, `Markdown`, `SessionDialog`, `CardLinks`, `BacklogMd`, `Notifier`, `Launch`, `Rev` — minitest on SQLite and Postgres |
 | `react/` | `Board`, `CardDialog`, `BoardEditor` (the workflow graph), `MarkdownEditor`, `LaunchBar` over injected `KanbanApi` / `LaunchApi`; `kanban.css` (+ `base.css`); the pure libs — vitest |
-| `fixtures/` | board JSON shared by both test suites (`boards/coding*.json`: busyyaks's host config + board; `content*.json`; `local_v3.board.json`: the review-heavy board; `legacy_v2*.board.json` + `mirror_v3.board.json`: the workflow v3 migration's frozen input and target) and captured session-dialog screens |
+| `fixtures/` | board JSON shared by both test suites (`boards/coding*.json`: busyyaks's host config + board; `content*.json`; `local_v4.board.json`: the review-heavy board (`local_v3` its frozen predecessor); `legacy_v2*.board.json` + `mirror_v3.board.json`: the workflow v3 migration's frozen input and target) and captured session-dialog screens |
 | `config.example.yml` · `board.example.yml` | every host key, documented · the template board |
 
 ## Using it (ruby)

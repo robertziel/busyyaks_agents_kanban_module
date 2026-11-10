@@ -37,11 +37,19 @@ export function operatorMoves(ts: { name: string; to: string; to_label: string; 
 
 // ── approval steps (Board#approvals) ─────────────────────────────────────────────────────────
 
+// The approve button's text: the step's own name (the gate's named exit — "Approve", "Open public PR", …), so the
+// operator reads what the click starts; a final step merges.
+export function approveLabel(step: ApprovalStep, label: (k: string) => string): string {
+  const { name } = step;
+  return step.final ? `✓ ${name} to merge` : `✓ ${name} → ${label(step.to)}`;
+}
+
 // The approve button's tooltip: where the card goes and what its agent is pinged to do — every column named off the board.
 export function approveTitle(step: ApprovalStep, label: (k: string) => string): string {
+  const { name } = step;
   if (step.final)
-    return `Approve for merge: the card moves to ${label(step.to)}; the owner agent is pinged to merge it and move the card to ${label(step.then)}`;
-  return `Approve: the card moves ${label(step.from)} → ${label(step.to)}; the owner agent is pinged to carry on${step.then ? ` and move the card to ${label(step.then)}` : ""}`;
+    return `${name} for merge: the card moves to ${label(step.to)}; the owner agent is pinged to merge it and move the card to ${label(step.then)}`;
+  return `${name}: the card moves ${label(step.from)} → ${label(step.to)}; the owner agent is pinged to carry on${step.then ? ` and move the card to ${label(step.then)}` : ""}`;
 }
 
 // After the approval: what its agent does next.

@@ -186,10 +186,10 @@ function approvalsOf(shape: BoardShape, gates: string[]): ApprovalStep[] {
 }
 
 export type Fixture = { host: HostConfig; shape: BoardShape; board: BoardShapeData };
-// local_v3 = busyyaks's private local-repo board (workflow v3: two agent review loops, three approval steps) on the coding host;
+// local_v4 = busyyaks's private local-repo board (two agent review loops, three approval steps, Public: Create PR) on the coding host;
 // legacy_v2_prereview = the 13-column workflow v2 private board the unreadable editor screenshot showed, its types mapped
 // to the v3 set (asks_operator → working, handoff / approved → gate): the graph editor's layout fixture.
-export function fixture(name: "coding" | "content" | "local_v3" | "legacy_v2_prereview"): Fixture {
+export function fixture(name: "coding" | "content" | "local_v4" | "legacy_v2_prereview"): Fixture {
   const host = read<HostConfig>(`${name === "content" ? "content" : "coding"}.json`);
   const shape = read<BoardShape>(`${name}.board.json`);
   return {
