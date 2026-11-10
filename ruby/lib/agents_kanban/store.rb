@@ -1058,6 +1058,28 @@ module AgentsKanban
       open[:id]
     end
 
+    # A launch or a spawn whose start failed ends its registration with this reason prefix (Api#launch, Api#spawn_pass).
+    START_FAILED = "start failed: "
+    LAUNCH_FAILURE_WINDOW_S = 86_400 # the waiting list shows the failed starts of the last day …
+    LAUNCH_FAILURES_SHOWN = 10 # … the newest this many
+
+    # The registrations on these projects whose start FAILED (claude never came up: the session was killed, its cards
+    # released) within LAUNCH_FAILURE_WINDOW_S, newest first — what the operator must see at once, wherever they are
+    # (Api#waiting). → [{id, session, project, type, launcher, launched_by, ended, reason}]
+    def launch_failures(slugs)
+      since = @clock.call - LAUNCH_FAILURE_WINDOW_S
+      sessions_t.where(project_slug: slugs.to_a)
+                .where(Sequel.like(:end_reason, "#{START_FAILED}%"))
+                .where { ended_at >= since }
+                .order(Sequel.desc(:ended_at), Sequel.desc(:id))
+                .limit(LAUNCH_FAILURES_SHOWN)
+                .all
+                .map do |r|
+        { id: r[:id], session: r[:session], project: r[:project_slug], type: r[:type_key], launcher: r[:launcher_key],
+          launched_by: r[:launched_by], ended: iso(r[:ended_at]), reason: r[:end_reason].delete_prefix(START_FAILED), }
+      end
+    end
+
     def open_session(session) = sessions_t.where(session: session.to_s, ended_at: nil).first
 
     # One registration per session: a second one (the same session registering twice) is refused with the first.

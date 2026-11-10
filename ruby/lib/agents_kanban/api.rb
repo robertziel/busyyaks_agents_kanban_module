@@ -104,7 +104,7 @@ module AgentsKanban
         end
         held = w.held.map { |slug, cs| { slug: slug, count: cs.size, cards: cs.map { |c| waiting_card(c, boards[slug]) } } }
         [200, { waiting_columns: boards[Board::TEMPLATE].waiting, total: by_slug.values.sum(&:size), projects: sorted,
-                held: held.sort_by { |g| [-g[:count], g[:slug]] }, },]
+                held: held.sort_by { |g| [-g[:count], g[:slug]] }, launch_failures: @store.launch_failures(slugs), },]
       end
     end
 
@@ -299,7 +299,7 @@ module AgentsKanban
         result = begin
           start_session(session, p, t, lk, plan)
         rescue Delivery::Unavailable, Delivery::Refused => e
-          @store.end_session(session, reason: "start failed: #{e.message}", by: by)
+          @store.end_session(session, reason: "#{Store::START_FAILED}#{e.message}", by: by)
           @store.release_session_cards(session, reason: "its launch failed: #{e.message}", by: by)
           raise
         end
@@ -366,7 +366,7 @@ module AgentsKanban
         begin
           start_session(session, p, t, lk, plan)
         rescue Delivery::Unavailable, Delivery::Refused => e
-          @store.end_session(session, reason: "start failed: #{e.message}", by: by)
+          @store.end_session(session, reason: "#{Store::START_FAILED}#{e.message}", by: by)
           @store.release_session_cards(session, reason: "its spawn failed: #{e.message}", by: by)
           @store.spawn_note(c[:id], "spawn failed: #{e.message}", by)
           next

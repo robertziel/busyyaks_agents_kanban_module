@@ -329,6 +329,16 @@ class ApiTest < Minitest::Test
     assert_equal [nil, nil], kb.card(b).values_at(:owner_session, :assignee)
     assert_equal "start failed: tmux failed: no server", kb.sessions_t.where(session: "p_teamlead_2").first[:end_reason]
     l.fail = false
+    # the failed start is in the waiting list (the operator's alert, wherever they are) for a day, newest first
+    failures = api.waiting(@projects.values)[1][:launch_failures]
+    assert_equal [["p_teamlead_2", "p", "lead", "fullclaude", "op", "tmux failed: no server"]],
+                 failures.map { |f| f.values_at(:session, :project, :type, :launcher, :launched_by, :reason) }
+    rev = api.waiting_rev(@projects.values)[1][:rev]
+    assert_empty api.waiting([@projects["g/r"]])[1][:launch_failures], "only the listed projects' failures"
+    @now += AgentsKanban::Store::LAUNCH_FAILURE_WINDOW_S + 1
+    assert_empty api.waiting(@projects.values)[1][:launch_failures], "older than a day: gone"
+    refute_equal rev, api.waiting_rev(@projects.values)[1][:rev]
+    @now -= AgentsKanban::Store::LAUNCH_FAILURE_WINDOW_S + 1
     # sessions: running vs ended; the sessions port down: 503 on launch, said on launches
     s, j = api.sessions
     assert_equal [["g_r_teamlead_1"], ["p_teamlead_2"]],

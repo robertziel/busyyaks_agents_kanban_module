@@ -237,7 +237,11 @@ host's `board_extras`; 422 `{error}` when the stored board no longer fits the ho
 columns_order, waiting_columns, counts, total, waiting, flagged, backlog_md}]}`; `Api#waiting` → `{waiting_columns,
 total, projects: [{slug, count, waiting_columns, cards: [{id, title, column, column_label, since, needs_operator,
 blocked, question_first_line, blocked_first_line, handoff_first_line}]}]}` (flagged cards first — in any column —
-then each board's waiting columns; projects with a question first). Board shape: `Api#board_shape` / `#board_shape_save {columns,
+then each board's waiting columns; projects with a question first), `held` (the gate cards waiting for CI) and
+`launch_failures: [{id, session, project, type, launcher, launched_by, ended, reason}]` = `Store#launch_failures`: the
+registrations on those projects whose start failed (end_reason `start failed: …` — a launch or a spawn whose claude never
+came up) in the last `LAUNCH_FAILURE_WINDOW_S` (a day), the newest `LAUNCH_FAILURES_SHOWN` (10), newest first — a new one
+changes the rev, and the React `LaunchFailureAlert` opens a modal `<dialog>` (top layer) for the ids the viewer has not dismissed (a per-viewer id set in localStorage), with the host's `--ak-*` tokens resolved on `<html>`. Board shape: `Api#board_shape` / `#board_shape_save {columns,
 transitions}` / `#board_shape_reset` → `Store#board_json`. Single card:
 `{card (attachments = list), activity, pings}` + `card_extras`. Launches: `Api#launches(slug)` → `{types: [{key, label,
 launchers: [{key,label,model}], model, takes, max, max_per_project, prompt, running, running_here, launcher_follows, follows: {type,session,launcher} | null}], concurrency: {max_sessions,

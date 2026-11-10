@@ -12,6 +12,7 @@ export { CardLinkRow, CardLinks, LINK_KIND } from "./components/CardLinkRow";
 export { Avatar, AgentLinks, CopyChip, ErrorState, Html, Loading, sessionFor } from "./components/Bits";
 export { KanbanHostProvider, useKanbanHost, colLabel, type KanbanHostValue } from "./host";
 export { LaunchBar, type LaunchBarProps } from "./components/LaunchBar";
+export { LaunchFailureAlert, type LaunchFailureAlertProps } from "./components/LaunchFailureAlert";
 export { errMsg, KanbanApiError, type KanbanApi, type LaunchApi, type CardPatch } from "./api";
 export * from "./lib/launch";
 export * from "./types";
