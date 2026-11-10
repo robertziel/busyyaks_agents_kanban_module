@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# RuboCop in Docker — the host needs only docker.
+#
+#   scripts/lint/rubocop [rubocop args…]     lint the checkout (.rubocop.yml = Cookpad's style guide + four plugins)
+#   scripts/lint/rubocop -a                  autocorrect the safe offenses in place
+#   LINT_SRC=<dir> scripts/lint/rubocop …    lint another tree (CI's host path of this checkout)
+#
+# The image (scripts/lint/image) is built from ruby/Gemfile + ruby/Gemfile.lock alone, so the RuboCop that runs is
+# always the one ruby/Gemfile.lock pins.
+set -euo pipefail
+
+cd "$(dirname "$0")/../.."
+SRC=${LINT_SRC:-$PWD}
+TAG=$(scripts/lint/image)
+
+exec docker run --rm -u "$(id -u):$(id -g)" -e XDG_CACHE_HOME=/tmp -v "$SRC:/src" "$TAG" "$@"

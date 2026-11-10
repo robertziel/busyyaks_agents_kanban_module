@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# ShellCheck in Docker — the host needs only git and docker.
+#
+#   scripts/lint/shellcheck                     every tracked shell script (scripts/lint/shell-files: by shebang)
+#   LINT_SRC=<dir> scripts/lint/shellcheck      the same files, mounted from <dir> (CI's host path of this checkout)
+#
+# Severity style: every finding fails, notes included. Nothing is disabled: .shellcheckrc only says where sourced files
+# are (scripts/ci/lib/github-api.sh, shared by scripts/ci/badges + scripts/ci/github), no directive disables a check.
+set -euo pipefail
+
+cd "$(dirname "$0")/../.."
+SRC=${LINT_SRC:-$PWD}
+IMAGE=koalaman/shellcheck:v0.10.0
+
+files=()
+while IFS= read -r f; do files+=("$f"); done < <(git ls-files -z | xargs -0 scripts/lint/shell-files)
+[ ${#files[@]} -gt 0 ] || { echo "shellcheck: no shell scripts found — the shebang filter is broken" >&2; exit 1; }
+echo "shellcheck: $IMAGE -S style over ${#files[@]} scripts"
+exec docker run --rm -u "$(id -u):$(id -g)" -v "$SRC:/src:ro" -w /src "$IMAGE" --severity=style "${files[@]}"

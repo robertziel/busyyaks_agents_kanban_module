@@ -1,0 +1,43 @@
+# The engine's git hooks — overcommit 0.75.0 (RuboCop + ShellCheck + ESLint + Prettier + gitleaks), run inside the
+# agents-kanban-hooks image by .githooks/pre-commit → scripts/hooks/run, on the STAGED tree. Signed: a change to this
+# file (or a new hook) refuses every commit until it is reviewed and signed again — `scripts/hooks/run sign` (overcommit --sign) after staging it.
+# Every hook fails the commit on any finding, warnings included; nothing is excluded to make one pass. README § Git hooks.
+verify_signatures: true
+
+PreCommit:
+  ALL:
+    on_warn: fail
+    problem_on_unmodified_line: report    # an offense anywhere in a staged file counts, not only on the changed lines
+
+  # overcommit's default pre-commit hooks (AuthorName, AuthorEmail, BrokenSymlinks, CaseConflicts, MergeConflicts)
+  # stay on as shipped.
+
+  RuboCop:                                # built-in; .rubocop.yml (Cookpad + four plugin departments); CI: test.sh lint
+    enabled: true
+    flags: ['--format=emacs', '--force-exclusion', '--display-cop-names']
+
+  EsLintReact:                            # ad hoc: scripts/hooks/eslint; CI: test.sh react (npm run lint)
+    enabled: true
+    description: 'ESLint (react/eslint.config.js) on the staged TS/TSX files'
+    command: ['/hooks/eslint', 'react']
+    include: ['react/**/*.ts', 'react/**/*.tsx']
+
+  PrettierCheck:                          # ad hoc: scripts/hooks/prettier; CI: test.sh react (npm run format:check)
+    enabled: true
+    description: 'Prettier --check (.prettierrc.json, printWidth 120) on the staged TS/TSX/JS/CSS/JSON files'
+    command: ['/hooks/prettier']
+    include: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.css', '**/*.json']
+
+  Gitleaks:                               # ad hoc: scripts/hooks/gitleaks; CI: test.sh secrets (full history)
+    enabled: true
+    description: 'gitleaks on the staged changes'
+    command: ['/hooks/gitleaks']
+    requires_files: true
+
+  ShellCheck:                             # built-in; command = scripts/hooks/shellcheck; CI: test.sh lint (scripts/lint/shellcheck)
+    enabled: true
+    description: 'ShellCheck (-S style) on the staged shell scripts, found by shebang'
+    command: ['/hooks/shellcheck']
+    required_executable: 'shellcheck'     # the binary the wrapper runs
+    flags: ['--format=gcc', '--severity=style']
+    include: '**/*'                       # every staged file; /hooks/shell-files keeps the sh/bash ones (most have no .sh)

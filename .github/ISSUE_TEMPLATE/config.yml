@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/robertziel/busyyaks_agents_kanban_module/security/advisories/new
+    about: Privately, through GitHub's vulnerability reporting; never in a public issue (SECURITY.md).
+  - name: A bug or feature in the busyyaks panel
+    url: https://github.com/robertziel/busyyaks/issues
+    about: The dashboard, scanner, collectors, launcher and daily report live in busyyaks.

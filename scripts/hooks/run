@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Git hooks through overcommit, in Docker — the host needs only git and docker.
+#
+#   scripts/hooks/run pre-commit   what .githooks/pre-commit runs: every PreCommit hook in .overcommit.yml
+#   scripts/hooks/run sign         record the signature of .overcommit.yml (overcommit --sign + --sign pre-commit);
+#                                  once per worktree and after every change to the file — stage it first, it signs
+#                                  the STAGED copy (the one the hook will read)
+#
+# Signatures are kept per worktree: overcommit 0.75.0 reads and writes them with
+# `git config --worktree` when extensions.worktreeConfig is on (else with --local, the config every worktree of the
+# repo shares, where a worktree whose .overcommit.yml differs overwrites the others' signatures). `sign` turns the
+# extension on; a hook with it off is refused — the signatures it would check are the shared ones. Only the repo's own
+# config (--local) can turn the extension on: git ignores a global or system extensions.worktreeConfig.
+#
+# What the container sees: the repo's git dir (mounted at its own path) and a copy of the index. It checks the index
+# out into a tmpfs (/deps/snap) and runs overcommit there, so every hook reads exactly what is being committed. The
+# working tree is never mounted: overcommit never has to `git stash` unstaged changes (the stash stack is shared by
+# every worktree of the repo), and no hook can edit a file. Nothing of the caller's environment reaches overcommit but
+# the author identity: SKIP / ONLY / OVERCOMMIT_DISABLE / OVERCOMMIT_NO_VERIFY have no effect here.
+#
+# No docker, no daemon, an image that does not build → the hook fails and the commit is refused. Nothing is skipped.
+set -euo pipefail
+
+hook=${1:?usage: scripts/hooks/run pre-commit|sign}
+top=$(git rev-parse --show-toplevel)
+cd "$top"
+
+if ! command -v docker >/dev/null; then
+  echo "hooks: docker not found — the hooks run only in Docker; nothing was checked, so the commit is refused" >&2
+  exit 1
+fi
+
+worktree_config=$(git config --local --bool --get extensions.worktreeConfig) || worktree_config="not set"
+if [ "$worktree_config" != true ]; then
+  if [ "$hook" != sign ]; then
+    echo "hooks: extensions.worktreeConfig is $worktree_config in this repo's config (--local), so overcommit's" \
+      "signatures would be the ones every worktree shares — run scripts/hooks/run sign (it turns the extension" \
+      "on and signs this worktree); the commit is refused" >&2
+    exit 1
+  fi
+  git config --local extensions.worktreeConfig true
+  echo "hooks: extensions.worktreeConfig turned on — signatures are now per worktree; every other worktree of" \
+    "this repo signs once (scripts/hooks/run sign there)" >&2
+fi
+
+tag=$(scripts/hooks/image)
+gitdir=$(git rev-parse --absolute-git-dir)
+common=$(git rev-parse --path-format=absolute --git-common-dir)
+# git hands a hook the index it is committing (index.lock, a partial commit's next-index-*.lock) in GIT_INDEX_FILE
+index=${GIT_INDEX_FILE:-$(git rev-parse --path-format=absolute --git-path index)}
+case "$index" in /*) ;; *) index="$top/$index" ;; esac
+# the author: overcommit's AuthorName / AuthorEmail check it; `git var` fails when git has none (and so would the commit)
+ident=$(git var GIT_AUTHOR_IDENT)
+author_name=${ident% <*}
+author_email=${ident#*<}; author_email=${author_email%%>*}
+
+tty=()
+[ -t 1 ] && tty=(-t)
+exec docker run --rm -i "${tty[@]}" -u "$(id -u):$(id -g)" -e HOME=/tmp -e XDG_CACHE_HOME=/tmp \
+  -e GIT_DIR="$gitdir" -e GIT_WORK_TREE=/deps/snap -e GIT_INDEX_FILE=/tmp/index \
+  -e GIT_AUTHOR_NAME="$author_name" -e GIT_AUTHOR_EMAIL="$author_email" \
+  -v "$common:$common" -v "$index:/deps/index.in:ro" --tmpfs /deps/snap:exec,mode=1777 \
+  "$tag" "$hook"

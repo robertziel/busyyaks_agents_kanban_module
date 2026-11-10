@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# ShellCheck on the staged shell scripts (the same filter as CI's lint stage) — the command of overcommit's built-in ShellCheck hook
+# (.overcommit.yml), which hands it its flags and every staged file; only the shell scripts among them (by shebang,
+# /hooks/shell-files = scripts/lint/shell-files, the same filter as CI) are checked, in the staged snapshot.
+# CI: scripts/ci/test.sh lint (scripts/lint/shellcheck, every tracked script).
+set -euo pipefail
+
+flags=() files=()
+for a in "$@"; do case "$a" in -*) flags+=("$a") ;; *) files+=("$a") ;; esac; done
+scripts=()
+[ ${#files[@]} -eq 0 ] || while IFS= read -r f; do scripts+=("$f"); done < <(/hooks/shell-files "${files[@]}")
+[ ${#scripts[@]} -gt 0 ] || exit 0
+exec shellcheck "${flags[@]}" "${scripts[@]}"

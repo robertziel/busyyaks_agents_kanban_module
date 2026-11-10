@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# gitleaks on the staged changes (an overcommit ad hoc hook, .overcommit.yml) — the pre-commit half of CI's
+# secrets stage (scripts/ci/test.sh secrets), same version, same rules: no allowlist. An in-repo .gitleaks.toml /
+# .gitleaksignore (gitleaks would read either) is refused, `gitleaks:allow` comments are ignored.
+set -euo pipefail
+
+own=$(git -C /deps/snap ls-files | grep -E '(^|/)\.gitleaks(\.toml|ignore)$' || true)
+if [ -n "$own" ]; then
+  echo "gitleaks: refused — $own in the tree; findings are fixed, never allowlisted" >&2
+  exit 1
+fi
+cd /tmp   # no .gitleaksignore is read from the working dir
+exec gitleaks git --pre-commit --staged --redact --verbose --no-banner --exit-code 1 --ignore-gitleaks-allow /deps/snap

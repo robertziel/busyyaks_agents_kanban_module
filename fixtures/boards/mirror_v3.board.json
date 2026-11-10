@@ -1,0 +1,243 @@
+{
+  "columns": [
+    {
+      "key": "backlog",
+      "label": "Backlog",
+      "type": "parked",
+      "hide_after_hours": 168
+    },
+    {
+      "key": "todo",
+      "label": "To do",
+      "type": "queued",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "doing",
+      "label": "In progress",
+      "type": "working",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "mirror_agent_review",
+      "label": "Mirror: Agent review",
+      "type": "review",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "mirror_author",
+      "label": "Mirror: Author response",
+      "type": "working",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "mirror_human_review",
+      "label": "Mirror: Human review",
+      "type": "gate",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "mirror_merged",
+      "label": "Mirror merged",
+      "type": "review",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "deploy_check",
+      "label": "Local deploy check",
+      "type": "gate",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "public_agent_review",
+      "label": "Public: Agent review",
+      "type": "review",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "public_author",
+      "label": "Public: Author response",
+      "type": "working",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "public_human_review",
+      "label": "Public: Human review",
+      "type": "gate",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "awaiting_merge",
+      "label": "Awaiting merge",
+      "type": "gate",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "done",
+      "label": "Done",
+      "type": "done",
+      "hide_after_hours": 24
+    },
+    {
+      "key": "cancelled",
+      "label": "Cancelled",
+      "type": "cancelled",
+      "hide_after_hours": 24
+    }
+  ],
+  "transitions": [
+    {
+      "name": "Prioritise",
+      "from": "backlog",
+      "to": "todo",
+      "by": "any"
+    },
+    {
+      "name": "Deprioritise",
+      "from": "todo",
+      "to": "backlog",
+      "by": "any"
+    },
+    {
+      "name": "Start work",
+      "from": "todo",
+      "to": "doing",
+      "by": "any"
+    },
+    {
+      "name": "Open mirror PR",
+      "from": "doing",
+      "to": "mirror_agent_review",
+      "by": "agent"
+    },
+    {
+      "name": "Comments posted",
+      "from": "mirror_agent_review",
+      "to": "mirror_author",
+      "by": "agent"
+    },
+    {
+      "name": "Hand over",
+      "from": "mirror_agent_review",
+      "to": "mirror_human_review",
+      "by": "agent"
+    },
+    {
+      "name": "All threads answered",
+      "from": "mirror_author",
+      "to": "mirror_agent_review",
+      "by": "agent"
+    },
+    {
+      "name": "Approve",
+      "from": "mirror_human_review",
+      "to": "mirror_merged",
+      "by": "operator"
+    },
+    {
+      "name": "Changes requested",
+      "from": "mirror_human_review",
+      "to": "mirror_author",
+      "by": "operator"
+    },
+    {
+      "name": "Deploy locally",
+      "from": "mirror_merged",
+      "to": "deploy_check",
+      "by": "agent"
+    },
+    {
+      "name": "Open public PR",
+      "from": "deploy_check",
+      "to": "public_agent_review",
+      "by": "operator"
+    },
+    {
+      "name": "Deploy failed",
+      "from": "deploy_check",
+      "to": "doing",
+      "by": "operator"
+    },
+    {
+      "name": "Comments posted",
+      "from": "public_agent_review",
+      "to": "public_author",
+      "by": "agent"
+    },
+    {
+      "name": "Hand over",
+      "from": "public_agent_review",
+      "to": "public_human_review",
+      "by": "agent"
+    },
+    {
+      "name": "All threads answered",
+      "from": "public_author",
+      "to": "public_agent_review",
+      "by": "agent"
+    },
+    {
+      "name": "Approve",
+      "from": "public_human_review",
+      "to": "awaiting_merge",
+      "by": "operator"
+    },
+    {
+      "name": "Changes requested",
+      "from": "public_human_review",
+      "to": "public_author",
+      "by": "operator"
+    },
+    {
+      "name": "Merge",
+      "from": "awaiting_merge",
+      "to": "done",
+      "by": "agent"
+    },
+    {
+      "name": "Reopen",
+      "from": "done",
+      "to": "doing",
+      "by": "operator"
+    },
+    {
+      "name": "Rework",
+      "from": [
+        "mirror_agent_review",
+        "mirror_human_review",
+        "mirror_merged",
+        "deploy_check",
+        "public_agent_review",
+        "public_human_review",
+        "awaiting_merge"
+      ],
+      "to": "doing",
+      "by": "operator"
+    },
+    {
+      "name": "Cancel",
+      "from": [
+        "backlog",
+        "todo",
+        "doing",
+        "mirror_agent_review",
+        "mirror_author",
+        "mirror_human_review",
+        "mirror_merged",
+        "deploy_check",
+        "public_agent_review",
+        "public_author",
+        "public_human_review",
+        "awaiting_merge"
+      ],
+      "to": "cancelled",
+      "by": "operator"
+    },
+    {
+      "name": "Move",
+      "from": "*",
+      "to": "*",
+      "by": "operator"
+    }
+  ]
+}

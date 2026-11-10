@@ -1,0 +1,91 @@
+{
+  "priorities": ["high", "medium", "low"],
+  "label_colors": ["green", "yellow", "orange", "red", "purple", "blue", "teal", "pink", "gray"],
+  "system_author": "busyyaks",
+  "attachment_url_prefix": "/api/attachments",
+  "launchers": [
+    {
+      "key": "fullclaude",
+      "label": "fullclaude",
+      "command": "claude",
+      "args": ["--permission-mode", "bypassPermissions"],
+      "via_shell": false
+    },
+    {
+      "key": "localclaude",
+      "label": "localclaude",
+      "command": "localclaude",
+      "args": [],
+      "via_shell": true
+    }
+  ],
+  "agent_types": [
+    {
+      "key": "lead",
+      "label": "Launch",
+      "launchers": ["fullclaude", "localclaude"],
+      "model": null,
+      "prompt": "Lead session for {slug} ({dir}). Your tmux session is {session}; on the board you are {agent} ({type}). Your session is registered and owns these cards: {cards}. Owning is not starting: do no work on them until a ping or the operator asks. Every card you create is owned by your session (author {agent}). Whenever you need the operator's answer about a card: kanban_ask on that card, then end your turn \u2014 never only in this chat. Never poll the board (no sleep / re-read loops): pings arrive in this session. Reply with one line: the cards you own.",
+      "agent_name": "claude-{session}",
+      "session_name": "{slug}_teamlead",
+      "takes": ["queued", "working", "review", "gate"],
+      "max": null,
+      "max_per_project": 1
+    },
+    {
+      "key": "team",
+      "label": "Sub team",
+      "launchers": ["fullclaude", "localclaude"],
+      "model": {
+        "fullclaude": "opus",
+        "localclaude": null
+      },
+      "prompt": "Sub team for {slug} ({dir}), session {session}, board name {agent}. Review this repo read-only with parallel subagents (recent commits, uncommitted work, open branches) and record the result as a note: compact tables, shas, max 5 act-on bullets. Do not modify, commit or push anything unless asked in this session. Need the operator's answer about a card: kanban_ask on it, then end your turn.",
+      "agent_name": "team-{session}",
+      "session_name": "{slug}_team",
+      "takes": [],
+      "max": 2,
+      "max_per_project": null,
+      "launcher_follows": "lead"
+    },
+    {
+      "key": "plain",
+      "label": "Plain",
+      "launchers": ["fullclaude", "localclaude"],
+      "model": null,
+      "prompt": null,
+      "agent_name": "claude-{session}",
+      "session_name": "{slug}",
+      "takes": [],
+      "max": null,
+      "max_per_project": null
+    }
+  ],
+  "concurrency": {
+    "max_sessions": 6
+  },
+  "owner_sessions": null,
+  "table_prefix": "",
+  "theme": {},
+  "idle_watch": {
+    "ci_ping_after_minutes": 10,
+    "ci_comment_after_minutes": 20,
+    "owner_idle_hours": 4
+  },
+  "handoff": {
+    "requires_pr_url": true,
+    "requires_ci_url": true,
+    "qa_min_chars": 20,
+    "ui_change_needs_screenshots": true
+  },
+  "approval": { "requires_green_ci": true },
+  "dependencies": false,
+  "session_dialogs": { "settle_seconds": 0, "context_minutes": 10 },
+  "flags": { "reminder_hours": 24 },
+  "review_loop": {
+    "max_rounds": 3,
+    "unresolved_label": "unresolved",
+    "unresolved_color": "red",
+    "columns": ["local_agent_review", "public_agent_review"]
+  }
+}

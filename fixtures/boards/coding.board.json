@@ -1,0 +1,96 @@
+{
+  "columns": [
+    {
+      "key": "backlog",
+      "label": "Backlog",
+      "type": "parked",
+      "hide_after_hours": 168
+    },
+    {
+      "key": "todo",
+      "label": "To do",
+      "type": "queued",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "doing",
+      "label": "In progress",
+      "type": "working",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "qa",
+      "label": "QA",
+      "type": "review",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "human_check",
+      "label": "Human Check",
+      "type": "gate",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "ready",
+      "label": "Ready to merge",
+      "type": "gate",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "merged",
+      "label": "Merged",
+      "type": "done",
+      "hide_after_hours": 24
+    }
+  ],
+  "transitions": [
+    {
+      "name": "Prioritise",
+      "from": "backlog",
+      "to": "todo",
+      "by": "any"
+    },
+    {
+      "name": "Start work",
+      "from": "todo",
+      "to": "doing",
+      "by": "any"
+    },
+    {
+      "name": "Send for QA",
+      "from": "doing",
+      "to": "qa",
+      "by": "any"
+    },
+    {
+      "name": "Hand over",
+      "from": ["doing", "qa"],
+      "to": "human_check",
+      "by": "agent"
+    },
+    {
+      "name": "Fixes needed",
+      "from": ["qa", "human_check"],
+      "to": "doing",
+      "by": "any"
+    },
+    {
+      "name": "Approve",
+      "from": "human_check",
+      "to": "ready",
+      "by": "operator"
+    },
+    {
+      "name": "Merge",
+      "from": "ready",
+      "to": "merged",
+      "by": "any"
+    },
+    {
+      "name": "Move",
+      "from": "*",
+      "to": "*",
+      "by": "any"
+    }
+  ]
+}

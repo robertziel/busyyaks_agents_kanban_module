@@ -1,0 +1,42 @@
+{
+  "priorities": ["high", "medium", "low"],
+  "label_colors": ["green", "yellow", "orange", "red", "purple", "blue", "teal", "pink", "gray"],
+  "system_author": "board",
+  "attachment_url_prefix": "/kanban/attachments",
+  "launchers": [
+    {
+      "key": "localclaude",
+      "label": "localclaude",
+      "command": "localclaude",
+      "args": [],
+      "via_shell": true
+    }
+  ],
+  "agent_types": [
+    {
+      "key": "worker",
+      "label": "Worker",
+      "launchers": ["localclaude"],
+      "model": null,
+      "prompt": null,
+      "agent_name": "{session}",
+      "session_name": "{slug}_worker",
+      "takes": [],
+      "max": null,
+      "max_per_project": null
+    }
+  ],
+  "concurrency": {
+    "max_sessions": 4
+  },
+  "owner_sessions": ["news_articles", "news-articles-*"],
+  "table_prefix": "kanban_",
+  "theme": {},
+  "idle_watch": null,
+  "handoff": null,
+  "approval": null,
+  "dependencies": true,
+  "session_dialogs": { "settle_seconds": 0, "context_minutes": 10 },
+  "flags": { "reminder_hours": 24 },
+  "review_loop": null
+}

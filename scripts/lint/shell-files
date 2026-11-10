@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Prints each given path that is a shell script: a regular file whose first line is a sh or bash shebang
+# (#!/bin/sh, #!/bin/bash, #!/usr/bin/env bash, …). Scripts are found by what runs them, not by a .sh suffix — most of
+# the engine's have none (.githooks/*, scripts/hooks/*, scripts/lint/*). Shared by CI (scripts/lint/shellcheck, every tracked
+# file) and the pre-commit hook (scripts/hooks/shellcheck, the staged files).
+set -euo pipefail
+
+shebang='^#![[:space:]]*/([^[:space:]]*/)?(env[[:space:]]+)?(ba)?sh([[:space:]]|$)'
+for f in "$@"; do
+  [ -f "$f" ] || continue
+  IFS= read -r first < "$f" || [ -n "${first:-}" ] || continue
+  if [[ $first =~ $shebang ]]; then printf '%s\n' "$f"; fi
+done

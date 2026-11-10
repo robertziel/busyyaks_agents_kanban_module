@@ -1,0 +1,34 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+# The engine's only runtime gems: Sequel (the host's connection is handed in) and commonmarker (the shipped markdown
+# renderer; a host that injects its own needs none). The two database adapters are for THIS suite, which runs against
+# SQLite and Postgres alike — the host brings its own.
+gem "sequel", "~> 5.80"
+gem "commonmarker", "~> 2.0"
+
+group :test do
+  gem "minitest", "~> 5.0"
+  gem "sqlite3", "~> 2.1"
+  gem "pg", "~> 1.5"
+  gem "rake"
+  # coverage: each parallel worker records a result, `rake test:parallel` merges them and fails
+  # below the floor (test/test_coverage.rb)
+  gem "simplecov", "0.22.0", require: false
+end
+
+# The style gate: RuboCop + its four plugin departments (/.rubocop.yml = Cookpad's style guide, the
+# same versions and rules as busyyaks), bundler-audit (CI's `audit` stage, scripts/ci/test.sh audit) and overcommit, the
+# git hook manager (/.overcommit.yml). Installed only in the lint
+# image (scripts/lint/image, CI's `lint` stage) and the hooks image (scripts/hooks/image) — the suite image skips the group
+# (ruby/Dockerfile BUNDLE_WITHOUT=lint), and a host that vendors the engine never bundles this file.
+group :lint do
+  gem "rubocop", "1.92.2", require: false
+  gem "rubocop-performance", "1.27.0", require: false
+  gem "rubocop-rake", "0.7.1", require: false
+  gem "rubocop-sequel", "0.4.1", require: false
+  gem "rubocop-thread_safety", "0.8.0", require: false
+  gem "bundler-audit", "0.9.3", require: false
+  gem "overcommit", "0.75.0", require: false
+end

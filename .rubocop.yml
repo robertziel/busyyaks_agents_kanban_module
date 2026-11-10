@@ -1,0 +1,41 @@
+# The engine's RuboCop config — the same rules as busyyaks: Cookpad's style guide, verbatim
+# (config/rubocop/cookpad.yml, CC BY 3.0), + the four plugin departments, + this repo's file set.
+# Run: scripts/lint/rubocop [rubocop args…] (in Docker). CI: scripts/ci/test.sh lint. Pre-commit: overcommit (.overcommit.yml).
+inherit_from:
+  - config/rubocop/cookpad.yml
+
+inherit_mode:
+  merge:
+    - Exclude
+
+AllCops:
+  TargetRubyVersion: 3.4
+  NewCops: disable
+  SuggestExtensions: false
+  Exclude:
+    - react/**/*           # the React port: TypeScript, linted by ESLint (react/eslint.config.js); its node_modules is npm's
+    - ruby/tmp/**/*        # the suite's scratch files, not code
+    - ruby/.bundle/**/*    # bundler's local config, not code
+
+# Four plugin departments. Cookpad's DisabledByDefault: true turns a plugin's cops off too, so each department is
+# enabled here as a whole (every cop of it runs, its own defaults).
+plugins:
+  - rubocop-performance
+  - rubocop-rake
+  - rubocop-sequel
+  - rubocop-thread_safety
+
+Performance:
+  Enabled: true
+Rake:
+  Enabled: true
+Sequel:
+  Enabled: true
+ThreadSafety:
+  Enabled: true
+# Off for the whole project, as in busyyaks. The cop's advice is "let a framework like Sidekiq handle the
+# threads"; the engine has no job framework, and its one thread is deliberate: the suite's parallel runner
+# (ruby/test/parallel_runner.rb) waits on each worker process from its own thread. Thread.new is the right tool for it;
+# what a thread SHARES is what the other ThreadSafety cops check, and those stay on.
+ThreadSafety/NewThread:
+  Enabled: false

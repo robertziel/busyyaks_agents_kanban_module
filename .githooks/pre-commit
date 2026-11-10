@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# pre-commit: overcommit, in Docker — .overcommit.yml lists the hooks, scripts/hooks/run starts them.
+# Enable: `git config core.hooksPath .githooks`, or — with a global core.hooksPath — a global pre-commit that runs
+# "$(git rev-parse --show-toplevel)/.githooks/pre-commit" (README § Git hooks). CI runs every check on the whole tree.
+exec "$(git rev-parse --show-toplevel)/scripts/hooks/run" pre-commit "$@"

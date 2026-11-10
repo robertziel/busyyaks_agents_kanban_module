@@ -1,0 +1,6 @@
+node_modules/
+.claude/worktrees/
+*.sqlite3
+*.sqlite3-journal
+/ruby/.bundle/
+/ruby/tmp/

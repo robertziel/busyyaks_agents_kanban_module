@@ -1,0 +1,62 @@
+# frozen_string_literal: true
+
+require "rake/testtask"
+
+TEST_FILES = FileList["test/**/*_test.rb"]
+
+# serial, one process: `bundle exec rake test` (TEST=<file> for one file)
+Rake::TestTask.new(:test) do |t|
+  t.libs << "test" << "lib"
+  t.test_files = TEST_FILES
+  t.warning = false
+end
+task default: :test
+
+# The suite in one worker process per CPU (test/parallel_runner.rb) — TEST_WORKERS=files: one per
+# test file (CI), TEST_WORKERS=<n>: n — each on its own database:
+# no DATABASE_URL → its own SQLite file; DATABASE_URL=postgres://…/<db> → its own database <db>_w<i> on that server,
+# created fresh before the run and dropped after (the role needs CREATEDB). The test helper migrates each one. Every
+# worker records line + branch coverage; the merged result is printed and fails below its floor
+# (test/test_coverage.rb).
+namespace :test do
+  task :parallel do
+    require "tmpdir"
+    require "fileutils"
+    require "sequel"
+    require "uri"
+    require_relative "test/parallel_runner"
+    require_relative "test/test_coverage"
+    n = ParallelRunner.count(ENV.fetch("TEST_WORKERS", nil), TEST_FILES.size)
+    dir = Dir.mktmpdir("agents-kanban-test-")
+    base = ENV.fetch("DATABASE_URL", nil)
+    urls =
+      if base.nil?
+        Array.new(n) { |i| "sqlite://#{File.join(dir, "w#{i}.sqlite3")}" }
+      elsif base.start_with?("postgres")
+        uri = URI(base)
+        name = uri.path.delete_prefix("/")
+        raise "DATABASE_URL #{base} names no database" if name.empty?
+
+        names = Array.new(n) { |i| "#{name}_w#{i}" }
+        Sequel.connect(base) { |db| names.each { |d| db.run("DROP DATABASE IF EXISTS #{d}"); db.run("CREATE DATABASE #{d}") } }
+        names.map { |d| uri.dup.tap { _1.path = "/#{d}" }.to_s }
+      else
+        raise "test:parallel: DATABASE_URL #{base} is neither postgres:// nor unset (SQLite)"
+      end
+    coverage = File.join(dir, "coverage")
+    coverage_rb = File.expand_path("test/test_coverage.rb", __dir__)
+    ok = ParallelRunner.run(files: TEST_FILES.to_a, libs: %w[test lib], workers: n,
+                            boot: ->(i) { "require #{coverage_rb.dump}; TestCoverage.worker(#{coverage.dump}, #{i})" },
+                            env_for: ->(i) { { "DATABASE_URL" => urls.fetch(i) } })
+    if base&.start_with?("postgres")
+      Sequel.connect(base) { |db| urls.each { |u| db.run("DROP DATABASE IF EXISTS #{URI(u).path.delete_prefix('/')}") } }
+    end
+    begin
+      # a failed suite's coverage says nothing, so it is not measured
+      TestCoverage.collate(coverage, n) if ok
+    ensure
+      FileUtils.rm_rf(dir)
+    end
+    abort "test:parallel failed" unless ok
+  end
+end

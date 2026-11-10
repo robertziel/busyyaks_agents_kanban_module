@@ -1,0 +1,36 @@
+{
+  "columns": [
+    {
+      "key": "waiting",
+      "label": "Waiting",
+      "type": "parked",
+      "hide_after_hours": 168
+    },
+    {
+      "key": "queued",
+      "label": "Queued",
+      "type": "queued",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "running",
+      "label": "Running",
+      "type": "working",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "done",
+      "label": "Done",
+      "type": "done",
+      "hide_after_hours": 24
+    }
+  ],
+  "transitions": [
+    {
+      "name": "Move",
+      "from": "*",
+      "to": "*",
+      "by": "any"
+    }
+  ]
+}

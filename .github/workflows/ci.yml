@@ -1,0 +1,43 @@
+# Public CI: the same gates the maintainer's Jenkins runs (Jenkinsfile), for everyone's pull requests — forks
+# included — and every push to main. One job: scripts/ci/test.sh all (lint · ruby-sqlite · ruby-pg · react · audit ·
+# secrets, at once), on a GitHub-hosted ubuntu-latest runner, which carries Docker; the script needs nothing else. A
+# finding in any stage fails the job; nothing here skips, retries or allows a failure.
+#
+# Trigger decision: the job runs on PUBLIC repositories only. A private copy — the maintainer's private local repo, where
+# Jenkins already gates every branch, or anyone's private fork — skips it, so it never spends Actions minutes there
+# (a skipped job is not billed). A private repository that wants it sets the repository variable CI_ON_PRIVATE=true.
+# A skipped job satisfies a required check: on a private repository, require `gates` only with CI_ON_PRIVATE set.
+#
+# Trust: the job runs the pull request's own code with the runner's Docker socket (scripts/ci/test.sh header, "Trust").
+# That is safe on GitHub's disposable VM: `pull_request` from a fork gets a read-only token and no secrets, and this
+# workflow asks for nothing more (permissions: contents read; no secrets used).
+#
+# Actions are pinned by commit SHA (a tag can be moved); the comment names the release.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # a newer push to a PR replaces its run; every push to main is checked to the end
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gates:
+    if: ${{ !github.event.repository.private || vars.CI_ON_PRIVATE == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the secrets stage scans the whole history and refuses a shallow clone
+          persist-credentials: false
+      - name: scripts/ci/test.sh all
+        run: scripts/ci/test.sh all

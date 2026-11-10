@@ -1,0 +1,22 @@
+busyyaks_agents_kanban_module
+Copyright 2026 Robert Zieliński
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes third-party material, listed below with its source, its license and where it lives in this
+repository.
+
+--------------------------------------------------------------------------------------------------------------------
+1. Cookpad Ruby style guide: RuboCop rules (copied verbatim)
+   Path:    config/rubocop/cookpad.yml
+   Source:  https://github.com/cookpad/styleguide/blob/255d797bac4930a45a9a724419ce5e2db8456572/rubocop.yml
+   License: Creative Commons Attribution 3.0 Unported (CC BY 3.0),
+            https://creativecommons.org/licenses/by/3.0/
+   Copyright (c) Cookpad Inc. Unmodified; this repository's own settings are in .rubocop.yml.
+
+Code ported from busyyaks (the board's time and avatar formatting, the Select component, the board rules and their
+tests) is the same author's work under the same license, and needs no separate notice.
+
+--------------------------------------------------------------------------------------------------------------------
+Dependencies (Ruby gems in ruby/Gemfile.lock, npm packages in react/package-lock.json) are not part of this
+repository: they are downloaded when a suite's image is built. Their licenses, and the few that are not MIT, BSD,
+Apache-2.0 or ISC, are summarised in docs/DEPENDENCY-LICENSES.md.

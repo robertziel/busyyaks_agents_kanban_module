@@ -1,0 +1,37 @@
+# agents_kanban BOARD TEMPLATE — what a fresh host seeds as its template board (BoardRepo#seed!, from the host's data
+# migration); from then on every project's board lives in the database (boards / board_columns / board_transitions),
+# instantiated from the template row for a project that has none yet, and edited by the operator in the graph editor
+# (the board's "Workflow" button). This file is read ONCE, by the migration: it is not configuration the engine loads.
+#
+# columns: in board order. key [a-z0-9_]; type = one of the column TYPES (SPEC § 2 — the type decides every rule the
+# column obeys); x / y = the node's position in the graph (omit them all and the migration lays the columns out).
+#   parked     nobody listens, nothing watched; agents may create here
+#   queued     work waiting for a session (listened; released work cards return here; a spawner type starts one session per card)
+#   working    a work column (several allowed): listened; the FIRST one is where the watchdog releases from and the idle watch looks
+#   review     a further work column — an agent's review or the system's (listened, no watchdog move; review rounds counted here)
+#   gate       waits for the operator (agents enter with kanban_handoff only; the operator's one forward exit approves;
+#              an agent leaves only along a named agent transition once approved)
+#   done       finished (finishes a parent; terminal; operator-only; agents enter from a gate only, approved)
+#   cancelled  stopped (terminal; operator-only; finishes nothing)
+# A question for the operator is a FLAG on the card (kanban_ask → needs_operator), not a column: the card keeps its
+# place; so is an external blocker (kanban_block → blocked_external).
+columns:
+  - { key: backlog,     label: Backlog,        type: parked }
+  - { key: todo,        label: To do,          type: queued }
+  - { key: doing,       label: In progress,    type: working }
+  - { key: qa,          label: QA,             type: review }
+  - { key: human_check, label: Human Check,    type: gate }
+  - { key: ready,       label: Ready to merge, type: gate }
+  - { key: merged,      label: Merged,         type: done }
+# transitions: the named edges a card may take ({name, from, to, by}; from a column key, a list of keys or "*" = any;
+# to a key or "*"; by operator | agent | any). A move with no edge for the actor is refused with the edges there are;
+# the gates (the types above) still run first. The last edge keeps this board free.
+transitions:
+  - { name: Prioritise,       from: backlog,           to: todo,        by: any }
+  - { name: Start work,       from: todo,              to: doing,       by: any }
+  - { name: Send for QA,      from: doing,             to: qa,          by: any }
+  - { name: Hand over,        from: [doing, qa],       to: human_check, by: agent }
+  - { name: Fixes needed,     from: [qa, human_check], to: doing,       by: any }
+  - { name: Approve,          from: human_check,       to: ready,       by: operator }
+  - { name: Merge,            from: ready,             to: merged,      by: any }
+  - { name: Move,             from: "*",               to: "*",         by: any }

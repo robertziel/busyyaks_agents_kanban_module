@@ -1,0 +1,4 @@
+# ShellCheck: every check on, nothing disabled. These two only tell it where sourced files are:
+# follow them (external-sources = -x) and resolve a `# shellcheck source=` path from the script's own directory.
+external-sources=true
+source-path=SCRIPTDIR

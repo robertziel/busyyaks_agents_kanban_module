@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Prints the agents-kanban-lint image tag, building it first when it is missing (shared by scripts/lint/rubocop and CI's
+# audit stage). The tag is the hash
+# of ruby/Gemfile + ruby/Gemfile.lock + scripts/lint/Dockerfile and the image is built from those three files alone, so
+# the RuboCop / bundler-audit that runs is the one ruby/Gemfile.lock pins.
+set -euo pipefail
+
+cd "$(dirname "$0")/../.."
+TAG="agents-kanban-lint:$(cat ruby/Gemfile ruby/Gemfile.lock scripts/lint/Dockerfile | sha256sum | cut -c1-12)"
+
+if ! docker image inspect "$TAG" >/dev/null 2>&1; then
+  echo "lint: building $TAG (ruby/Gemfile.lock changed or first run)" >&2
+  tar -c -C ruby Gemfile Gemfile.lock -C ../scripts/lint Dockerfile | docker build -q -t "$TAG" - >&2
+fi
+echo "$TAG"

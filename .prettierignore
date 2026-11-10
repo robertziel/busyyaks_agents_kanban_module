@@ -1,0 +1,4 @@
+# Prettier formats every TS/TSX/JS/CSS/JSON file of ours (`npm run format:check` in react/, CI
+# react stage, overcommit Prettier hook). Ignored: only what is not ours to format.
+# npm writes the lockfile itself
+package-lock.json

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Prettier --check on the staged TS/TSX/JS/CSS/JSON files (an overcommit ad hoc hook, .overcommit.yml).
+# Runs at the root of the staged snapshot, so the root's .prettierrc.json, .prettierignore and .editorconfig apply as in
+# CI (`npm run format:check` in react/, test.sh react). node_modules = /deps/node_modules (the image's npm ci of
+# react/package-lock.json, which pins prettier).
+set -euo pipefail
+
+cd /deps/snap
+files=()
+while IFS= read -r -d '' f; do files+=("$f"); done \
+  < <(git diff --cached --name-only --diff-filter=ACMR -z -- '*.ts' '*.tsx' '*.js' '*.css' '*.json')
+[ ${#files[@]} -gt 0 ] || exit 0
+# a staged file .prettierignore lists (the lockfile) is skipped, as CI skips it
+exec /deps/node_modules/.bin/prettier --check "${files[@]}"

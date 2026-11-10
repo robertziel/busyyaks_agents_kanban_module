@@ -1,0 +1,325 @@
+/* agents_kanban — the generic primitives the board's components use, under the same class names busyyaks's app.css
+   defines them (.btn .tag .flash .muted .mono .linklike .avatar .spacer .sel-btn .menu .md .state .copychip .termlink).
+   A host that already has these (busyyaks) does NOT load this file; a host that has none (a Rails + Postgres host app)
+   loads it after kanban.css. Everything is scoped under .ak-root and drawn from the --ak-* tokens. */
+
+.ak-root *,
+.ak-root *::before,
+.ak-root *::after {
+  box-sizing: border-box;
+}
+.ak-root {
+  font-size: 14px;
+  line-height: 1.45;
+}
+.ak-root a {
+  color: var(--ak-accent);
+  text-decoration: none;
+}
+.ak-root a:hover {
+  text-decoration: underline;
+}
+.ak-root .muted {
+  color: var(--ak-ink-faint);
+}
+.ak-root .mono {
+  font-family: var(--ak-mono);
+}
+.ak-root .err {
+  color: var(--ak-bad);
+}
+.ak-root .spacer {
+  flex: 1;
+}
+.ak-root h2,
+.ak-root h3,
+.ak-root h4 {
+  color: var(--ak-ink);
+  font-weight: 600;
+}
+.ak-root h2 {
+  font-size: 16px;
+  margin: 12px 0 8px;
+}
+
+.ak-root .btn {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ak-ink);
+  background: var(--ak-mat-fill-2);
+  border: 0;
+  border-radius: var(--ak-radius-pill);
+  padding: 0.4rem 0.85rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: inset 0 0 0 0.5px var(--ak-line-strong);
+}
+.ak-root .btn:hover:not(:disabled) {
+  background: var(--ak-mat-fill);
+}
+.ak-root .btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.ak-root .btn.small {
+  font-size: 12px;
+  padding: 0.25rem 0.6rem;
+}
+.ak-root .btn.primary {
+  background: var(--ak-accent);
+  color: #fff;
+  box-shadow: none;
+}
+.ak-root .btn.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: var(--ak-accent);
+}
+.ak-root .linklike {
+  all: unset;
+  cursor: pointer;
+  color: var(--ak-accent);
+  font-weight: 500;
+  font-size: inherit;
+}
+.ak-root .linklike:hover {
+  text-decoration: underline;
+}
+.ak-root .tag {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 0.05rem 0.5rem;
+  border-radius: var(--ak-radius-chip);
+  background: var(--ak-mat-fill-2);
+  color: var(--ak-ink-dim);
+}
+
+.ak-root .flash {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--ak-radius-band);
+  font-size: 13px;
+  margin: 6px 0;
+  background: var(--ak-mat-fill-2);
+}
+.ak-root .flash.bad {
+  background: rgba(var(--ak-bad-rgb), 0.1);
+  color: var(--ak-bad);
+}
+.ak-root .flash.ok {
+  background: rgba(var(--ak-ok-rgb), 0.1);
+  color: var(--ak-ok);
+}
+.ak-root .flash .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.ak-root .state {
+  color: var(--ak-ink-faint);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ak-root .state .spin {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--ak-line-strong);
+  border-top-color: var(--ak-accent);
+  border-radius: 50%;
+  animation: ak-spin 0.9s linear infinite;
+}
+@keyframes ak-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ak-root .avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: hsl(var(--h, 200) 55% 48%);
+  flex: none;
+}
+
+/* the custom select (Select.tsx): trigger + listbox portalled to <body> (it carries .ak-root itself) */
+.ak-root .sel-btn {
+  font: inherit;
+  font-size: 13px;
+  color: var(--ak-ink);
+  background: var(--ak-mat-fill-2);
+  border: 0;
+  border-radius: var(--ak-radius-pill);
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: inset 0 0 0 0.5px var(--ak-line-strong);
+}
+.ak-root .sel-btn .chev::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+}
+.ak-root.menu {
+  position: absolute;
+  z-index: 50;
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  background: var(--ak-panel);
+  border-radius: var(--ak-radius-band);
+  box-shadow:
+    var(--ak-menu-shadow),
+    0 0 0 0.5px var(--ak-line-strong);
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.ak-root.menu .item {
+  padding: 0.35rem 0.7rem;
+  border-radius: var(--ak-radius-ctl-sm);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ak-root.menu .item.active,
+.ak-root.menu .item:hover {
+  background: var(--ak-mat-fill);
+}
+.ak-root.menu .item[aria-selected="true"] {
+  font-weight: 600;
+}
+
+/* server-rendered markdown */
+.ak-root .md {
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+.ak-root .md p {
+  margin: 0 0 0.6em;
+}
+.ak-root .md pre {
+  background: var(--ak-panel-2);
+  padding: 8px 10px;
+  border-radius: var(--ak-radius-ctl-sm);
+  overflow-x: auto;
+  font-size: 12.5px;
+}
+.ak-root .md code {
+  font-family: var(--ak-mono);
+  font-size: 12.5px;
+  background: var(--ak-mat-fill-2);
+  padding: 0 0.3em;
+  border-radius: 4px;
+}
+.ak-root .md pre code {
+  background: none;
+  padding: 0;
+}
+.ak-root .md table {
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.ak-root .md th,
+.ak-root .md td {
+  padding: 3px 8px;
+  border-bottom: 0.5px solid var(--ak-line);
+  text-align: left;
+}
+.ak-root .md table.md-dense {
+  font-size: 11.5px;
+}
+.ak-root .md table.md-denser {
+  font-size: 10.5px;
+}
+.ak-root .md ul,
+.ak-root .md ol {
+  padding-left: 1.3em;
+  margin: 0 0 0.6em;
+}
+.ak-root .md blockquote {
+  margin: 0 0 0.6em;
+  padding-left: 10px;
+  border-left: 3px solid var(--ak-line-strong);
+  color: var(--ak-ink-dim);
+}
+.ak-root .gh-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 0.35rem;
+  border-radius: var(--ak-radius-chip);
+  background: var(--ak-mat-fill-2);
+  color: var(--ak-ink);
+  font-size: 12px;
+  text-decoration: none;
+}
+.ak-root .gh-ref svg {
+  width: 12px;
+  height: 12px;
+}
+.ak-root .gh-ref code {
+  background: none;
+  padding: 0;
+}
+.ak-root .copychip {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.ak-root .copystate {
+  font-size: 10.5px;
+  color: var(--ak-ok);
+}
+.ak-root .termlink {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ak-accent);
+  padding: 0 0.4rem;
+  border-radius: var(--ak-radius-chip);
+  background: rgba(var(--ak-accent-rgb), 0.1);
+}
+.ak-root .ag-err {
+  color: var(--ak-bad);
+  font-size: 12px;
+}
+.ak-root .scroll {
+  overflow-x: auto;
+}
+.ak-root table.data {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+.ak-root table.data th,
+.ak-root table.data td {
+  padding: 5px 8px;
+  border-bottom: 0.5px solid var(--ak-row-rule);
+  text-align: left;
+}
+.ak-root table.data th.n,
+.ak-root table.data td.n {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

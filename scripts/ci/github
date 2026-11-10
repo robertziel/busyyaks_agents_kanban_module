@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# The Jenkinsfile's two GitHub calls, with the token (GH_TOKEN, credential github-pat) never on a command line.
+#
+#   scripts/ci/github default-branch           GH_REPO → prints the repo's default branch (GET /repos/:repo)
+#   scripts/ci/github status <state> <text>    GH_REPO GIT_SHA BUILD_URL → commit status, context jenkins/ci
+#                                              (POST /repos/:repo/statuses/:sha; state pending|success|failure|error)
+#
+# Every failure exits non-zero with the reason and what to check; GitHub's JSON is read with a JSON parser (perl
+# JSON::PP, core perl), never with sed. Nothing it prints holds the token.
+set -euo pipefail
+
+# shellcheck source=lib/github-api.sh
+. "${BASH_SOURCE[0]%/*}/lib/github-api.sh"
+
+die() { echo "github: $*" >&2; exit 1; }
+need() { local v; for v in "$@"; do [ -n "${!v:-}" ] || die "$v is not set"; done; }
+# GitHub's JSON is read and written by perl JSON::PP: without it, say so (not a misleading "no default_branch")
+need_json() { perl -MJSON::PP -e1 2>/dev/null || die "perl with JSON::PP is needed to read and write GitHub's JSON — install perl on the agent"; }
+
+# GitHub's "message" from an error body (empty when there is none), so a refusal says why
+gh_message() {
+  perl -MJSON::PP -e 'local $/; my $j = eval { decode_json(<STDIN>) };
+    print substr($j->{message}, 0, 200) if ref $j eq "HASH" && defined $j->{message} && !ref $j->{message}' < "$1"
+}
+
+default_branch() {
+  need GH_REPO
+  need_json
+  gh_token_ok GH_TOKEN "check credential github-pat" || exit 1
+  local code branch
+  resp=$(mktemp); trap 'rm -f "$resp"' EXIT   # global: the EXIT trap reads it
+  code=$(gh_curl GH_TOKEN -sSL -o "$resp" -w '%{http_code}' "https://api.github.com/repos/$GH_REPO") ||
+    die "cannot reach GitHub to read $GH_REPO — check the network"
+  [ "$code" = 200 ] ||
+    die "GitHub answered HTTP $code reading $GH_REPO ($(gh_message "$resp")) — check credential github-pat"
+  branch=$(perl -MJSON::PP -e 'local $/; my $j = eval { decode_json(<STDIN>) } or exit 3;
+    exit 4 unless ref $j eq "HASH" && defined $j->{default_branch} && !ref $j->{default_branch};
+    print $j->{default_branch}' < "$resp") || die "GitHub's answer for $GH_REPO holds no default_branch"
+  [ -n "$branch" ] || die "GitHub's answer for $GH_REPO holds an empty default_branch"
+  printf '%s\n' "$branch"
+}
+
+status() {
+  local state=$1 text=$2 code payload
+  case "$state" in pending | success | failure | error) ;; *) die "status: '$state' is not a GitHub status state" ;; esac
+  need GH_REPO GIT_SHA BUILD_URL
+  need_json
+  gh_token_ok GH_TOKEN "check credential github-pat" || exit 1
+  # GitHub caps the description at 140 characters: decoded first, so the cut never splits a UTF-8 character
+  payload=$(STATE=$state TEXT=$text perl -MJSON::PP -MEncode=decode -e 'my %e = map { $_ => decode("UTF-8", $ENV{$_}) }
+    qw(STATE TEXT BUILD_URL); print JSON::PP->new->utf8->canonical->encode({state => $e{STATE},
+    target_url => $e{BUILD_URL}, description => substr($e{TEXT}, 0, 140), context => "jenkins/ci"})')
+  resp=$(mktemp); trap 'rm -f "$resp"' EXIT   # global: the EXIT trap reads it
+  code=$(printf '%s' "$payload" | gh_curl GH_TOKEN -sS -o "$resp" -w '%{http_code}' -X POST --data-binary @- \
+    "https://api.github.com/repos/$GH_REPO/statuses/$GIT_SHA") ||
+    die "cannot reach GitHub to post status $state for $GH_REPO@$GIT_SHA — check the network"
+  [ "$code" = 201 ] ||
+    die "GitHub refused status $state for $GH_REPO@$GIT_SHA (HTTP $code: $(gh_message "$resp")) — check credential github-pat"
+  echo "github: status $state posted for ${GIT_SHA:0:8}"
+}
+
+case "${1:-}" in
+  default-branch) [ "$#" -eq 1 ] || die "usage: $0 default-branch"; default_branch ;;
+  status) [ "$#" -eq 3 ] || die "usage: $0 status <state> <description>"; status "$2" "$3" ;;
+  *) echo "usage: $0 default-branch | status <state> <description>" >&2; exit 2 ;;
+esac

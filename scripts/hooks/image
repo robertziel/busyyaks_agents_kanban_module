@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Prints the agents-kanban-hooks image tag, building it first when it is missing. The tag is the hash of every
+# file the image is built from (the list below = the Dockerfile's COPY sources), so the hook always runs the
+# RuboCop / ESLint / overcommit / gitleaks / ShellCheck the lockfiles and the Dockerfile pin and the wrapper scripts as committed.
+set -euo pipefail
+
+cd "$(dirname "$0")/../.."
+inputs=(ruby/Gemfile ruby/Gemfile.lock react/package.json react/package-lock.json
+        scripts/hooks/Dockerfile scripts/hooks/entry scripts/hooks/overcommit.rb scripts/hooks/eslint scripts/hooks/gitleaks
+        scripts/hooks/prettier scripts/hooks/shellcheck scripts/lint/shell-files)
+TAG="agents-kanban-hooks:$(cat "${inputs[@]}" | sha256sum | cut -c1-12)"
+
+if ! docker image inspect "$TAG" >/dev/null 2>&1; then
+  echo "hooks: building $TAG (an input changed or first run)" >&2
+  tar -c "${inputs[@]}" | docker build -q -t "$TAG" -f scripts/hooks/Dockerfile - >&2
+fi
+echo "$TAG"

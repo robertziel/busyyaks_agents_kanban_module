@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# README badges from a green CI run: shields.io endpoint JSON (https://shields.io/badges/endpoint-badge) kept in a
+# public gist, read by the README through https://img.shields.io/endpoint?url=<the gist's raw file URL>.
+#
+#   scripts/ci/badges render <dir> <log>...      read the CI logs, write <dir>/coverage.json · branches.json · tests.json
+#   scripts/ci/badges publish <gist-id> <dir>    PATCH those three files into the gist (a token that may write gists in
+#                                                GIST_TOKEN — never on a command line), then read the gist back and compare
+#
+# Read from the logs; each must be there, or nothing is written and the script fails:
+#   coverage: line X % (…) · branch Y % (…)    SimpleCov's summary. More than one (the same suite run on more than one
+#                                               database) → the lowest line and the lowest branch figure
+#   TOTAL N runs, …, F failures, E errors, S skips   rake test:parallel. More than one → all must say the same N
+#   Tests  M passed (M)                         vitest, exactly one
+# coverage = line %, branches = branch %, tests = (N - S) + M passed. Only a green run is published (the Jenkinsfile
+# calls this after the gates pass, on the default branch only), so a badge always shows the last green default build.
+set -euo pipefail
+
+# shellcheck source=lib/github-api.sh
+. "${BASH_SOURCE[0]%/*}/lib/github-api.sh"
+
+die() { echo "badges: $*" >&2; exit 1; }
+
+# 95 and up brightgreen · 90 green · 80 yellowgreen · 70 yellow · 60 orange · below red
+color() {
+  awk -v p="$1" 'BEGIN {
+    if (p >= 95) c = "brightgreen"; else if (p >= 90) c = "green"; else if (p >= 80) c = "yellowgreen";
+    else if (p >= 70) c = "yellow"; else if (p >= 60) c = "orange"; else c = "red"; print c }'
+}
+
+badge() { printf '{"schemaVersion":1,"label":"%s","message":"%s","color":"%s"}\n' "$1" "$2" "$3"; }
+
+render() {
+  local dir=$1; shift
+  [ "$#" -gt 0 ] || die "render: no log given"
+  local log text line branch totals runs fails errors skips vitest total m
+  for log in "$@"; do [ -r "$log" ] || die "render: cannot read $log"; done
+  # the logs without colour codes and Jenkins' timestamp prefixes
+  text=$(sed -E 's/\x1b\[[0-9;]*m//g; s/^\[[0-9TZ:.-]+\] //' "$@")
+
+  m=$(grep -oE 'coverage: line [0-9]+(\.[0-9]+)? % \([0-9]+ / [0-9]+\) · branch [0-9]+(\.[0-9]+)? %' <<<"$text" || true)
+  [ -n "$m" ] || die "render: no 'coverage: line … · branch …' line in $*"
+  line=$(sed -E 's/^coverage: line ([0-9.]+) %.*/\1/' <<<"$m" | sort -g | head -1)
+  branch=$(sed -E 's/.* branch ([0-9.]+) %$/\1/' <<<"$m" | sort -g | head -1)
+
+  totals=$(grep -oE 'TOTAL [0-9]+ runs, [0-9]+ assertions, [0-9]+ failures, [0-9]+ errors, [0-9]+ skips' <<<"$text" |
+    sed -E 's/TOTAL ([0-9]+) runs, [0-9]+ assertions, ([0-9]+) failures, ([0-9]+) errors, ([0-9]+) skips/\1 \2 \3 \4/' || true)
+  [ -n "$totals" ] || die "render: no 'TOTAL N runs, …' line in $*"
+  # the same suite on more than one database: the run count must agree; skips may differ (a database-specific test)
+  runs=$(cut -d' ' -f1 <<<"$totals" | sort -u)
+  [ "$(wc -l <<<"$runs")" -eq 1 ] || die "render: the Ruby suite's run counts disagree: $(paste -sd ' ' <<<"$runs")"
+  fails=$(awk '{ s += $2 } END { print s }' <<<"$totals")
+  errors=$(awk '{ s += $3 } END { print s }' <<<"$totals")
+  if [ "$fails" -ne 0 ] || [ "$errors" -ne 0 ]; then
+    die "render: the Ruby suite failed ($fails failures, $errors errors) — nothing to publish"
+  fi
+  skips=$(cut -d' ' -f4 <<<"$totals" | sort -n | tail -1)   # the most skipped run: the fewest passed
+
+  m=$(grep -E '^[[:space:]]*Tests[[:space:]]+[0-9]+ passed \([0-9]+\)[[:space:]]*$' <<<"$text" || true)
+  [ -n "$m" ] || die "render: no vitest 'Tests  M passed (M)' line in $* (a failed or skipped test reads differently)"
+  [ "$(wc -l <<<"$m")" -eq 1 ] || die "render: more than one vitest 'Tests' line in $*"
+  read -r vitest total < <(sed -E 's/^[[:space:]]*Tests[[:space:]]+([0-9]+) passed \(([0-9]+)\).*/\1 \2/' <<<"$m")
+  [ "$vitest" -eq "$total" ] || die "render: vitest passed $vitest of $total"
+
+  mkdir -p "$dir"
+  badge coverage "$line%" "$(color "$line")" > "$dir/coverage.json"
+  badge branches "$branch%" "$(color "$branch")" > "$dir/branches.json"
+  badge tests "$((runs - skips + vitest)) passed" brightgreen > "$dir/tests.json"
+  echo "badges: coverage $line % · branches $branch % · tests $((runs - skips)) ruby + $vitest vitest = $((runs - skips + vitest)) passed"
+}
+
+# One file's content as a JSON string: backslash and quote escaped, newlines dropped (the badge JSON is one line).
+json_string() { printf '"%s"' "$(tr -d '\n' < "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
+
+publish() {
+  local gist=$1 dir=$2 f body code
+  [[ "$gist" =~ ^[0-9a-f]{20,40}$ ]] || die "publish: '$gist' is not a gist id"
+  gh_token_ok GIST_TOKEN "a token that may write gists is needed (credential badge-gist-token)" || exit 1
+  body='{"files":{'
+  for f in coverage branches tests; do
+    [ -r "$dir/$f.json" ] || die "publish: $dir/$f.json missing — run render first"
+    body+="\"$f.json\":{\"content\":$(json_string "$dir/$f.json")},"
+  done
+  body="${body%,}}}"
+  resp=$(mktemp)   # global: the EXIT trap reads it
+  trap 'rm -f "$resp"' EXIT
+  # gh_curl: the token reaches curl through a pipe, never its command line (lib/github-api.sh)
+  code=$(printf '%s' "$body" | gh_curl GIST_TOKEN -sS -o "$resp" -w '%{http_code}' -X PATCH --data-binary @- \
+    "https://api.github.com/gists/$gist") || code=000
+  [ "$code" = 200 ] || die "publish: GitHub answered HTTP $code for gist $gist: $(head -c 300 "$resp")"
+  for f in coverage branches tests; do
+    grep -qF "$(json_string "$dir/$f.json")" "$resp" || die "publish: gist $gist does not hold the new $f.json after the PATCH"
+  done
+  echo "badges: gist $gist updated (coverage.json · branches.json · tests.json)"
+}
+
+case "${1:-}" in
+  render) [ "$#" -ge 3 ] || die "usage: $0 render <dir> <log>..."; shift; render "$@" ;;
+  publish) [ "$#" -eq 3 ] || die "usage: $0 publish <gist-id> <dir>"; publish "$2" "$3" ;;
+  *) echo "usage: $0 render <dir> <log>... | publish <gist-id> <dir>" >&2; exit 2 ;;
+esac

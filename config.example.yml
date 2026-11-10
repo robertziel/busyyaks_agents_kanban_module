@@ -1,0 +1,180 @@
+# agents_kanban HOST config — the settings of one deployment, EVERY key required (idle_watch / handoff / owner_sessions
+# may be null); unknown keys are refused at load, with this file's path in the message. A host loads it with
+#   AgentsKanban::HostConfig.load("config/kanban.yml")      (YAML or JSON, by extension)
+# and the same object reaches the browser inside the board JSON (`config`).
+#
+# NOT here: the boards. A project's columns (with their TYPES, order and graph positions) and its workflow (the named
+# transitions) live in the DATABASE (SPEC § 2: Board, BoardRepo), instantiated from the template row for a project
+# that has none yet and edited by the operator in the graph editor. board.example.yml is the template a fresh host
+# seeds in its data migration. fixtures/boards/ holds sample host configs + boards: a coding board (coding.json +
+# coding.board.json) and a content pipeline (content.json + content.board.json).
+#
+# Where the engine reads each key: SPEC.md § 2.
+
+
+priorities: [high, medium, low]
+# label / cover colours; the React board maps each to a --ak-lc-<name> token. gray (= no colour) is required.
+label_colors: [green, yellow, orange, red, purple, blue, teal, pink, gray]
+# who signs the engine's own activity entries ("session dialog", "watchdog", "ping") and prefixes its pings: "[<system_author>] …"
+system_author: kanban
+# the host's route that serves attachment bytes: "<prefix>/<id>" (a picture, inline) and "<prefix>/<id>/download"
+attachment_url_prefix: /api/attachments
+# the commands that START an agent session. `command` = a program, or a bash function of the host's profile run
+# through `bash -ic` when via_shell. No --remote-control (Launch appends `--remote-control <session>` LAST — the one
+# effective name, Claude Code takes a repeated option's last value, measured on 2.1.317) and no --model (the agent
+# type's `model` does) in args. WHAT is typed after the start and which model runs belong to the agent type below.
+# This example runs plain `claude` in Claude Code's default permission mode: every tool call the agent's settings
+# do not allow stops on a permission prompt, which the board turns into a question for the operator
+# (session_dialogs). Add more launchers as you need them, e.g.:
+#   - a shell function of your profile (say one that points Claude Code at another model gateway):
+#       - { key: gateway, label: gateway, command: my_claude_function, args: [], via_shell: true }
+#   - Claude Code without permission prompts. Only on a machine and repos you trust the agent with completely: it
+#     then runs every command and edit with no question asked (Claude Code's bypassPermissions mode):
+#       - { key: unattended, label: unattended, command: claude, args: ["--permission-mode", "bypassPermissions"], via_shell: false }
+launchers:
+  - { key: claude, label: claude, command: claude, args: [], via_shell: false }
+# AGENT TYPES — what a session launched for a board IS. The library ships none; a launch (the UI's button, the API's
+# POST launch {type, launcher}, an agent's kanban_register) names one. Per type:
+#   launchers        the launcher keys it may run (the UI's pill menu). A start the engine performs and that names
+#                    none (a spawn with no session to follow, POST launch without `launcher`) runs spawn_launcher, or
+#                    the type's ONLY launcher — several and no spawn_launcher → refused with the keys. kanban_register
+#                    (a session started by hand) names its launcher, or the type has only one — never spawn_launcher
+#   spawn_launcher   (optional) the launcher an engine start that names none runs; must be one of `launchers`
+#   model            appended as `--model <value>`; null = whatever the launcher starts (Claude Code's own choice); or
+#                    a map launcher key → value naming every launcher of the type (e.g. {claude: <model id>,
+#                    gateway: null}: a gateway launcher picks its own model, and a --model would override it — Claude
+#                    Code takes the LAST --model)
+#   prompt           typed into the session after the start; null = nothing typed (a plain session). Placeholders:
+#                    {slug} {dir} {session} {agent} {type} {cards} — {cards} = the cards the session adopted ("#3, #7"
+#                    or "none"); the host renders {dir}; an unknown placeholder fails the load. Name no column of your
+#                    board here: a board's columns and transitions are the operator's (the graph editor) — an agent
+#                    reads a card's transitions with kanban_card
+#   agent_name       the kanban author name the session acts as; must contain {session} ({slug} {type} allowed too).
+#   session_name     the tmux session a launch of this type gets: must contain {slug} ({type} allowed; "/" → "_"); the host
+#                    only adds "_N" when taken. Say what the session IS: a lead = "{slug}_teamlead".
+#                    Tools resolve this name back to the session: a card created with it as author is owned by the
+#                    session with no claim step
+#   takes            the column TYPES (parked, queued, working, review, gate, done, cancelled) whose
+#                    OWNERLESS cards the session adopts (owner + assignee, by rule) the moment it is registered — on
+#                    every board, its columns of those types; a lead takes the project's orphaned work after a reboot
+#                    or a watchdog release; a reviewer or a plain session takes nothing ([])
+#   spawns_for       (optional) column TYPES whose ownerless cards each get ONE NEW session of this type (Api#spawn_pass);
+#                    one spawner type per column type
+#   launcher_follows (optional) another agent type: while a session of it RUNS for the board, a session of this type
+#                    (launched or spawned) runs ITS launcher — a lead started on `gateway` → its sub teams and
+#                    workers run `gateway`; another launcher asked for is refused (422), never swapped. No such
+#                    session running → this type's own launchers. Must list every launcher of the followed type; one level
+#   max              sessions of this type at once over every project (null = only the global cap)
+#   max_per_project  sessions of this type at once for ONE project (null = no limit): 1 = never two leads on a board
+agent_types:
+  - key: lead
+    label: Launch
+    launchers: [claude]
+    model: null
+    prompt: |
+      Lead session for {slug} ({dir}). Your tmux session is {session}; on the board you are {agent} ({type}).
+      Your session is registered and owns these cards: {cards}. Owning is not starting: do no work on them until a ping or the operator asks.
+      Every card you create is owned by your session (author {agent}).
+      Whenever you need the operator's answer about a card: kanban_ask on that card, then end your turn — never only in this chat.
+      Never poll the board (no sleep / re-read loops): pings arrive in this session. Reply with one line: the cards you own.
+    agent_name: "claude-{session}"
+    session_name: "{slug}_teamlead"
+    takes: [working, review, gate]
+    max: null
+    max_per_project: 1
+  - key: team
+    label: Sub team
+    launchers: [claude]
+    model: null
+    launcher_follows: lead
+    prompt: |
+      Sub team for {slug} ({dir}), session {session}, board name {agent}. Review this repo read-only with parallel subagents and record the result as a note. Do not modify, commit or push anything unless asked in this session. Need the operator's answer about a card: kanban_ask on it, then end your turn.
+    agent_name: "team-{session}"
+    session_name: "{slug}_team"
+    takes: []
+    max: 2
+    max_per_project: null
+  - key: plain
+    label: Plain
+    launchers: [claude]
+    model: null
+    prompt: null
+    agent_name: "claude-{session}"
+    session_name: "{slug}"
+    takes: []
+    max: null
+    max_per_project: null
+# how many registered agent sessions may run at once on the host — every type and every project together. A launch
+# (or kanban_register) beyond it is refused with who runs; never queued, never exceeded. Running = registered, not
+# ended, in the host's live session list (or registered within the watchdog grace — starting).
+concurrency:
+  max_sessions: 0   # 0 = no cap; N = at most N sessions at once
+# the tmux sessions a card of THIS board may be owned by (the owner picker lists only these; set_owner / kanban_claim
+# refuse any other by name — a session of another project's host must never receive this board's pings), as
+# glob patterns, e.g. a lead and its workers ["shop", "shop-worker-*"]. null = the host's own rule (e.g. the sessions
+# its agent-session collector files under the card's project).
+owner_sessions: null
+# the engine's tables: "" = unprefixed names (cards, card_activity, …); "kanban_" namespaces them
+table_prefix: ""
+# CSS variables for the React board (root class .ak-root): the host's palette on the library's tokens; {} = the
+# library's own light/dark defaults. A value is a CSS value of letters, digits, spaces and # % . , ( ) / + * _ - " ' with quotes in pairs, parentheses balanced and no /* (refused at load: a host writes
+# the theme into a <style> rule). Keys = the tokens kanban.css declares on .ak-root (react
+# src/lib/theme.ts AK_TOKENS, which a Select menu copies from its trigger):
+# --ak-ink --ak-ink-dim --ak-ink-faint --ak-panel --ak-panel-2 --ak-mat-fill --ak-mat-fill-2 --ak-mat-card --ak-mat-blur
+# --ak-surface-3 --ak-line --ak-line-strong --ak-row-rule --ak-track --ak-accent --ak-accent-rgb --ak-ok --ak-ok-rgb
+# --ak-warn --ak-warn-rgb --ak-bad --ak-bad-rgb --ak-done --ak-vivid-{green,yellow,orange,red,purple,blue,teal,pink}
+# --ak-radius-{card,band,ctl,ctl-sm,chip,pill} --ak-shadow-card --ak-shadow-thumb --ak-menu-shadow --ak-mono --ak-sans
+# --ak-board-height (the board's FIXED height, e.g. 1000px; unset = the window below the board's top, ≥ 420px —
+# the lists scroll inside it either way, the board never grows with its cards)
+theme: {}
+# CI idle watch — null = off. Else the watch pass asks the host's `ci:` port (Notifier) about each card in every board's
+# WORKING column:
+#   ci_ping_after_minutes (N)     its PR's checks all finished (success or failure) and the owner did nothing (no card
+#                                 activity but the engine's own) for N minutes → the owner session is pinged ONCE per CI completion
+#   ci_comment_after_minutes (M)  M minutes after that ping, still nothing → ONE card comment by system_author for the operator
+#   owner_idle_hours (X)          the owner session is alive but the card has had no activity and the branch no commit for X hours
+#                                 → ONE comment per idle stretch
+# No defaults in code: a missing or non-integer value fails the load; a Notifier given this config without the `ci:` port fails to build.
+idle_watch: { ci_ping_after_minutes: 10, ci_comment_after_minutes: 20, owner_idle_hours: 4 }
+# the handoff gate's requirements on a board with a GATE column (kanban_handoff: how to check it + PR / CI URLs when
+# required, screenshots attached first when ui_change and ui_change_needs_screenshots). null = this host has no handoff
+# gate — a board with a gate column is then refused when read.
+handoff: { requires_pr_url: true, requires_ci_url: true, qa_min_chars: 20, ui_change_needs_screenshots: true }
+# the approval gate (every approval step: the operator's Approve button, or a drag along the step). null = no gate.
+#   requires_green_ci  true = refused unless the host's ci: port (Store.new ci:) answers approval_checks(card, step) with
+#                      state "success"; no PR, checks pending / failed / not read yet, or the port unreachable → refused,
+#                      with the PR and its state. A Store built from this config without that port fails to build.
+#                      The same question is asked ahead (answer discarded) at each handoff into an approval gate and on
+#                      every notifier watch pass for each card waiting there, so an asynchronous host keeps it fresh.
+#                      A handoff INTO such a gate is refused the same way until that step's checks are read and green.
+#                      A card in such a gate counts as waiting for the operator only while its Approve would pass now
+#                      (green, at the head the handoff saw); otherwise it is "waiting for CI" (gate_hold) and not counted.
+approval: { requires_green_ci: true }
+# parent dependencies: true = ENFORCED on every board (a child cannot enter a queued / working / review column nor be
+# claimed while a parent is unfinished — not in the done column; a finished parent promotes its parked children to the
+# queued column); false = parents are recorded and shown only.
+dependencies: false
+# session dialogs (an owner session stopped on a permission prompt / AskUserQuestion → a question in the ask column):
+#   settle_seconds   the dialog must stay on the session's screen this long (seen by two notifier reads at least this
+#                    far apart) before it is asked — a prompt the agent's own tooling clears in seconds never reaches
+#                    the operator; 0 = asked on the first read
+#   context_minutes  the question quotes the owner's latest comment on the card from this window ("why"), or says the
+#                    agent gave no reason
+session_dialogs: { settle_seconds: 30, context_minutes: 10 }
+
+# the cross-cutting card FLAGS (needs_operator: kanban_ask or a dialog on the owner's screen; blocked_external:
+# kanban_block with a reason + URL): a flagged card keeps its column, refuses agent moves and counts as waiting for
+# you; after reminder_hours it gets ONE reminder comment by system_author (the notifier's watch pass).
+flags: { reminder_hours: 24 }
+
+# the agent review loop on the review columns named in `columns` (keys, on every board that has them; other review
+# columns, e.g. a coding board's QA, have no limit): max_rounds = how often a card may enter one loop column from a
+# work column or a gate before the loop must end at a gate (an agent's further loop move is refused with the gate to
+# hand the card to); a handoff out of a loop column at the limit gives review_summary (the reviewer's SUMMARY counts)
+# and, when needs_human + open > 0, carries unresolved_label (created on the board, colour unresolved_color, when
+# missing). The operator's move from a gate back into the loop's work column (Changes
+# requested) allows exactly one more round, then the card goes back to that gate (no label). The "0 open threads"
+# exit is the agents' rule (their prompts): the engine counts rounds and takes the reviewer's count; it reads no thread.
+# null = no round limit, no label.
+review_loop: { max_rounds: 3, unresolved_label: unresolved, unresolved_color: red,
+               columns: [local_agent_review, public_agent_review] }

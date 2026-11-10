@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Inside agents-kanban-hooks (started by scripts/hooks/run): the staged tree → /deps/snap, then overcommit there.
+set -euo pipefail
+
+cp /deps/index.in "$GIT_INDEX_FILE"   # a copy: git refreshes stat data in it, the real index is never written
+git checkout-index --all --force --prefix=/deps/snap/
+cd /deps/snap
+
+case "${1:-}" in
+  pre-commit) exec bundle exec ruby /hooks/overcommit.rb pre-commit ;;
+  sign) bundle exec overcommit --sign && exec bundle exec overcommit --sign pre-commit ;;
+  *) echo "hooks: unknown hook '${1:-}' (pre-commit|sign)" >&2; exit 2 ;;
+esac

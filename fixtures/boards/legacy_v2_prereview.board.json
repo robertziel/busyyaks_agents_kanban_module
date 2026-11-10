@@ -1,0 +1,174 @@
+{
+  "columns": [
+    {
+      "key": "backlog",
+      "label": "Backlog",
+      "type": "parked",
+      "hide_after_hours": 168
+    },
+    {
+      "key": "todo",
+      "label": "To do",
+      "type": "queued",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "human_input",
+      "label": "Human input",
+      "type": "working",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "doing",
+      "label": "In progress",
+      "type": "working",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "pre_review",
+      "label": "Pre-review PR (mirror)",
+      "type": "review",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "human_check",
+      "label": "Review PR (mirror)",
+      "type": "gate",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "approved_mirror",
+      "label": "PR approved (mirror)",
+      "type": "review",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "local_merged",
+      "label": "Merged (mirror)",
+      "type": "review",
+      "hide_after_hours": 168
+    },
+    {
+      "key": "deployed",
+      "label": "Deployed locally",
+      "type": "parked",
+      "hide_after_hours": 168
+    },
+    {
+      "key": "make_public",
+      "label": "Create PR (public)",
+      "type": "review",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "public_review",
+      "label": "PR review (public)",
+      "type": "review",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "ready",
+      "label": "Allow merge (public)",
+      "type": "gate",
+      "hide_after_hours": 72
+    },
+    {
+      "key": "merged",
+      "label": "Done (public)",
+      "type": "done",
+      "hide_after_hours": 24
+    }
+  ],
+  "transitions": [
+    {
+      "name": "Prioritise",
+      "from": "backlog",
+      "to": "todo",
+      "by": "any"
+    },
+    {
+      "name": "Start work",
+      "from": "todo",
+      "to": "doing",
+      "by": "any"
+    },
+    {
+      "name": "Request review",
+      "from": "doing",
+      "to": "pre_review",
+      "by": "agent"
+    },
+    {
+      "name": "Hand over",
+      "from": "pre_review",
+      "to": "human_check",
+      "by": "agent"
+    },
+    {
+      "name": "Ask the operator",
+      "from": ["doing", "approved_mirror", "local_merged", "make_public", "public_review", "pre_review"],
+      "to": "human_input",
+      "by": "agent"
+    },
+    {
+      "name": "Answer",
+      "from": "human_input",
+      "to": "doing",
+      "by": "any"
+    },
+    {
+      "name": "Fixes needed",
+      "from": ["human_check", "approved_mirror", "local_merged", "make_public", "public_review", "pre_review"],
+      "to": "doing",
+      "by": "any"
+    },
+    {
+      "name": "Approve",
+      "from": "human_check",
+      "to": "approved_mirror",
+      "by": "operator"
+    },
+    {
+      "name": "Merged",
+      "from": "approved_mirror",
+      "to": "local_merged",
+      "by": "agent"
+    },
+    {
+      "name": "Deployed locally",
+      "from": "local_merged",
+      "to": "deployed",
+      "by": "agent"
+    },
+    {
+      "name": "Create public PR",
+      "from": "deployed",
+      "to": "make_public",
+      "by": "operator"
+    },
+    {
+      "name": "Public PR opened",
+      "from": "make_public",
+      "to": "public_review",
+      "by": "agent"
+    },
+    {
+      "name": "PR approved",
+      "from": "public_review",
+      "to": "ready",
+      "by": "operator"
+    },
+    {
+      "name": "Merge",
+      "from": "ready",
+      "to": "merged",
+      "by": "agent"
+    },
+    {
+      "name": "Move",
+      "from": "*",
+      "to": "*",
+      "by": "operator"
+    }
+  ]
+}
