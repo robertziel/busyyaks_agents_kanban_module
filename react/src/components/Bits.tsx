@@ -1,5 +1,14 @@
 // Small shared pieces: the avatar, loading / error states, the links an agent's session offers, server-rendered HTML.
-import { forwardRef, useCallback, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { useKanbanHost } from "../host";
 import { hue, initials } from "../lib/format";
 import type { Card, SessionLinks } from "../types";
@@ -141,12 +150,41 @@ export function AgentLinks({
 }
 
 // Server-rendered HTML (descriptions, comments, checklist items — sanitized by the engine's markdown port) injected
-// as-is. Same-origin links inside it navigate client-side through the host's `navigate` when it gave one; an
-// attachment picture (.kb-att-img) and a download are left to the dialog / the browser.
+// as-is. A link to another server (GitHub, CI, any other origin) opens in a new tab; same-origin links stay in this
+// tab and navigate client-side through the host's `navigate` when it gave one; an attachment picture (.kb-att-img)
+// and a download are left to the dialog / the browser.
 type HtmlProps = { html: string; className?: string };
+
+export function newTabForOtherOrigins(root: HTMLElement, origin: string) {
+  for (const a of Array.from(root.querySelectorAll<HTMLAnchorElement>("a[href]"))) {
+    let url: URL;
+    try {
+      url = new URL(a.getAttribute("href")!, origin + "/");
+    } catch {
+      continue; // an href the browser cannot parse goes nowhere: it is left as written
+    }
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.origin === origin) continue;
+    a.target = "_blank";
+    const rel = new Set(a.rel.split(/\s+/).filter(Boolean));
+    rel.add("noopener");
+    a.rel = Array.from(rel).join(" ");
+  }
+}
 
 export const Html = forwardRef<HTMLDivElement, HtmlProps>(function Html({ html, className = "md" }, ref) {
   const { navigate } = useKanbanHost();
+  const box = useRef<HTMLDivElement | null>(null);
+  const setRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      box.current = el;
+      if (typeof ref === "function") ref(el);
+      else if (ref) ref.current = el;
+    },
+    [ref],
+  );
+  useLayoutEffect(() => {
+    if (box.current) newTabForOtherOrigins(box.current, window.location.origin);
+  }, [html]);
   const onClick = useCallback(
     (e: MouseEvent<HTMLElement>) => {
       if (!navigate || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -162,5 +200,5 @@ export const Html = forwardRef<HTMLDivElement, HtmlProps>(function Html({ html, 
     },
     [navigate],
   );
-  return <div ref={ref} className={className} onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div ref={setRef} className={className} onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
 });
