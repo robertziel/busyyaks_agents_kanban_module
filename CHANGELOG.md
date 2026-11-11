@@ -6,6 +6,16 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ## [Unreleased]
 
+### Changed (breaking for hosts)
+
+- **`launchers[].kind` is required**: the CLI family the command is, one of `Launch::KINDS` —
+  `claude_code` (the argv every launcher had so far: `--model`, the prompt, `--remote-control <session>` LAST) or
+  `hermes` (`-m <model>`, `-q <prompt>`, no remote control). A host config without it fails `HostConfig` with
+  `launchers[<key>].kind must be one of claude_code, hermes (got nil)`. **Migrating:** add `kind: claude_code` to
+  every launcher — the argv stays byte for byte what it was. `Launch.argv` takes the prompt as `prompt:` (a host
+  that passed it in `extra:` gets the same argv for `claude_code`; `hermes` needs `prompt:`), and `Launch.plan`
+  carries `kind` + `remote_control` (what the host checks came up).
+
 ### Changed
 
 - **Public: Create PR** on the private local-repo board (`fixtures/boards/local_v4.board.json`): "Open public PR" moves

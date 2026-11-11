@@ -20,19 +20,25 @@ system_author: kanban
 # the host's route that serves attachment bytes: "<prefix>/<id>" (a picture, inline) and "<prefix>/<id>/download"
 attachment_url_prefix: /api/attachments
 # the commands that START an agent session. `command` = a program, or a bash function of the host's profile run
-# through `bash -ic` when via_shell. No --remote-control (Launch appends `--remote-control <session>` LAST — the one
-# effective name, Claude Code takes a repeated option's last value, measured on 2.1.317) and no --model (the agent
-# type's `model` does) in args. WHAT is typed after the start and which model runs belong to the agent type below.
+# through `bash -ic` when via_shell. `kind` = the CLI family the command is (Launch::KINDS), which decides how the
+# model, the prompt and the session name reach it:
+#   claude_code  Claude Code: `<command> <args> [--model M] [<prompt>] --remote-control <session>` (appended LAST — the
+#                one effective name, Claude Code takes a repeated option's last value, measured on 2.1.317); args may
+#                set neither --model nor --remote-control
+#   hermes       Hermes Agent: `<command> <args> [-m M] [-q <prompt>]` (args: [chat]); no remote control; args may set
+#                none of -m/--model/-q/--query/--query-file WHAT is typed after the start and which model runs belong to the agent type below.
 # This example runs plain `claude` in Claude Code's default permission mode: every tool call the agent's settings
 # do not allow stops on a permission prompt, which the board turns into a question for the operator
 # (session_dialogs). Add more launchers as you need them, e.g.:
 #   - a shell function of your profile (say one that points Claude Code at another model gateway):
-#       - { key: gateway, label: gateway, command: my_claude_function, args: [], via_shell: true }
+#       - { key: gateway, label: gateway, kind: claude_code, command: my_claude_function, args: [], via_shell: true }
 #   - Claude Code without permission prompts. Only on a machine and repos you trust the agent with completely: it
 #     then runs every command and edit with no question asked (Claude Code's bypassPermissions mode):
-#       - { key: unattended, label: unattended, command: claude, args: ["--permission-mode", "bypassPermissions"], via_shell: false }
+#       - { key: unattended, label: unattended, kind: claude_code, command: claude, args: ["--permission-mode", "bypassPermissions"], via_shell: false }
+#   - Hermes Agent, interactive:
+#       - { key: hermes, label: hermes, kind: hermes, command: hermes, args: [chat], via_shell: false }
 launchers:
-  - { key: claude, label: claude, command: claude, args: [], via_shell: false }
+  - { key: claude, label: claude, kind: claude_code, command: claude, args: [], via_shell: false }
 # AGENT TYPES — what a session launched for a board IS. The library ships none; a launch (the UI's button, the API's
 # POST launch {type, launcher}, an agent's kanban_register) names one. Per type:
 #   launchers        the launcher keys it may run (the UI's pill menu). A start the engine performs and that names
