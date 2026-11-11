@@ -3125,3 +3125,85 @@
   justify-content: flex-end;
   margin-top: 14px;
 }
+/* the review loop's comment header (AgentsKanban::Markdown#comment_head): role · status · tags · note as one strip */
+.ak-root .ak-chead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin: 0 0 8px;
+  padding-bottom: 8px;
+  border-bottom: 0.5px solid var(--ak-line);
+  font-size: 12px;
+  line-height: 18px;
+}
+.ak-root .ak-chead-role {
+  font-weight: 600;
+  color: var(--ak-ink);
+}
+.ak-root .ak-chead-role::after {
+  content: " agent";
+  font-weight: 400;
+  color: var(--ak-ink-faint);
+}
+.ak-root .ak-chead-status {
+  padding: 0 7px;
+  border-radius: var(--ak-radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ak-accent);
+  background: rgba(var(--ak-accent-rgb), 0.12);
+}
+.ak-root .ak-chead-status[data-tone="ok"] {
+  color: var(--ak-ok);
+  background: rgba(var(--ak-ok-rgb), 0.14);
+}
+.ak-root .ak-chead-status[data-tone="bad"] {
+  color: var(--ak-bad);
+  background: rgba(var(--ak-bad-rgb), 0.12);
+}
+.ak-root .ak-chead-status[data-tone="warn"] {
+  color: var(--ak-warn);
+  background: rgba(var(--ak-warn-rgb), 0.14);
+}
+.ak-root .ak-chead-status[data-tone="human"] {
+  color: var(--ak-done);
+  background: var(--ak-mat-fill);
+}
+.ak-root .ak-chead-tag {
+  padding: 0 6px;
+  border-radius: var(--ak-radius-chip);
+  background: var(--ak-mat-fill-2);
+  color: var(--ak-ink-dim);
+  white-space: nowrap;
+}
+.ak-root .ak-chead-k {
+  color: var(--ak-ink-faint);
+}
+.ak-root .ak-chead-tag b {
+  font-weight: 600;
+}
+.ak-root .ak-chead-tag[data-severity]::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 4px;
+  border-radius: 50%;
+  vertical-align: 0;
+  background: var(--ak-ink-faint);
+}
+.ak-root .ak-chead-tag[data-severity="blocker"]::before {
+  background: var(--ak-vivid-red);
+}
+.ak-root .ak-chead-tag[data-severity="major"]::before {
+  background: var(--ak-vivid-orange);
+}
+.ak-root .ak-chead-tag[data-severity="minor"]::before {
+  background: var(--ak-vivid-yellow);
+}
+.ak-root .ak-chead-note {
+  flex-basis: 100%;
+  color: var(--ak-ink-dim);
+}

@@ -151,15 +151,39 @@ class CardLinksTest < Minitest::Test
     r = refs(repo: "https://github.com/o/widgets", pr_url: "#{local}/pull/1", activity: [])
     assert_equal [["pr", "#{local}/pull/1", "#1"], ["pr", "#{local}/pull/2", "2"], ["pr", "#{local}/pull/3", "3"]],
                  link("<p>PR #1, PR 2, pull/3</p>", r)
-    # a full PR URL — autolinked or bare text — stays as written
+    # a full PR URL keeps its own target: autolinked it becomes that repo's chip, bare text without a scheme stays text
     html = %(<p><a href="#{local}/pull/1">#{local}/pull/1</a> and github.com/o/other/pull/7</p>)
-    assert_equal html, CL.linkify(html, [], refs: r)
+    out = CL.linkify(html, [], refs: r)
+    title = "o/widgets_local · #{local}/pull/1"
+    assert_includes out, %(<a class="gh-ref gh-pr" href="#{local}/pull/1" target="_blank" rel="noopener" title="#{title}">)
+    assert_includes out, "<span>widgets_local#1</span></a> and github.com/o/other/pull/7</p>"
     # build: the PR chips of the text go to that repo too
     card = { title: "see PR #2", notes: "", pr_url: "#{local}/pull/1" }
     project = { slug: "o/widgets", path: "/checkouts/widgets", remote: "git@github.com:o/widgets.git" }
     links = CL.build(card, [], project, commits: ->(_) { {} }, git: NOGIT)
     assert_equal ["#{local}/pull/1", "#{local}/pull/2"], links.select { |l| l[:kind] == "pr" }.map { |l| l[:url] }
     assert_nil CL.pr_repo("https://jenkins.example/job/x/1/")
+  end
+
+  def test_github_urls_written_out_become_chips_and_links_with_text_stay
+    base = "https://github.com/acme/engine"
+    html = %(<p><a href="#{base}/pull/61">#{base}/pull/61</a> · <a href="#{base}/issues/5">#{base}/issues/5</a> · ) +
+           %(<a href="#{base}/commit/d07256dabc">#{base}/commit/d07256dabc</a> · <a href="#{base}/pull/9">the fix</a> · ) +
+           %(<a href="#{base}/pull/x">#{base}/pull/x</a> · <a href="#{base}/commit/abc">#{base}/commit/abc</a></p>)
+    out = CL.linkify(html, [])
+    assert_equal [["pr", "#{base}/pull/61", "engine#61"], ["issue", "#{base}/issues/5", "engine#5"],
+                  ["commit", "#{base}/commit/d07256dabc", "engine@d07256d"],],
+                 chips(out)
+    assert_includes out, %(<a href="#{base}/pull/9">the fix</a>)
+    assert_includes out, %(<a href="#{base}/pull/x">#{base}/pull/x</a>)
+    assert_includes out, %(<a href="#{base}/commit/abc">#{base}/commit/abc</a>)
+    # no links, no refs, no GitHub URL: the HTML comes back byte for byte
+    same = %(<p>a <strong>b</strong> <code>c</code> <a href="https://x.y/pull/1">https://x.y/pull/1</a> #4</p>\n) +
+           "<pre><code>d</code></pre>"
+    assert_equal same, CL.linkify(same, [])
+    # inside a code block nothing is chipped
+    pre = %(<pre><code><a href="#{base}/pull/1">#{base}/pull/1</a></code></pre>)
+    assert_equal pre, CL.linkify(pre, [])
   end
 end
 
@@ -201,5 +225,62 @@ class MarkdownTest < Minitest::Test
     assert_includes md.card(table.("short")), "<table>"
     assert_includes md.card(table.("word " * 200)), '<table class="md-dense">'
     assert_includes md.card(table.("word " * 500)), '<table class="md-denser">'
+  end
+
+  def test_review_header_becomes_a_badge_strip
+    header = "[Author Agent] · PR OPEN · round 0 · severity: major · category: correctness"
+    html = md.card("#{header}\n\n| a | b |\n|---|---|\n| x | y |\n")
+    head = html[%r{\A<div class="ak-chead"[^\n]*</div>\n}]
+    assert head, html
+    assert_includes head, '<div class="ak-chead" data-role="author"><span class="ak-chead-role">Author</span>'
+    assert_includes head, '<span class="ak-chead-status" data-tone="info">PR OPEN</span>'
+    assert_includes head, '<span class="ak-chead-tag">round 0</span>'
+    tag = lambda do |k, v, attrs = ""|
+      %(<span class="ak-chead-tag" data-key="#{k}"#{attrs}><span class="ak-chead-k">#{k}</span> <b>#{v}</b></span>)
+    end
+    assert_includes head, tag.("severity", "major", ' data-severity="major"')
+    assert_includes head, tag.("category", "correctness")
+    assert_includes html, "<table>"
+    refute_includes html, "[Author Agent]"
+  end
+
+  def test_review_header_replies_statuses_and_escaping
+    fixed = md.card("[Author Agent] · FIXED · `abc1234` — moved the check **before** the write")
+    assert_includes fixed, 'data-tone="ok">FIXED</span><span class="ak-chead-tag"><code>abc1234</code></span>'
+    assert_includes fixed, '<span class="ak-chead-note">moved the check <strong>before</strong> the write</span></div>'
+    assert_includes md.card("[Reviewer Agent] · NEEDS_HUMAN · round 3"), 'data-tone="human">NEEDS HUMAN</span>'
+    assert_includes md.card("[Reviewer Agent] · DISAGREE — see SPEC"), 'data-tone="warn">DISAGREE</span>'
+    qa = md.card("[QA Agent] · FAIL · tests red")
+    assert_includes qa, 'data-role="qa"><span class="ak-chead-role">QA</span>'
+    assert_includes qa, '<span class="ak-chead-status" data-tone="bad">FAIL</span>'
+    summary = md.card("[Reviewer Agent] · SUMMARY · rounds: 2/3 · fixed: 4 · needs_human: 0")
+    assert_includes summary, 'data-key="rounds"><span class="ak-chead-k">rounds</span> <b>2/3</b></span>'
+    # no status word: the first segment is a tag; an unknown severity carries no colour
+    plain = md.card("[Author Agent] · round 1 · severity: huge")
+    refute_includes plain, "ak-chead-status"
+    assert_includes plain, 'data-key="severity"><span class="ak-chead-k">severity</span> <b>huge</b>'
+    # a URL in a segment is not split at its scheme colon: it stays a link (a chip once linkified)
+    url = md.card("[Author Agent] · OPEN · see https://github.com/o/r/pull/3 · ci: https://ci.example/1")
+    assert_includes url, '<span class="ak-chead-tag">see <a href="https://github.com/o/r/pull/3"'
+    assert_includes url, '<span class="ak-chead-k">ci</span> <b><a href="https://ci.example/1"'
+    refute_includes url, "//github.com/o/r/pull/3</b>"
+    # escaped, raw HTML dropped
+    evil = md.card("[Author <b> Agent] · OPEN")
+    refute_includes evil, "ak-chead"
+    x = md.card("[Author Agent] · OPEN · <script>x</script> — <img src=x onerror=1>")
+    refute_includes x, "<script>"
+    refute_includes x, "<img"
+    # @mentions and attachment pictures in the header are processed like the body's
+    note = md.card("[Author Agent] · OPEN — ask @bob")
+    assert_includes note, '<span class="ak-chead-note">ask <span class="mention">@bob</span></span>'
+    # only the first line, only at the start
+    assert_equal md.card("hello\n[Author Agent] · OPEN"), md.render("hello\n[Author Agent] · OPEN")
+    refute_includes md.card("see [Author Agent] · OPEN"), "ak-chead"
+    # nothing after the dot: no strip, the line renders as written (it used to raise)
+    blanks = ["[Author Agent] · ", "[Author Agent] ·   \nbody", "[Author Agent] ·\t\nbody"]
+    blanks += ["[Author Agent] · \0", "[Author Agent] · \0\nbody"] # NUL is \S to the regex, but strip drops it
+    blanks.each do |blank|
+      assert_equal md.render(blank), md.card(blank)
+    end
   end
 end

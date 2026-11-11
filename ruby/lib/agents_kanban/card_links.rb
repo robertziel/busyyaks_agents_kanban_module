@@ -188,6 +188,10 @@ module AgentsKanban
         '<svg viewBox="0 0 16 16" aria-hidden="true">' \
         '<path d="M4 1.5h5l3.5 3.5v9.5H4z M9 1.5V5h3.5" fill="none" stroke="currentColor" stroke-width="1.4" ' \
         'stroke-linejoin="round"/></svg>',
+      "issue" =>
+        '<svg viewBox="0 0 16 16" aria-hidden="true">' \
+        '<circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.5"/>' \
+        '<circle cx="8" cy="8" r="1.4" fill="currentColor"/></svg>',
       "site" =>
         '<svg viewBox="0 0 16 16" aria-hidden="true">' \
         '<circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.4"/>' \
@@ -237,10 +241,11 @@ module AgentsKanban
     # Rendered HTML with the references it contains turned into GitHub-style chips (the same targets as the
     # Links list): `code` spans that name a branch / file / commit / domain; in plain text, file paths, domains,
     # known SHAs (and branch names only when they contain a "/", so the word "production" in a sentence stays a
-    # word), and the #N references refs resolves (PR / activity on this card / card; unresolved → text). Never inside
+    # word), the #N references refs resolves (PR / activity on this card / card; unresolved → text), and a GitHub PR /
+    # issue / commit URL written out as its own link text (github_url_chip). Never inside
     # an existing <a>, a <pre> block or inline code.
     def linkify(html, links, refs: nil)
-      return html if html.to_s.empty? || (links.empty? && refs.nil?)
+      return html if html.to_s.empty?
 
       by = {}
       links.each do |l|
@@ -250,7 +255,6 @@ module AgentsKanban
         when "commit" then by[l[:label].split(" ").first] ||= l
         end
       end
-      return html if by.empty? && refs.nil?
 
       render = lambda do |key, shown_html|
         l = by[key] or return nil
@@ -283,6 +287,12 @@ module AgentsKanban
       while i < tokens.size
         t = tokens[i]
         if t.start_with?("<")
+          gh = in_a.zero? && in_pre.zero? ? github_url_chip(t, tokens[i + 1], tokens[i + 2]) : nil
+          if gh
+            out << gh
+            i += 3
+            next
+          end
           in_a += 1 if t.match?(/\A<a[\s>]/i)
           in_a -= 1 if t.match?(%r{\A</a>}i)
           in_pre += 1 if t.match?(/\A<pre[\s>]/i)
@@ -307,6 +317,26 @@ module AgentsKanban
         i += 1
       end
       out
+    end
+
+    GH_URL = %r{\Ahttps://github\.com/([\w.-]+)/([\w.-]+)/(pull|issues|commit)/(\h{7,40}|\d{1,7})/?\z}
+    GH_URL_KIND = { "pull" => "pr", "issues" => "issue", "commit" => "commit" }.freeze
+
+    # A bare GitHub URL written out in the text (autolinked: the link text is its href) — a PR, an issue or a commit
+    # on any repo — as the chip GitHub itself shows: "repo#61" / "repo@abc1234", the full URL in the tooltip.
+    # A link with its own text stays as written.
+    def github_url_chip(open_tag, text, close_tag)
+      return nil unless close_tag == "</a>" && open_tag.match?(/\A<a\s/i)
+
+      href = CGI.unescapeHTML(open_tag[/\shref="([^"]*)"/, 1].to_s)
+      return nil unless href == CGI.unescapeHTML(text.to_s)
+
+      m = href.match(GH_URL) or return nil
+      kind = GH_URL_KIND.fetch(m[3])
+      return nil unless kind == "commit" ? m[4].length >= 7 : m[4].match?(/\A\d+\z/)
+
+      label = kind == "commit" ? "#{m[2]}@#{m[4][0, 7]}" : "#{m[2]}##{m[4]}"
+      chip(kind, href, %(<span>#{CGI.escapeHTML(label)}</span>), title: "#{m[1]}/#{m[2]} · #{href}")
     end
 
     REF_TITLE = { "pr" => "pull request", "comment" => "activity on this card", "card" => "card" }.freeze
