@@ -159,6 +159,11 @@ host's own ledger records each run. Prefix `""` = the unprefixed table names (a 
 
 - Limits: title 200, labels 12 × 40, assignee 80, item 1000, question 8000, options ≤ 8 × 200, metadata 8000 JSON chars.
 - A comment's `*_html` is the markdown port's output; agents (Tools) get markdown only (`*_html` stripped).
+- The shipped markdown renders a body whose FIRST line is the review loop's header (`[<Role> Agent] · STATUS · round n ·
+  key: value …`, then ` — note`) as a badge strip `div.ak-chead` (`data-role`; `.ak-chead-status` `data-tone` ok / bad / warn /
+  human / info; `.ak-chead-tag` `data-key`, `data-severity` blocker / major / minor / nit; `.ak-chead-note`), escaped; the
+  stored markdown is unchanged. `CardLinks.linkify` shows a GitHub PR / issue / commit URL written out as its own link text
+  as a chip on that same URL (`repo#61`, `repo@abc1234`); a link with its own text stays as written.
 - A comment claims the author's own unlinked attachments it references; deleting the comment unlinks, never deletes.
 - Pings: one pending per card + session (a burst coalesces); never to the owner's own author; `relay` when a card
   gains an owner (the operator's undelivered comments since the last agent comment).

@@ -22,6 +22,19 @@ module AgentsKanban
     IMG = %r{<img\s[^>]*>}
     MENTION = %r{(?<![\w@/.&#-])@([A-Za-z0-9](?:[\w.-]*[A-Za-z0-9_])?)}
     SKIP_TAG = %r{\A<(/?)(code|pre|a)\b}i
+    # The review loop's comment header (the worker prompt's mandatory first line):
+    #   [Author Agent] · OPEN · round 1 · severity: major · category: correctness
+    #   [Author Agent] · FIXED · abc1234 — one line      [Reviewer Agent] · SUMMARY · rounds: 2/3 · fixed: 4
+    # becomes a strip of badges: the role, the status, then one tag per "·" segment; the text after " — " stays text.
+    HEAD = /\A[ \t]*\\?\[([A-Za-z][\w -]{0,30}?) Agent\\?\][ \t]*·[ \t]*([^\n]*\S)[ \t]*(?:\n|\z)/
+    STATUS = /\A[A-Z][A-Z0-9_ ]{1,30}\z/
+    STATUS_TONE = {
+      "ok" => %w[FIXED RESOLVED PASS APPROVE APPROVED DONE MERGED GREEN],
+      "bad" => %w[FAIL FAILED CHANGES BLOCKER RED],
+      "warn" => %w[OPEN DISAGREE PENDING],
+      "human" => %w[NEEDS_HUMAN],
+    }.flat_map { |tone, ws| ws.map { |w| [w, tone] } }.to_h.freeze
+    SEVERITIES = %w[blocker major minor nit].freeze
 
     attr_reader :attachment_url_prefix
 
@@ -34,7 +47,52 @@ module AgentsKanban
 
     # Kanban descriptions and comments: render + @name mentions wrapped in <span class="mention"> (not inside code/pre/a),
     # attachment pictures and file chips, wide tables zoomed out.
-    def card(md) = dense_tables(mentions(attachments(render(slack_fences(md)))))
+    def card(md)
+      head, rest = comment_head(md.to_s)
+      dense_tables(mentions(attachments(head + render(slack_fences(rest)))))
+    end
+
+    # [header html, the markdown after it]: "" and md itself when md does not open with a review header.
+    def comment_head(md)
+      m = md.match(HEAD) or return ["", md]
+
+      meta, note = m[2].strip.split(/[ \t]+—[ \t]+/, 2)
+      return ["", md] if meta.nil? # strip also drops what \S lets through (NUL): nothing left, no strip
+
+      segs = meta.split(/[ \t]*·[ \t]*/).reject(&:empty?)
+      role = m[1].strip
+      html = +%(<div class="ak-chead" data-role="#{h(role.downcase.tr(' ', '-'))}">)
+      html << %(<span class="ak-chead-role">#{h(role)}</span>)
+      st = segs.first
+      if st&.match?(STATUS)
+        segs.shift
+        tone = STATUS_TONE.fetch(st.tr(" ", "_"), "info")
+        html << %(<span class="ak-chead-status" data-tone="#{tone}">#{h(st.tr('_', ' '))}</span>)
+      end
+      segs.each { |seg| html << head_tag(seg) }
+      html << %(<span class="ak-chead-note">#{inline_md(note)}</span>) if note && !note.strip.empty?
+      html << "</div>\n"
+      [html, m.post_match]
+    end
+
+    def head_tag(seg)
+      k, v = seg.split(%r{:(?!//)[ \t]*}, 2) # a URL's scheme colon is not a key
+      return %(<span class="ak-chead-tag">#{inline_md(seg)}</span>) unless v && k.match?(/\A[a-z][a-z_ -]{0,20}\z/i)
+
+      key = k.strip.downcase
+      sev = key == "severity" && SEVERITIES.include?(v.strip.downcase) ? %( data-severity="#{h(v.strip.downcase)}") : ""
+      %(<span class="ak-chead-tag" data-key="#{h(key.tr(' ', '-'))}"#{sev}><span class="ak-chead-k">#{h(k.strip)}</span> ) +
+        %(<b>#{inline_md(v)}</b></span>)
+    end
+
+    # one header segment as inline markdown (a `sha`, **bold**): its single paragraph unwrapped
+    def inline_md(md)
+      html = render(md.strip)
+      m = html.match(%r{\A<p>(.*)</p>\n?\z}m)
+      m ? m[1] : h(md.strip)
+    end
+
+    def h(s) = ERB::Util.h(s)
 
     # A checklist item: one paragraph unwrapped to inline HTML (a multi-block body stays as blocks).
     def inline(md)
