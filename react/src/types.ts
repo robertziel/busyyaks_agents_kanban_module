@@ -366,10 +366,12 @@ export type BoardData = {
   columns_order: ColumnKey[];
   waiting_columns: ColumnKey[];
   listened_columns: ColumnKey[];
-  // cards waiting for the operator: the waiting columns' cards that are approvable now (or flagged) + the flagged cards
-  // elsewhere (server-computed); held = the gate cards waiting for CI instead
+  // cards waiting for the operator: the waiting columns' cards that are approvable now (or ask a question) + the
+  // needs_operator cards elsewhere (server-computed); held = the gate cards waiting for CI instead; external = the cards
+  // only blocked_external (waiting for the world), never counted as waiting for you; flagged = needs_operator elsewhere
   waiting: number;
   held: number;
+  external: number;
   flagged: number;
   priorities: string[];
   assignees?: string[];

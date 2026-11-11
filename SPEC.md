@@ -60,8 +60,10 @@ matches too.
 
 **Flags on a card, not types** (SPEC § 4): `needs_operator` (`kanban_ask`, a dialog on the owner's screen; the
 operator's comment clears it) and `blocked_external` (`kanban_block(reason, url)` / `kanban_unblock`; the operator's
-comment clears it too). A flagged card keeps its column and refuses agent moves; it counts as waiting for the operator
-wherever it sits; a move into a terminal column (Done, Cancelled) clears both.
+comment clears it too). A flagged card keeps its column and refuses agent moves; a `needs_operator` card counts as
+waiting for the operator wherever it sits, a card only `blocked_external` waits for the world (another card, CI, a third
+party) and is never counted as waiting for the operator — not even in a gate (`external`); a move into a terminal column
+(Done, Cancelled) clears both.
 
 **Actors** are not a column field: who acts in a column follows from its type and its transitions' `by` — a gate is
 the operator's (only the operator's step leaves it), a review / working column belongs to whoever holds the named
@@ -189,7 +191,9 @@ host's own ledger records each run. Prefix `""` = the unprefixed table names (a 
   queue skips flagged cards (nobody is started for a card waiting for the operator); the watchdog releases a flagged
   card like any other (it stays flagged). `Store#flag_reminders` (every watch pass): a card flagged for
   `flags.reminder_hours` with `flag_reminded_at` null gets ONE `comment` by `system_author` + a ping; a new ask / block
-  resets the reminder. `Store#flagged_counts(slugs)` = flagged cards outside the waiting columns per project.
+  resets the reminder. `Store#flagged_counts(slugs)` = `needs_operator` cards outside the waiting columns per project;
+  `Store#needs_operator?(card)` = an open question; `Store#external?(card)` = blocked_external with no open question
+  (`Store#waiting_counts` `external` = those per project — the one count `Api#board` and `#boards` both carry).
 - An agent never creates a card in an operator-only column (`Board#agent_closed?`: the gates, cancelled and — on a
   board with a gate — the done column): it creates, works, then `kanban_handoff`s.
 - `kanban_handoff` and `kanban_ask` speak in normal comments: a handoff logs its one-line `handoff` event (PR · CI) AND a
@@ -231,13 +235,16 @@ on a single card; `parent`, `children`, `blocked_by` (the unfinished parents), `
 review column | null) always. Board: `Api#board` — `columns:
 [{column,label,type,operator_only,cards}]`, `labels`, `config` (the host config), `board` (§ 2a: `{columns, transitions,
 rules, types, updated_by, updated}`), `archived?`, `backlog_md`, `columns_order`, `waiting_columns`, `listened_columns`,
-`priorities`, `label_colors`, `waiting` (the waiting columns' cards + the flagged cards elsewhere), `flagged` + the
+`priorities`, `label_colors`, `waiting` (the waiting columns' cards + the `needs_operator` cards elsewhere; never a held
+or an `external` one), `held`, `external` (cards only blocked_external, any column), `flagged` + the
 host's `board_extras`; 422 `{error}` when the stored board no longer fits the host.
-`Api#boards` → `{columns, columns_order, waiting_columns (the template's), waiting, boards: [{project, columns,
-columns_order, waiting_columns, counts, total, waiting, flagged, backlog_md}]}`; `Api#waiting` → `{waiting_columns,
+`Api#boards` → `{columns, columns_order, waiting_columns (the template's), waiting, held, external, boards: [{project,
+columns, columns_order, waiting_columns, counts, total, waiting, held, external, flagged, backlog_md}]}`; `Api#waiting` → `{waiting_columns,
 total, projects: [{slug, count, waiting_columns, cards: [{id, title, column, column_label, since, needs_operator,
 blocked, question_first_line, blocked_first_line, handoff_first_line}]}]}` (flagged cards first — in any column —
-then each board's waiting columns; projects with a question first), `held` (the gate cards waiting for CI) and
+then each board's waiting columns; projects with a question first), `held` (the gate cards waiting for CI),
+`external` (the cards only blocked_external, oldest block first; `Store#waiting_cards` `external`), both `[{slug, count,
+cards}]` and never in `total`, and
 `launch_failures: [{id, session, project, type, launcher, launched_by, ended, reason}]` = `Store#launch_failures`: the
 registrations on those projects whose start failed (end_reason `start failed: …` — a launch or a spawn whose claude never
 came up) in the last `LAUNCH_FAILURE_WINDOW_S` (a day), the newest `LAUNCH_FAILURES_SHOWN` (10), newest first — a new one
@@ -306,6 +313,16 @@ primitives, for a host without its own).
 ## 9. Breaking changes for hosts (config / API)
 
 Newest first; a heading names the `Schema::VERSION` step when the change brought one.
+
+### blocked_external is not waiting for the operator (no schema step)
+
+- A card flagged only `blocked_external` waits for the world (another card, CI, a third party), not for the operator:
+  `Api#board` / `#boards` `waiting` and `Api#waiting` `total` / `projects` leave it out — in a gate too — and carry it as
+  `external` (a count on the boards, `[{slug, count, cards}]` in `Api#waiting`); `Store#waiting_cards` gains
+  `external`, `Store#waiting_counts` `external`, `Store#flagged_counts` counts `needs_operator` only. A card that is
+  blocked AND asks still waits for the operator (the question does). Agents still cannot move a blocked card, the spawn
+  queue still skips it, the reminder still fires.
+- React: `BoardData.external` ("N blocked externally" beside "waiting for you").
 
 ### Public: Create PR on the local board (no schema step)
 

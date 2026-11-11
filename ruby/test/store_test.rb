@@ -320,7 +320,11 @@ class StoreTest < Minitest::Test
     assert_equal [%w[comment claude-shop-lead], %w[flag claude-shop-lead]],
                  kb.activity(id).last(2).map { |a| [a[:kind], a[:author]] }
     assert_equal "**Blocked (external):** Jenkins is down\n\nhttps://ci.example.com/job/1", kb.activity(id).last(2).first[:body]
-    assert_equal [3_000], kb.waiting_cards(@boards).by_slug["p"].map { |x| x[:since] }
+    w = kb.waiting_cards(@boards)
+    assert_equal [nil, [[id, 3_000]]], [w.by_slug["p"], w.external["p"].map { |x| x.values_at(:id, :since) }],
+                 "waiting for the world, not for the operator"
+    assert_equal [{}, { "p" => 1 }, false, true],
+                 [kb.flagged_counts(@boards), kb.waiting_counts(@boards).external, kb.needs_operator?(c), kb.external?(c)]
     e = assert_raises(Denied) { kb.move(id, column: "qa", by: "claude-shop-lead", agent: true) }
     assert_match(/blocked \(external\): Jenkins is down — kanban_unblock it first/, e.message)
     kb.comment(id, body: "I see it", author: "claude-shop-lead")

@@ -148,11 +148,12 @@ module AgentsKanban
 
     def empty_counts(slug) = board_of(slug).keys.to_h { |k| [k, 0] }
 
-    # {slug => n}: live FLAGGED cards (needs_operator / blocked_external) per project that sit outside their board's
-    # waiting columns — what "N waiting for you" adds to the waiting columns' counts (a flagged card in a gate counts once).
+    # {slug => n}: live cards flagged needs_operator per project that sit outside their board's waiting columns — what
+    # "N waiting for you" adds to the waiting columns' counts (a flagged card in a gate counts once). A card only
+    # blocked_external waits for the world, not for the operator (waiting_counts `external`).
     def flagged_counts(slugs, boards: nil)
       rows = cards.where(archived_at: nil, project_slug: slugs.to_a)
-                  .where(Sequel.|(Sequel.~(asked_at: nil), Sequel.~(blocked_at: nil)))
+                  .exclude(asked_at: nil) # needs_operator?
                   .select(:project_slug, :column)
                   .all
       boards ||= boards_for(rows.map { |r| r[:project_slug] }.uniq)
@@ -161,25 +162,29 @@ module AgentsKanban
     end
 
     # {slug => [card]} and the boards read for them (one batch), for the caller to reuse
-    # held: {slug => [card]} — the gate cards waiting for CI (gate_hold), not for the operator
-    WaitingCards = Struct.new(:by_slug, :boards, :held)
+    # held: {slug => [card]} — the gate cards waiting for CI (gate_hold), not for the operator; external: {slug => [card]}
+    # — the cards only blocked_external (waiting for the world: another card, CI, a third party), not for the operator
+    WaitingCards = Struct.new(:by_slug, :boards, :held, :external)
 
-    # Live cards of these projects waiting for the operator: the FLAGGED ones (needs_operator — a question asked, a
-    # dialog on the owner's screen —, blocked_external) in whatever column they sit, and the cards in their boards'
-    # WAITING columns (a gate: a handoff to check); decorated, flagged cards first, then the board's waiting order, then
-    # longest-waiting first. :since is when the flag was set, else when the card entered the column (its last move
-    # there, or its creation there); nil when the activity log does not say — unknown, not guessed.
+    # Live cards of these projects waiting for the operator: the ones flagged needs_operator (a question asked, a
+    # dialog on the owner's screen) in whatever column they sit, and the cards in their boards' WAITING columns (a
+    # gate: a handoff to check); decorated, flagged cards first, then the board's waiting order, then longest-waiting
+    # first. A card only blocked_external (external?) goes to `external` wherever it sits, a gate card held for CI to
+    # `held`: neither waits for the operator. :since is when the flag was set, else when the card entered the column
+    # (its last move there, or its creation there); nil when the activity log does not say — unknown, not guessed.
     # → WaitingCards (by_slug + the boards, the template included)
     def waiting_cards(slugs)
       rows = cards.where(archived_at: nil, project_slug: slugs.to_a).all
       boards = boards_for(rows.map { |c| c[:project_slug] }.uniq + [Board::TEMPLATE])
       picked = rows.select { |c| flagged?(c) || boards[c[:project_slug]].waiting.include?(c[:column]) }
       all = decorate(picked.map { |c| hydrate(c, boards[c[:project_slug]]) }, boards)
-      held, list = all.partition { |c| c[:gate_hold] && !flagged?(c) }
+      external, rest = all.partition { |c| external?(c) }
+      held, list = rest.partition { |c| c[:gate_hold] && !flagged?(c) }
       acts = activity_t.where(card_id: list.map { |c| c[:id] }, kind: %w[move create])
         .select(:card_id, :body, :created_at)
         .all
         .group_by { |a| a[:card_id] }
+      external.each { |c| c[:since] = flag_since(c) }
       list.each do |c|
         c[:since] = flag_since(c) ||
                     (acts[c[:id]] || []).select { |a| a[:body].end_with?(c[:column_label]) }.map { |a| a[:created_at] }.max
@@ -187,12 +192,18 @@ module AgentsKanban
       sorted = list.sort_by do |c|
         [flagged?(c) ? 0 : 1, boards[c[:project_slug]].waiting.index(c[:column]) || -1, c[:since] || 0, c[:id]]
       end
-      WaitingCards.new(sorted.group_by { |c| c[:project_slug] }, boards, held.group_by { |c| c[:project_slug] })
+      WaitingCards.new(sorted.group_by { |c| c[:project_slug] }, boards, held.group_by { |c| c[:project_slug] },
+                       external.sort_by { |c| [c[:since], c[:id]] }.group_by { |c| c[:project_slug] })
     end
 
     # The cross-cutting flags (SPEC § 4): a flagged card keeps its column, waits for the operator (or the world) and
     # refuses agent moves. needs_operator = an open question (asked_at); blocked_external = blocked_at.
     def flagged?(c) = !(c[:asked_at].nil? && c[:blocked_at].nil?)
+    # needs_operator: an open question (kanban_ask, a dialog on the owner's screen) — the card waits for the operator
+    def needs_operator?(c) = !c[:asked_at].nil?
+    # blocked_external with no open question: the card waits for the world (another card, CI, a third party) — it is not
+    # waiting for the operator, so no "waiting for you" count holds it (a card that also asks does: the question waits)
+    def external?(c) = c[:asked_at].nil? && !c[:blocked_at].nil?
     def flag_since(c) = [c[:asked_at], c[:blocked_at]].compact.min
 
     # The cards each OPEN registration (agent_sessions, ended_at null) on these projects' boards holds since it registered —
@@ -1470,9 +1481,10 @@ module AgentsKanban
       end
     end
 
-    # {slug => n}: per project, the cards waiting for the operator — those in the waiting columns that are flagged or
-    # hold nothing (gate_hold), plus the flagged ones elsewhere. `held` = {slug => n} of gate cards waiting for CI.
-    WaitingCounts = Struct.new(:waiting, :held)
+    # {slug => n}: per project, the cards waiting for the operator — those in the waiting columns that ask or hold
+    # nothing (gate_hold), plus the ones asking elsewhere. `held` = {slug => n} of gate cards waiting for CI, `external` =
+    # {slug => n} of cards only blocked_external (external?), in any column.
+    WaitingCounts = Struct.new(:waiting, :held, :external)
 
     def waiting_counts(slugs, boards: nil)
       rows = cards.where(archived_at: nil, project_slug: slugs.to_a).all
@@ -1481,14 +1493,17 @@ module AgentsKanban
       holds = gate_holds(gated.reject { |r| flagged?(r) }, boards)
       waiting = Hash.new(0)
       held = Hash.new(0)
+      external = Hash.new(0)
       rows.each do |r|
-        if holds.key?(r[:id])
+        if external?(r)
+          external[r[:project_slug]] += 1
+        elsif holds.key?(r[:id])
           held[r[:project_slug]] += 1
         elsif flagged?(r) || boards[r[:project_slug]].waiting.include?(r[:column])
           waiting[r[:project_slug]] += 1
         end
       end
-      WaitingCounts.new(waiting, held)
+      WaitingCounts.new(waiting, held, external)
     end
 
     # ── idle watch (config.idle_watch): CI finished and nobody acted; a live owner gone quiet ─────────────────────
@@ -2058,7 +2073,7 @@ module AgentsKanban
 
     # One card's approval step asked of the ci: port (approval_prefetch_pass) → [id, what it said] | nil (no step here).
     # One gate card's step asked of the ci: port (approval_prefetch_pass) → [id, what it said, gate event] | nil (no
-    # step here). The gate event (card #248) is said once per change, the last state kept on the card (gate_state):
+    # step here). The gate event is said once per change, the last state kept on the card (gate_state):
     # :red = its CI turned red (the owner is pinged to fix it), :ready = a hold cleared (it now waits for the operator).
     def prefetch_approval(c, b)
       return nil unless @config.green_ci_gate? && !c[:archived_at]

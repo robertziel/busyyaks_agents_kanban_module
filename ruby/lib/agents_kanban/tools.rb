@@ -422,11 +422,12 @@ module AgentsKanban
                                                 },
                                                 required: %w[id question author], }, },
                   { name: "kanban_block",
-                    description: "Flag a card blocked_external: it waits for CI, a third-party API or somebody outside " \
-                                 "the board. The card keeps its column; agents cannot move it until kanban_unblock. " \
-                                 "reason (what it waits for) and url (where the blocker is seen: the CI build, the " \
-                                 "issue, the status page) are required. Counts as waiting for the operator; one " \
-                                 "reminder after #{host.flags.reminder_hours} h.",
+                    description: "Flag a card blocked_external: it waits for another card, CI, a third-party API or " \
+                                 "somebody outside the board. The card keeps its column; agents cannot move it until " \
+                                 "kanban_unblock. reason (what it waits for) and url (where the blocker is seen: the " \
+                                 "CI build, the issue, the status page) are required. Not counted as waiting for the " \
+                                 "operator (the board lists it as blocked externally) — a decision the operator must " \
+                                 "take goes through kanban_ask; one reminder after #{host.flags.reminder_hours} h.",
                     inputSchema: { type: "object",
                                    properties: { id: INT, reason: { type: "string" }, url: { type: "string" },
                                                  author: AUTHOR, },

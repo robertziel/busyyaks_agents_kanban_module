@@ -163,8 +163,9 @@ dependencies: false
 session_dialogs: { settle_seconds: 30, context_minutes: 10 }
 
 # the cross-cutting card FLAGS (needs_operator: kanban_ask or a dialog on the owner's screen; blocked_external:
-# kanban_block with a reason + URL): a flagged card keeps its column, refuses agent moves and counts as waiting for
-# you; after reminder_hours it gets ONE reminder comment by system_author (the notifier's watch pass).
+# kanban_block with a reason + URL): a flagged card keeps its column and refuses agent moves; a needs_operator card
+# counts as waiting for you, a blocked_external one waits for the world and does not (the boards' `external`); after
+# reminder_hours either gets ONE reminder comment by system_author (the notifier's watch pass).
 flags: { reminder_hours: 24 }
 
 # the agent review loop on the review columns named in `columns` (keys, on every board that has them; other review

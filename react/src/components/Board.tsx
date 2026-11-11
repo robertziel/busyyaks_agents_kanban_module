@@ -417,7 +417,7 @@ export function Board({
             </span>
             <span
               className={`kb-waiting${waiting === 0 ? " zero" : ""}`}
-              title={`cards waiting for you: ${data.waiting_columns.map(colLabel).join(" + ")} that can be approved now + flagged cards (needs_operator / blocked)`}
+              title={`cards waiting for you: ${data.waiting_columns.map(colLabel).join(" + ")} that can be approved now + cards with a question for you (needs_operator)`}
             >
               <b>{waiting}</b> waiting for you
             </span>
@@ -427,6 +427,14 @@ export function Board({
                 title="gate cards whose Approve would not pass now (CI pending, red or unread; new commits): not counted"
               >
                 <b>{data.held}</b> waiting for CI
+              </span>
+            )}
+            {data.external > 0 && (
+              <span
+                className="kb-held kb-external"
+                title="cards blocked on something outside the board (another card, CI, a third party): not counted"
+              >
+                <b>{data.external}</b> blocked externally
               </span>
             )}
           </div>
