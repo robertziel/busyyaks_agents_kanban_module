@@ -508,7 +508,8 @@
 .ak-root .kb-list > * {
   flex-shrink: 0;
 }
-.ak-root .kb-list.over {
+.ak-root .kb-list.over,
+.ak-root .kb-col.collapsed.over {
   background: rgba(var(--ak-accent-rgb), 0.08);
   box-shadow: inset 0 0 0 1.5px rgba(var(--ak-accent-rgb), 0.35);
 }

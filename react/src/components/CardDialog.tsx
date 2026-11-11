@@ -20,7 +20,7 @@ import { AgentLinks, Avatar, ErrorState, Html, Loading } from "./Bits";
 import { CardLinks } from "./CardLinkRow";
 import { KbIcon, type IconName } from "./KbIcon";
 import { MarkdownEditor, UploadChips } from "./MarkdownEditor";
-import { approvedNext, approveLabel, approveTitle, operatorMoves } from "../lib/workflow";
+import { approvedNext, approveLabel, approveTitle, operatorMoves, stepAt } from "../lib/workflow";
 import { Select } from "./Select";
 
 export type Panel = "labels" | "due" | "members" | "checklist" | "cover" | null;
@@ -202,7 +202,15 @@ function CardDetail({ id, slug, board, panel, setPanel, onClose, onChanged, proj
   const c = data.card;
   // The Transition list: the card's own column + the OPERATOR's transitions out of it ("Start work → In progress"),
   // each sent as {transition, column} — the board's workflow decides, never a column list of this file.
-  const transitionMoves = operatorMoves(c.transitions ?? []);
+  // the approval step this card is at: waiting in its `from` (a gate), approved in its `to`, or unapproved in a `to`
+  // that is a gate (dragged there: approved in place)
+  const at = stepAt(gates.approvals, gates.handoff?.columns ?? [], c.column, !!c.approved);
+  const step = at?.step ?? null;
+  const transitionMoves = operatorMoves(
+    c.transitions ?? [],
+    gates.approvals.find((a) => a.from === c.column) ?? null,
+    !!config.approval?.requires_green_ci,
+  );
   const moveOptions = [
     { value: c.column, label: colLabel(c.column) },
     ...transitionMoves.map(({ value, label }) => ({ value, label })),
@@ -234,11 +242,6 @@ function CardDetail({ id, slug, board, panel, setPanel, onClose, onChanged, proj
   const pictures = files.filter((a) => a.image);
   const others = files.filter((a) => !a.image);
   const del = (a: Attachment) => void run(() => api.attachmentDelete(a.id));
-  // the approval step this card is at: waiting in its `from` (a gate), or approved in its `to`
-  const step =
-    gates.approvals.find((a) => a.from === c.column) ??
-    gates.approvals.find((a) => a.to === c.column && !!c.approved) ??
-    null;
   // the gate the card sits in (the handoff box is named after it); elsewhere a past handoff is shown as "Check"
   const handoffCol = gates.handoff?.columns.includes(c.column) ? c.column : null;
 
@@ -991,9 +994,9 @@ function CardDetail({ id, slug, board, panel, setPanel, onClose, onChanged, proj
                   className="btn kb-approve-btn"
                   disabled={busy}
                   onClick={() => void run(() => api.approve(id, true))}
-                  title={approveTitle(step, colLabel)}
+                  title={approveTitle(step, colLabel, at?.inPlace)}
                 >
-                  {approveLabel(step, colLabel)}
+                  {approveLabel(step, colLabel, at?.inPlace)}
                 </button>
               )}
               {!c.owner_session && !c.approved && (

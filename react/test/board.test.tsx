@@ -461,7 +461,7 @@ describe("Board", () => {
     await waitFor(() => expect(api.calls).toContain("approve 9 true"));
   });
 
-  it("an approved card in Awaiting merge shows who approved and withdraws; one dragged in without approval shows nothing", async () => {
+  it("an approved card in Awaiting merge shows who approved and withdraws; one dragged in without approval is approved in place", async () => {
     const cards = [
       card({
         id: 7,
@@ -484,7 +484,65 @@ describe("Board", () => {
     render(<Host api={api} view={{ card: 8, panel: null, archived: false }} />);
     await screen.findAllByText("DR");
     expect(screen.queryByText("Withdraw approval")).toBeNull();
-    expect(screen.queryByText(/✓ Approve/)).toBeNull();
+    // its agent never leaves a gate unapproved — the operator approves it where it sits
+    const here = screen.getByText("✓ Approve to merge");
+    expect(here).toHaveAttribute(
+      "title",
+      "Approve for merge: the card stays in Awaiting merge; the owner agent is pinged to merge it and move the card to Done",
+    );
+    fireEvent.click(here);
+    await waitFor(() => expect(api.calls).toContain("approve 8 true"));
+  });
+
+  // the step's own transition asks CI (and is refused while it is not green) — the operator's free
+  // edge into the same column is listed beside it, never hidden behind it
+  it("the Transition list of a gate card offers the free move into the step's target beside the CI-gated one", async () => {
+    const cards = [
+      card({
+        id: 5,
+        column: "local_human_review",
+        title: "HC",
+        transitions: [
+          { name: "Approve", to: "local_merged_pr", to_label: "Local: Merged", by: "operator" },
+          { name: "Rework", to: "doing", to_label: "In progress", by: "operator" },
+          { name: "Move", to: "local_merged_pr", to_label: "Local: Merged", by: "operator" },
+          { name: "Move", to: "doing", to_label: "In progress", by: "operator" },
+        ],
+      }),
+    ];
+    const api = fakeApi(boardData(localV4, cards), cards);
+    render(<Host api={api} view={{ card: 5, panel: null, archived: false }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Transition" }));
+    const list = await screen.findByRole("listbox");
+    expect(
+      within(list)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual([
+      "Local: Human review",
+      "Approve → Local: Merged",
+      "Rework → In progress",
+      "Move → Local: Merged (CI not asked)",
+    ]);
+    fireEvent.click(within(list).getByRole("option", { name: "Move → Local: Merged (CI not asked)" }));
+    await waitFor(() => expect(api.calls).toContain("move 5 local_merged_pr via Move"));
+  });
+
+  // a collapsed list is still a column the operator drags a card into
+  it("a card dropped on a collapsed list moves into that column", async () => {
+    window.localStorage.setItem("kb-collapsed:g/r", JSON.stringify(["qa"]));
+    const cards = [card({ id: 3, column: "doing", title: "Drag me" })];
+    const api = fakeApi(boardData(coding, cards), cards);
+    const { container } = render(<Host api={api} />);
+    const li = (await screen.findByText("Drag me")).closest("li")!;
+    const strip = container.querySelector<HTMLElement>('.kb-col.collapsed[data-col="qa"]')!;
+    const dataTransfer = { setData: () => {}, effectAllowed: "", dropEffect: "" };
+    fireEvent.dragStart(li, { dataTransfer });
+    fireEvent.dragOver(strip, { dataTransfer });
+    expect(strip.className).toContain("over");
+    fireEvent.drop(strip, { dataTransfer });
+    await waitFor(() => expect(api.calls).toContain("move 3 qa"));
+    window.localStorage.removeItem("kb-collapsed:g/r");
   });
 
   it("shows the api's error verbatim and keeps polling the revision", async () => {

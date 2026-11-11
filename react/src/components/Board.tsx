@@ -384,6 +384,21 @@ export function Board({
     if (cur && cur.position === position) return;
     void move(d.id, col, position);
   };
+  // a collapsed list shows no cards to drop between: the whole strip is the target, the card lands at its bottom
+  const onDragOverCollapsed = (col: ColumnKey) => (e: DragEvent<HTMLElement>) => {
+    if (!drag) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (!over || over.col !== col) setOver({ col, index: 0 });
+  };
+  const onDropCollapsed = (col: ColumnKey) => (e: DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    if (!drag) return;
+    const d = drag;
+    setDrag(null);
+    setOver(null);
+    if (d.from !== col) void move(d.id, col);
+  };
   const endDrag = () => {
     setDrag(null);
     setOver(null);
@@ -600,9 +615,15 @@ export function Board({
               return (
                 <section
                   key={col.column}
-                  className={`kb-col collapsed kb-c-${col.column}`}
+                  className={`kb-col collapsed kb-c-${col.column}${over && over.col === col.column ? " over" : ""}`}
                   data-col={col.column}
                   aria-label={`${col.label} (collapsed)`}
+                  onDragOver={onDragOverCollapsed(col.column)}
+                  onDragLeave={(e) => {
+                    if (!e.currentTarget.contains(e.relatedTarget as Node | null))
+                      setOver((o) => (o && o.col === col.column ? null : o));
+                  }}
+                  onDrop={onDropCollapsed(col.column)}
                 >
                   <button
                     type="button"

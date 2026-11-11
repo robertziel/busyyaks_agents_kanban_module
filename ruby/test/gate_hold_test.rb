@@ -125,8 +125,8 @@ class GateHoldTest < Minitest::Test
     assert_equal moved, gate_card[:gate_hold]
     assert_equal [0, 1, 0, 1, 0], counts
     e = assert_raises(AgentsKanban::Invalid) { @m.approve(@id, by: "operator@x") }
-    assert_equal "not approved (Local: Human review → Local: Merged): card ##{@id} — #{moved}; hand it back for review",
-                 e.message
+    assert_equal "not approved (Local: Human review → Local: Merged): card ##{@id} — #{moved}; hand it back for review. " \
+                 "A drag into Local: Merged approves without asking CI", e.message
   end
 
   def test_an_unreadable_ci_holds_it
