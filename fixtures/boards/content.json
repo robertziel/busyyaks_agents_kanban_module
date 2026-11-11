@@ -7,6 +7,7 @@
     {
       "key": "localclaude",
       "label": "localclaude",
+      "kind": "claude_code",
       "command": "localclaude",
       "args": [],
       "via_shell": true

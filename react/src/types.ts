@@ -11,7 +11,14 @@ export type HostConfig = {
   system_author: string;
   attachment_url_prefix: string;
   // the commands that start a session; an agent type names which of them it runs and what is typed / which model
-  launchers: { key: string; label: string; command: string; args: string[]; via_shell: boolean }[];
+  launchers: {
+    key: string;
+    label: string;
+    kind: "claude_code" | "hermes";
+    command: string;
+    args: string[];
+    via_shell: boolean;
+  }[];
   agent_types: AgentTypeConfig[];
   // registered agent sessions running at once on the host, every type and project together
   concurrency: { max_sessions: number | null };

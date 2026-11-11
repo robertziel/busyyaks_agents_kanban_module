@@ -7,6 +7,7 @@
     {
       "key": "fullclaude",
       "label": "fullclaude",
+      "kind": "claude_code",
       "command": "claude",
       "args": ["--permission-mode", "bypassPermissions"],
       "via_shell": false
@@ -14,6 +15,7 @@
     {
       "key": "localclaude",
       "label": "localclaude",
+      "kind": "claude_code",
       "command": "localclaude",
       "args": [],
       "via_shell": true

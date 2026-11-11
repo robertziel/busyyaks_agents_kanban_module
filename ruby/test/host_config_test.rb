@@ -101,7 +101,8 @@ class HostConfigTest < Minitest::Test
     assert_equal C::KEYS.sort, ex.to_h.keys.sort
     # the example is a stranger's starting point: one plain `claude` launcher, no model names, Claude Code's default
     # permission mode (bypass only as a commented, explained option), no caps
-    assert_equal [["claude", "claude", [], false]], ex.launchers.map { |l| [l.key, l.command, l.args, l.via_shell] }
+    assert_equal [["claude", "claude_code", "claude", [], false]],
+                 ex.launchers.map { |l| [l.key, l.kind, l.command, l.args, l.via_shell] }
     assert_equal %w[lead team plain], ex.agent_type_keys
     assert(ex.agent_types.all? { |t| t.launchers == ["claude"] && t.model.nil? && t.spawn_launcher.nil? })
     assert_equal %w[claude claude claude], ex.agent_types.map { |t| t.launcher!(nil) }, "one launcher = unambiguous"
@@ -119,9 +120,25 @@ class HostConfigTest < Minitest::Test
   def test_launchers_are_required_and_validated
     bad = ->(mut) { r = raw; mut.call(r); assert_raises(E) { C.new(r) }.message }
     assert_match(/launchers must be a non-empty list/, bad.(->(r) { r["launchers"] = [] }))
-    assert_match(/launchers\[\] must be an object with exactly key, label, command, args, via_shell/,
+    assert_match(/launchers\[\] must be an object with exactly key, label, kind, command, args, via_shell/,
                  bad.(->(r) { r["launchers"] = [{ "command" => "claude" }] }))
-    assert_match(/must not set --model: the agent type/, bad.(->(r) { r["launchers"][0]["args"] = ["--model", "x"] }))
+    assert_match(/must not set --model: Launch sets --model \(the agent type's model\)/,
+                 bad.(->(r) { r["launchers"][0]["args"] = ["--model", "x"] }))
+    assert_match(/must not set --model=x/, bad.(->(r) { r["launchers"][0]["args"] = ["--model=x"] }))
+    # kind: the CLI family, required, one of Launch::KINDS — no default
+    assert_match(/launchers\[fullclaude\].kind must be one of claude_code, hermes \(got nil\)/,
+                 bad.(->(r) { r["launchers"][0]["kind"] = nil }))
+    assert_match(/kind must be one of claude_code, hermes \(got "codex"\)/,
+                 bad.(->(r) { r["launchers"][0]["kind"] = "codex" }))
+    hermes = ->(args) { ->(r) { r["launchers"][0].merge!("kind" => "hermes", "args" => args) } }
+    assert_match(/must not set -q: Launch sets -m \(the agent type's model\) and -q \(the prompt\)/,
+                 bad.(hermes.(["chat", "-q", "x"])))
+    assert_match(/must not set -m/, bad.(hermes.(["chat", "-m", "x"])))
+    assert_match(/must not set --query-file/, bad.(hermes.(["chat", "--query-file", "f"])))
+    # argparse reads a single-dash flag glued to its value (`-mfoo` = `-m foo`): refused as well
+    assert_match(/must not set -mqwen/, bad.(hermes.(["chat", "-mqwen"])))
+    assert_match(/must not set -qhi/, bad.(hermes.(["chat", "-qhi"])))
+    assert_match(/must not set --model=x/, bad.(hermes.(["chat", "--model=x"])))
     assert_match(/launchers\[fullclaude\].command must match/, bad.(->(r) { r["launchers"][0]["command"] = "" }))
     assert_match(/launchers\[fullclaude\].command must match/,
                  bad.(->(r) { r["launchers"][0]["command"] = "claude; rm -rf /" }))
@@ -135,8 +152,8 @@ class HostConfigTest < Minitest::Test
     assert_match(/agent_types\[lead\].launchers must be a non-empty list of launcher keys \(fullclaude\)/,
                  bad.(->(r) { r["launchers"].pop }))
     assert_equal %w[fullclaude localclaude], coding.launcher_keys
-    assert_equal ["claude", ["--permission-mode", "bypassPermissions"], false],
-                 coding.launcher("fullclaude").then { |l| [l.command, l.args, l.via_shell] }
+    assert_equal ["claude_code", "claude", ["--permission-mode", "bypassPermissions"], false],
+                 coding.launcher("fullclaude").then { |l| [l.kind, l.command, l.args, l.via_shell] }
     # no default launcher: none named is refused with the keys
     assert_match(/launcher is required \(fullclaude, localclaude\)/,
                  assert_raises(AgentsKanban::Invalid) { coding.launcher(nil) }.message)
@@ -230,7 +247,7 @@ class HostConfigTest < Minitest::Test
   def test_launch_builds_the_argv_for_every_type_with_remote_control_LAST
     with = lambda do |launcher, model: nil|
       r = raw
-      r["launchers"] = [{ "key" => "k", "label" => "k" }.merge(launcher)]
+      r["launchers"] = [{ "key" => "k", "label" => "k", "kind" => "claude_code" }.merge(launcher)]
       r["agent_types"] = [{
         "key" => "t", "label" => "T", "launchers" => ["k"], "model" => model, "prompt" => nil,
         "agent_name" => "a-{session}", "session_name" => "{slug}", "takes" => [], "max" => nil, "max_per_project" => nil,
@@ -276,6 +293,42 @@ class HostConfigTest < Minitest::Test
         end
       end
     end
+    # the prompt: claude_code positional, before the --remote-control pair
+    assert_equal ["claude", "--permission-mode", "bypassPermissions", "go on", "--remote-control", "tl_g_r"],
+                 l.argv(with.(claude), type: "t", session: "tl_g_r", prompt: "go on")
+    assert_raises(AgentsKanban::Invalid) { l.argv(with.(claude), type: "t", session: "s", prompt: 1) }
+    # a prompt is ONE argv word: starting with "-" it would be an option (`--settings={"hooks":…}`) — refused, rendered
+    # (a {placeholder} value) and in the config
+    %w[--settings={} -p --mcp-config=x].each do |pr|
+      e = assert_raises(AgentsKanban::Invalid) { l.argv(with.(claude), type: "t", session: "s", prompt: pr) }
+      assert_match(/prompt must not start with "-"/, e.message)
+    end
+    assert_equal "x --settings", l.argv(with.(claude), type: "t", session: "s", prompt: "x --settings")[-3]
+    r = raw
+    r["agent_types"][0]["prompt"] = "--settings={\"hooks\":{}} {slug}"
+    assert_match(/agent_types\[lead\].prompt must not start with "-"/, assert_raises(E) { C.new(r) }.message)
+  end
+
+  # kind hermes (Hermes Agent): `-m <model>`, `-q <prompt>` (seeds the interactive session), no remote control
+  def test_a_hermes_launcher_passes_model_and_prompt_its_own_way_and_has_no_remote_control
+    r = raw
+    r["launchers"] << { "key" => "hermes", "label" => "hermes", "kind" => "hermes", "command" => "hermes",
+                        "args" => ["chat"], "via_shell" => false, }
+    plain = r["agent_types"].find { |t| t["key"] == "plain" }
+    plain["launchers"] += %w[hermes]
+    plain["model"] = { "fullclaude" => nil, "localclaude" => nil, "hermes" => "qwen3" }
+    cfg = C.new(r)
+    l = AgentsKanban::Launch
+    argv = l.argv(cfg, type: "plain", launcher: "hermes", session: "s1", prompt: "hi {there}")
+    assert_equal ["hermes", "chat", "-m", "qwen3", "-q", "hi {there}"], argv
+    refute_includes argv, "--remote-control"
+    assert_equal %w[hermes chat -m qwen3], l.argv(cfg, type: "plain", launcher: "hermes", session: "s1")
+    assert_raises(AgentsKanban::Invalid) { l.argv(cfg, type: "plain", launcher: "hermes", session: "s1", extra: ["-q", "x"]) }
+    assert_raises(AgentsKanban::Invalid) { l.argv(cfg, type: "plain", launcher: "hermes", session: "s1", extra: ["-qx"]) }
+    refute l.kind(cfg, "hermes").remote_control?
+    assert l.kind(cfg, "fullclaude").remote_control?
+    plan = l.plan(cfg, type: "plain", launcher: "hermes", session: "s1", slug: "g/r")
+    assert_equal ["hermes", false], plan.values_at(:kind, :remote_control)
   end
 
   # The plan a host starts a session from, and the template rendering that never lets a {placeholder} through.

@@ -21,7 +21,9 @@ module AgentsKanban
   #   system_author             signs the engine's own activity entries and prefixes its pings ("[busyyaks] …")
   #   attachment_url_prefix     the host's route for attachment bytes: "<prefix>/<id>" views, "<prefix>/<id>/download"
   #                             downloads
-  #   launchers                 [{key, label, command, args, via_shell}]: the COMMANDS that start an agent session (Launch)
+  #   launchers                 [{key, label, kind, command, args, via_shell}]: the COMMANDS that start an agent session
+  #                             (Launch); kind = the CLI family the command is (Launch::KINDS: claude_code, hermes), which
+  #                             decides how the model, the prompt and the session name reach it
   #   agent_types               [{key, label, launchers, model, prompt, agent_name, session_name, takes, max, max_per_project,
   #                             spawns_for?, launcher_follows?, spawn_launcher?}]: WHAT is launched. A start that names no
   #                             launcher (a spawn with no session to follow, kanban_register without one) runs the type's
@@ -62,10 +64,10 @@ module AgentsKanban
     # rule: an ALLOWLIST of characters (no ; { } < [ ] \\ !), no /* comment, quotes in pairs,
     # parentheses balanced. Enough for every real token: colours, rgba()/var()/calc()/blur(), shadows, font lists.
     THEME_VALUE = %r{\A[A-Za-z0-9\s#%.,()/+*"'_-]+\z}
-    LAUNCHER_KEYS = %w[key label command args via_shell].freeze
+    LAUNCHER_KEYS = %w[key label kind command args via_shell].freeze
     LAUNCHER_KEY = /\A[a-z][a-z0-9_-]{0,39}\z/
     LAUNCHER_COMMAND = /\A[A-Za-z0-9_][A-Za-z0-9_.\/-]{0,200}\z/
-    Launcher = Struct.new(:key, :label, :command, :args, :via_shell, keyword_init: true)
+    Launcher = Struct.new(:key, :label, :kind, :command, :args, :via_shell, keyword_init: true)
     AGENT_TYPE_KEYS = %w[key label launchers model prompt agent_name session_name takes max max_per_project].freeze
     OPTIONAL_AGENT_TYPE_KEYS = %w[spawns_for launcher_follows spawn_launcher].freeze
     AgentType = Struct.new(:key, :label, :launchers, :model, :prompt, :agent_name, :session_name, :takes, :max,
@@ -360,7 +362,7 @@ module AgentsKanban
     end
 
     def parse_launchers(v)
-      raise ConfigError, "launchers must be a non-empty list of {key, label, command, args, via_shell}" \
+      raise ConfigError, "launchers must be a non-empty list of {key, label, kind, command, args, via_shell}" \
         unless v.is_a?(Array) && v.any?
 
       list = v.map { |l| parse_launcher(l) }
@@ -380,13 +382,14 @@ module AgentsKanban
       args = v["args"]
       raise ConfigError, "#{where}.args must be a list of strings" \
         unless args.is_a?(Array) && args.all? { |x| x.is_a?(String) && !x.empty? }
-      raise ConfigError, "#{where}.args must not set --remote-control: Launch names it after the session" \
-        if args.any? { |x| x.start_with?("--remote-control") }
-      raise ConfigError, "#{where}.args must not set --model: the agent type's `model` does" \
-        if args.any? { |x| x.start_with?("--model") }
+      kind = Launch::KINDS[v["kind"]]
+      raise ConfigError, "#{where}.kind must be one of #{Launch::KINDS.keys.join(', ')} (got #{v['kind'].inspect})" if kind.nil?
 
-      Launcher.new(key: v["key"], label: str!(v["label"], "#{where}.label"), command: v["command"], args: args.dup.freeze,
-                   via_shell: bool!(v["via_shell"], "#{where}.via_shell")).freeze
+      reserved = args.find { |x| kind.reserved?(x) }
+      raise ConfigError, "#{where}.args must not set #{reserved}: #{kind.reserved_why}" if reserved
+
+      Launcher.new(key: v["key"], label: str!(v["label"], "#{where}.label"), kind: v["kind"], command: v["command"],
+                   args: args.dup.freeze, via_shell: bool!(v["via_shell"], "#{where}.via_shell")).freeze
     end
 
     def parse_agent_types(v)
@@ -451,6 +454,8 @@ module AgentsKanban
       raise ConfigError, "#{where}.spawn_launcher must be one of #{where}.launchers (#{ls.join(', ')}) or null" \
         unless spawn.nil? || ls.include?(spawn)
       raise ConfigError, "#{where}.prompt must be a string or null" unless v["prompt"].nil? || v["prompt"].is_a?(String)
+      # the prompt is ONE argv word: one starting with "-" would be read as an option (a `--settings` with hooks)
+      raise ConfigError, "#{where}.prompt must not start with \"-\": #{Launch::PROMPT_DASH}" if v["prompt"]&.start_with?("-")
       placeholders!(v["prompt"], PROMPT_VARS, "#{where}.prompt") if v["prompt"]
       name = str!(v["agent_name"], "#{where}.agent_name")
       placeholders!(name, AGENT_NAME_VARS, "#{where}.agent_name")
