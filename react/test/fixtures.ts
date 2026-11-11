@@ -226,12 +226,13 @@ export function boardData(f: Fixture, cards: Card[], theme: Record<string, strin
     waiting_columns: f.board.rules.waiting,
     listened_columns: f.board.rules.listened,
     waiting: cards.filter(
-      (c) => (f.board.rules.waiting.includes(c.column) && !c.gate_hold) || c.needs_operator || !!c.blocked,
+      (c) => (f.board.rules.waiting.includes(c.column) && !c.gate_hold && !c.blocked) || c.needs_operator,
     ).length,
     held: cards.filter(
       (c) => f.board.rules.waiting.includes(c.column) && !!c.gate_hold && !c.needs_operator && !c.blocked,
     ).length,
-    flagged: cards.filter((c) => !f.board.rules.waiting.includes(c.column) && (c.needs_operator || !!c.blocked)).length,
+    external: cards.filter((c) => !!c.blocked && !c.needs_operator).length,
+    flagged: cards.filter((c) => !f.board.rules.waiting.includes(c.column) && c.needs_operator).length,
     priorities: cfg.priorities,
     assignees: ["me"],
     live_sessions: [],

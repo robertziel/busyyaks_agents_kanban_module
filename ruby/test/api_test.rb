@@ -127,21 +127,36 @@ class ApiTest < Minitest::Test
     assert_equal r1, @api.waiting_rev(@projects.values)[1][:rev], "time passing changes nothing (the client ages)"
     kb.move(hc, column: "ready", by: "operator@example.com")
     refute_equal r1, @api.waiting_rev(@projects.values)[1][:rev]
-    # a blocked card waits too, with its reason; a flagged card in a gate counts once
+    # a card blocked on the world (another card, CI, a third party) waits for no operator: it is
+    # listed aside in `external` with its reason, in any column — a gate card too; a flagged card in a gate counts once
     bl = kb.create(slug: "g/r", title: "blocked", by: "op", column: "doing")
     kb.block(bl, reason: "CI is down", url: "https://ci/status", by: "claude-tl_g_r")
+    gb = kb.create(slug: "g/r", title: "gate, blocked", by: "op", column: "human_check")
+    kb.block(gb, reason: "waits for card #9", url: "https://ci/9", by: "claude-tl_g_r")
     kb.set_owner(hc, session: "tl_g_r", by: "op")
     kb.ask(hc, question: "Merge now?", by: "claude-tl_g_r")
     _, w = @api.waiting(@projects.values)
     g = w[:projects].first
-    assert_equal [4, [q, bl, hc]], [w[:total], g[:cards].map { |c| c[:id] }.first(3)],
+    assert_equal [3, [q, hc]], [w[:total], g[:cards].map { |c| c[:id] }],
                  "flagged first, longest flagged first (hc's since = when it was asked, not when it entered the gate)"
-    b = g[:cards].find { |c| c[:id] == bl }
-    assert_equal [true, "CI is down", nil], b.values_at(:blocked, :blocked_first_line, :question_first_line)
+    assert_equal [["g/r", 2, [bl, gb]]], w[:external].map { |x| [x[:slug], x[:count], x[:cards].map { |c| c[:id] }] }
+    b = w[:external].first[:cards].first
+    assert_equal [true, "CI is down", nil, Time.at(@now).iso8601],
+                 b.values_at(:blocked, :blocked_first_line, :question_first_line, :since)
     _, bs = @api.boards(@projects.values)
     row = bs[:boards].find { |x| x[:project] == "g/r" }
-    assert_equal [3, 2], row.values_at(:waiting, :flagged), "two gate cards (one also flagged) + one flagged elsewhere"
-    assert_equal [3, 2], @api.board("g/r")[1].values_at(:waiting, :flagged)
+    assert_equal [2, 1, 2], row.values_at(:waiting, :flagged, :external),
+                 "the asked gate card + the one asking elsewhere; both blocked ones aside"
+    assert_equal [3, 2], bs.values_at(:waiting, :external)
+    assert_equal [2, 1, 2], @api.board("g/r")[1].values_at(:waiting, :flagged, :external)
+    assert_equal row.values_at(:waiting, :held, :external), @api.board("g/r")[1].values_at(:waiting, :held, :external),
+                 "the board header and the boards list count from one definition (Store#waiting_counts)"
+    # a blocked card that also asks waits for the operator: the question does
+    kb.set_owner(bl, session: "tl_g_r", by: "op")
+    kb.ask(bl, question: "Unblock it?", by: "claude-tl_g_r")
+    _, w = @api.waiting(@projects.values)
+    assert_equal [4, [["g/r", 1]]], [w[:total], w[:external].map { |x| [x[:slug], x[:count]] }]
+    assert_equal [3, 2, 1], @api.board("g/r")[1].values_at(:waiting, :flagged, :external)
   end
 
   def test_waiting_puts_a_project_with_a_question_first_whatever_its_count

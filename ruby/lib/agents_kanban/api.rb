@@ -52,9 +52,10 @@ module AgentsKanban
     # ── reading ───────────────────────────────────────────────────────────────────────────────────
 
     # Every board with live cards (or a Backlog.md dir): {columns, columns_order, waiting_columns (the TEMPLATE board's),
-    # waiting, boards: [{project, columns, columns_order, waiting_columns, counts, total, waiting (the waiting columns'
-    # cards + the flagged cards elsewhere), flagged, backlog_md}]} — each board carries its own columns (a project's
-    # board may differ from the template's).
+    # waiting, held, external, boards: [{project, columns, columns_order, waiting_columns, counts, total, waiting (the
+    # waiting columns' cards + the needs_operator cards elsewhere; never a held or an only-blocked_external one), held,
+    # external, flagged, backlog_md}]} — each board carries its own columns (a project's board may differ from the
+    # template's).
     def boards(projects)
       refusing do
         with_cards = @store.cards
@@ -72,20 +73,22 @@ module AgentsKanban
           c = counts[p[:slug]] || b.keys.to_h { |k| [k, 0] }
           { project: p[:slug], columns: columns_json(b), columns_order: b.keys, waiting_columns: b.waiting,
             counts: c, total: c.values.sum, waiting: waits.waiting[p[:slug]], held: waits.held[p[:slug]],
-            flagged: flagged[p[:slug]] || 0, backlog_md: bm, }
+            external: waits.external[p[:slug]], flagged: flagged[p[:slug]] || 0, backlog_md: bm, }
         end
         tpl = boards[Board::TEMPLATE]
         [200, { columns: columns_json(tpl), columns_order: tpl.keys, waiting_columns: tpl.waiting,
-                waiting: rows.sum { |b| b[:waiting] }, held: rows.sum { |b| b[:held] }, boards: rows.sort_by { |b|
+                waiting: rows.sum { |b| b[:waiting] }, held: rows.sum { |b| b[:held] },
+                external: rows.sum { |b| b[:external] }, boards: rows.sort_by { |b|
  [-b[:total], b[:project]] }, },]
       end
     end
 
-    # The cards waiting for the operator — FLAGGED cards (needs_operator: a question; blocked_external) in any column
-    # and the cards in each board's WAITING columns (a gate: a handoff to check) — on every board the host lists, live
-    # cards only: {waiting_columns (the template's), total, projects: [{slug, count, waiting_columns, cards: [{id,
-    # title, column, column_label, since, needs_operator, blocked, question_first_line, blocked_first_line,
-    # handoff_first_line}]}]} — projects with a question first, then most-waiting, cards longest waiting first.
+    # The cards waiting for the operator — cards flagged needs_operator (a question) in any column and the cards in
+    # each board's WAITING columns (a gate: a handoff to check) — on every board the host lists, live cards only:
+    # {waiting_columns (the template's), total, projects: [{slug, count, waiting_columns, cards: [{id, title, column,
+    # column_label, since, needs_operator, blocked, question_first_line, blocked_first_line, handoff_first_line}]}]} —
+    # projects with a question first, then most-waiting, cards longest waiting first. Aside, never in total: `held` (gate
+    # cards waiting for CI) and `external` (cards only blocked_external: waiting for the world), [{slug, count, cards}].
     # since = when the flag was set, else when the card entered the column; nil when the log does not say. No clock
     # in the body: the rev changes only when the content does.
     def waiting(projects)
@@ -102,9 +105,12 @@ module AgentsKanban
           asks = g[:cards].any? { |c| c[:needs_operator] }
           [asks ? 0 : 1, -g[:count], g[:slug]]
         end
-        held = w.held.map { |slug, cs| { slug: slug, count: cs.size, cards: cs.map { |c| waiting_card(c, boards[slug]) } } }
+        aside = lambda do |by|
+          by.map { |slug, cs| { slug: slug, count: cs.size, cards: cs.map { |c| waiting_card(c, boards[slug]) } } }
+            .sort_by { |g| [-g[:count], g[:slug]] }
+        end
         [200, { waiting_columns: boards[Board::TEMPLATE].waiting, total: by_slug.values.sum(&:size), projects: sorted,
-                held: held.sort_by { |g| [-g[:count], g[:slug]] }, launch_failures: @store.launch_failures(slugs), },]
+                held: aside.call(w.held), external: aside.call(w.external), launch_failures: @store.launch_failures(slugs), },]
       end
     end
 
@@ -119,11 +125,11 @@ module AgentsKanban
         b = @store.board_of(p[:slug])
         body = board_json(p, column: column, archived: archived, board: b)
         flagged = @store.flagged_counts([p[:slug]], boards: { p[:slug] => b })[p[:slug]] || 0
-        gated = body[:columns].select { |col| b.waiting.include?(col[:column]) }.flat_map { |col| col[:cards] }
-        held = gated.count { |c| c[:gate_hold] && !c[:needs_operator] && !c[:blocked] } # waiting for CI, not for you
-        waiting = gated.size - held + flagged
+        # the same counts as Api#boards (Store#waiting_counts: one definition of waiting / held / external)
+        w = @store.waiting_counts([p[:slug]], boards: { p[:slug] => b })
         [200, body.merge(columns_order: b.keys, waiting_columns: b.waiting, listened_columns: b.listened,
-                         waiting: waiting, held: held, flagged: flagged,
+                         waiting: w.waiting[p[:slug]], held: w.held[p[:slug]], external: w.external[p[:slug]],
+                         flagged: flagged,
                          priorities: @config.priorities, label_colors: @config.label_colors,
                          **@board_extras.call(p)),]
       end

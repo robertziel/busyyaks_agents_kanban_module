@@ -185,6 +185,21 @@ describe("Board", () => {
     expect(screen.getByText("⏳ PR #7: CI is still running")).toBeInTheDocument();
   });
 
+  // a card blocked on the world (another card, CI, a third party) is not waiting for the operator
+  it("a blocked_external card is counted as blocked externally, not as waiting for you", async () => {
+    const blocked = { reason: "waits for card #3", url: "https://ci/1", by: "lead", at: "2026-11-11T00:00:00Z" };
+    const cards = [
+      card({ id: 1, column: "human_check", title: "Green" }),
+      card({ id: 2, column: "doing", title: "Held back", blocked }),
+      card({ id: 3, column: "human_check", title: "Gate, blocked", blocked }),
+    ];
+    const api = fakeApi(boardData(coding, cards), cards);
+    render(<Host api={api} />);
+    await screen.findByText("Held back");
+    expect(screen.getByText(/waiting for you/).textContent).toMatch(/^1 waiting for you/);
+    expect(screen.getByText(/blocked externally$/).textContent).toBe("2 blocked externally");
+  });
+
   it("draws the configured columns, the theme tokens and a card's badges", async () => {
     const cards = [
       card({ id: 1, column: "todo" }),
@@ -261,7 +276,8 @@ describe("Board", () => {
     await screen.findByText("Round two");
     expect(screen.getByText("⛔ blocked: Jenkins is offline")).toBeInTheDocument();
     expect(screen.getByText("round 2/3")).toBeInTheDocument();
-    expect(screen.getByText(/waiting for you/).textContent).toMatch(/^1 waiting for you/);
+    expect(screen.getByText(/waiting for you/).textContent).toMatch(/^0 waiting for you/); // the world, not you
+    expect(screen.getByText(/blocked externally$/).textContent).toBe("1 blocked externally");
     const sec = await screen.findByRole("region", { name: "Blocked (external)" });
     expect(within(sec).getByText("Jenkins is offline")).toBeInTheDocument();
     expect(within(sec).getByRole("link")).toHaveAttribute("href", "https://ci.example/job/1");
