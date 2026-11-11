@@ -233,6 +233,36 @@ describe("Board", () => {
     expect(screen.getByText(/waiting for you/).textContent).toMatch(/^1 waiting for you/);
   });
 
+  it("card markdown: a link to another server opens in a new tab, a link on this site or an unparseable one stays in this tab", async () => {
+    const here = window.location.origin;
+    const cards = [
+      card({
+        id: 2,
+        column: "qa",
+        needs_operator: true,
+        question: "links",
+        question_html:
+          `<p><a href="https://github.com/o/r/pull/5">pr</a> <a href="${here}/projects/g/r?card=3">abs</a> ` +
+          `<a href="/projects/g/r?tab=board&amp;card=3">rel</a> <a href="#a-9">jump</a> ` +
+          `<a href="mailto:x@y.z">mail</a> <a href="https://ci.example/1" rel="nofollow">ci</a> ` +
+          `<a href="http://[">broken</a></p>`,
+        asked_by: "lead",
+        asked: "2026-11-09T10:00:00Z",
+        owner_session: "s1",
+      }),
+    ];
+    const api = fakeApi(boardData(coding, cards), cards);
+    render(<Host api={api} view={{ card: 2, panel: null, archived: false }} />);
+    const q = await screen.findByRole("region", { name: "Question for you" });
+    const at = (name: string) => {
+      const a = within(q).getByRole("link", { name });
+      return [a.getAttribute("target"), a.getAttribute("rel")];
+    };
+    expect(at("pr")).toEqual(["_blank", "noopener"]);
+    expect(at("ci")).toEqual(["_blank", "nofollow noopener"]);
+    for (const same of ["abs", "rel", "jump", "mail", "broken"]) expect(at(same)).toEqual([null, null]);
+  });
+
   it("a flagged card shows its question box in its own column; the answer stays there", async () => {
     const cards = [
       card({
