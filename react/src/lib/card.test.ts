@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityAnchor, activityAnchorId, jumpNeedsDetails, splitCard, TITLE_MAX } from "./card";
+import { activityAnchor, activityAnchorId, cardFaceClass, jumpNeedsDetails, splitCard, TITLE_MAX } from "./card";
 
 describe("splitCard", () => {
   it("keeps a short line as the title", () => {
@@ -47,5 +47,22 @@ describe("activity anchors", () => {
     expect(jumpNeedsDetails(act, 117, false)).toBe(true);
     expect(jumpNeedsDetails(act, 117, true)).toBe(false);
     expect(jumpNeedsDetails(act, 999, false)).toBeNull();
+  });
+});
+
+describe("cardFaceClass", () => {
+  const idle = { dragging: false, busy: false };
+  it("highlights a card only when the server says it waits for the operator", () => {
+    expect(cardFaceClass({ id: 1, waiting: true }, idle)).toBe("kb-card needs-you");
+    expect(cardFaceClass({ id: 1, waiting: false }, idle)).toBe("kb-card");
+  });
+  it("throws on an undecorated card instead of reading it as not waiting", () => {
+    expect(() => cardFaceClass({ id: 7, waiting: null }, idle)).toThrow("card 7: no waiting on its face");
+    expect(() => cardFaceClass({ id: 8 }, idle)).toThrow("card 8: no waiting on its face");
+  });
+  it("keeps the other states", () => {
+    expect(cardFaceClass({ id: 1, waiting: true, cover: "red" }, { dragging: true, busy: true })).toBe(
+      "kb-card dragging busy has-cover needs-you",
+    );
   });
 });

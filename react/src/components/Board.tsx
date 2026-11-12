@@ -39,7 +39,7 @@ import {
   type Order,
 } from "../lib/board";
 import { edgeBands, edgeScroller, glideTo, nearestStart, type EdgeBands } from "../lib/autoscroll";
-import { splitCard } from "../lib/card";
+import { cardFaceClass, splitCard } from "../lib/card";
 import { useFetch } from "../lib/fetch";
 import { isoAgo, isoAt } from "../lib/format";
 import { noListener } from "../lib/listen";
@@ -931,12 +931,12 @@ function CardItem({
     <>
       {ghostBefore && <li className="kb-ghost" aria-hidden="true" />}
       <li
-        className={`kb-card${dragging ? " dragging" : ""}${busy ? " busy" : ""}${c.cover ? " has-cover" : ""}`}
+        className={cardFaceClass(c, { dragging, busy })}
         draggable
         tabIndex={0}
         data-id={c.id}
         data-col={c.column}
-        aria-label={`${c.title} — #${c.id}`}
+        aria-label={`${c.title} — #${c.id}${c.waiting ? " — needs you" : ""}`}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
         onMouseEnter={() => onHover(true)}
@@ -964,6 +964,11 @@ function CardItem({
         )}
         <span className="kb-title">{c.title}</span>
         <div className="kb-badges">
+          {c.waiting && (
+            <span className="kb-needsyou" title="waits for you now: counted in “waiting for you”">
+              needs you
+            </span>
+          )}
           {c.needs_operator && (
             <span
               className="kb-asked"

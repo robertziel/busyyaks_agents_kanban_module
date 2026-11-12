@@ -51,3 +51,22 @@ export function jumpNeedsDetails(
   if (!e) return null;
   return !details && !SPOKEN.has(e.kind);
 }
+
+// A card face's classes: `needs-you` (the red highlight) exactly when the server says the card waits for the operator
+// now (Card.waiting — the rule the "N waiting for you" count uses; the client never re-derives it). Every card the board
+// shows is decorated, so a face without a boolean `waiting` is a server bug: it throws, never reads as "not waiting".
+export function cardFaceClass(
+  c: { id: number; waiting?: boolean | null; cover?: string | null },
+  s: { dragging: boolean; busy: boolean },
+): string {
+  if (typeof c.waiting !== "boolean") throw new Error(`card ${c.id}: no waiting on its face (an undecorated card)`);
+  return [
+    "kb-card",
+    s.dragging && "dragging",
+    s.busy && "busy",
+    c.cover && "has-cover",
+    c.waiting === true && "needs-you",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}

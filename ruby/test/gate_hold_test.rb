@@ -151,5 +151,30 @@ class GateHoldTest < Minitest::Test
     @n.watch
     @m.ask(@id, question: "merge order?", by: "claude-shop-lead")
     assert_equal [1, 0, 1, 0, 1], counts
+    assert_equal "PR #7: CI is still running", gate_card[:gate_hold], "the hold is still computed …"
+    assert_equal true, gate_card[:waiting], "… but a question open waits for the operator"
+    @m.block(@id, reason: "upstream outage", url: "https://status.example.com", by: "claude-shop-lead")
+    assert_equal true, gate_card[:waiting], "asked + blocked_external: the question still waits"
+    assert_equal [1, 0, 1, 0, 1], counts
+  end
+
+  # card JSON `waiting` = the counts' own rule, so the
+  # board highlights exactly the cards "N waiting for you" counts
+  def card_of(id) = board[:columns].flat_map { |c| c[:cards] }.find { |c| c[:id] == id }
+
+  def test_card_waiting_is_the_counts_rule
+    other = @m.create(slug: "p", title: "plain work", by: "me", column: "doing")
+    assert_equal [true, false], [gate_card[:waiting], card_of(other)[:waiting]], "approvable gate card waits; work does not"
+    approval_ci.answer = { number: 7, state: "pending", finished_at: nil }
+    @n.watch
+    assert_equal false, gate_card[:waiting], "held for CI: not waiting for you"
+    @m.set_owner(other, session: "acme_shop", by: "claude-shop-lead")
+    @m.ask(other, question: "which one?", by: "claude-shop-lead")
+    assert_equal true, card_of(other)[:waiting], "a question open: waits wherever it sits"
+    approval_ci.answer = GREEN
+    @n.watch
+    @m.block(@id, reason: "upstream outage", url: "https://status.example.com", by: "claude-shop-lead")
+    assert_equal false, gate_card[:waiting], "only blocked_external: waits for the world"
+    assert_equal board[:waiting], board[:columns].sum { |c| c[:cards].count { |x| x[:waiting] } }, "faces = the count"
   end
 end

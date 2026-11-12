@@ -614,6 +614,28 @@
   outline: 3px solid rgba(var(--ak-accent-rgb), 0.5);
   outline-offset: 1px;
 }
+/* waits for the operator now (Card.waiting): a red frame + tint, so it stands out on the board, not only in a list */
+.ak-root .kb-card.needs-you {
+  background: color-mix(in srgb, var(--ak-vivid-red) 9%, var(--ak-panel));
+  border-left-color: var(--ak-vivid-red);
+  box-shadow:
+    var(--ak-shadow-card),
+    inset 0 0 0 1.5px color-mix(in srgb, var(--ak-vivid-red) 70%, transparent);
+}
+.ak-root .kb-card.needs-you:hover {
+  box-shadow:
+    var(--ak-shadow-card),
+    inset 0 0 0 1.5px var(--ak-vivid-red);
+}
+.ak-root .kb-needsyou {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 0 0.45rem;
+  border-radius: var(--ak-radius-pill);
+  color: #fff;
+  /* the vivid red darkened: white 11px bold on it is >= 5.6:1 in both skins (WCAG AA 4.5:1; plain vivid red is 3.4-3.6:1) */
+  background: color-mix(in srgb, var(--ak-vivid-red) 75%, #000);
+}
 .ak-root .kb-card.dragging {
   opacity: 0.4;
 }

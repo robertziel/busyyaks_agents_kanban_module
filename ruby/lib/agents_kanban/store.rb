@@ -207,6 +207,10 @@ module AgentsKanban
     # waiting for the operator, so no "waiting for you" count holds it (a card that also asks does: the question waits)
     def external?(c) = c[:asked_at].nil? && !c[:blocked_at].nil?
     def flag_since(c) = [c[:asked_at], c[:blocked_at]].compact.min
+    # The one rule of "waiting for the operator" for a card (its face, the counts): a question open on it wherever it
+    # sits, or it sits in a WAITING column (a gate) with nothing held (hold = Store#gate_hold's why, nil = approvable
+    # now) and is not only blocked_external (that waits for the world).
+    def waits_for_operator?(c, b, hold) = needs_operator?(c) || (!external?(c) && hold.nil? && b.waiting.include?(c[:column]))
 
     # The cards each OPEN registration (agent_sessions, ended_at null) on these projects' boards holds since it registered —
     # the column's type says what each is to the session (`finishes` = in the board's done column: that card is finished).
@@ -274,6 +278,7 @@ module AgentsKanban
             asked: iso(c[:asked_at]), asked_by: c[:asked_by], dialog: c[:dialog],
             needs_operator: !c[:asked_at].nil?,
             gate_hold: c[:gate_hold], # waiting for CI, not for the operator (gate_hold; decorated cards only)
+            waiting: c[:waiting], # waits for the operator now (waits_for_operator?: the counts' rule; decorated cards only)
             blocked: c[:blocked_at] && { reason: c[:blocked_reason], url: c[:blocked_url], by: c[:blocked_author],
                                          at: iso(c[:blocked_at]), },
             review_round: review_rounds(c)[c[:column]],
@@ -1579,12 +1584,12 @@ module AgentsKanban
       held = Hash.new(0)
       external = Hash.new(0)
       rows.each do |r|
-        if external?(r)
+        if waits_for_operator?(r, boards[r[:project_slug]], holds[r[:id]])
+          waiting[r[:project_slug]] += 1
+        elsif external?(r)
           external[r[:project_slug]] += 1
         elsif holds.key?(r[:id])
           held[r[:project_slug]] += 1
-        elsif flagged?(r) || boards[r[:project_slug]].waiting.include?(r[:column])
-          waiting[r[:project_slug]] += 1
         end
       end
       WaitingCounts.new(waiting, held, external)
@@ -2402,6 +2407,7 @@ module AgentsKanban
       list.each do |c|
         b = boards[c[:project_slug]]
         c[:gate_hold] = holds[c[:id]]
+        c[:waiting] = waits_for_operator?(c, b, c[:gate_hold])
         c[:transitions] = b.column?(c[:column]) ? transitions_json(b, c[:column]) : []
         c[:comments] = n[c[:id]] || 0
         c[:attachments] = files[c[:id]] || 0

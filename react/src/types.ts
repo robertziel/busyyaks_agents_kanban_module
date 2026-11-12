@@ -225,6 +225,9 @@ export type Card = {
   // in an approval gate: why its Approve would not pass now ("PR #7: CI is still running") — waiting for CI, not for
   // the operator; null = approvable now (or no such gate)
   gate_hold?: string | null;
+  // waits for the operator NOW (the server's one rule, the same the "N waiting for you" count uses): a question open on
+  // it, or in a gate and approvable now — the card face is highlighted
+  waiting: boolean | null; // required: a Card built without it fails tsc (null = not decorated: no highlight)
   question?: string | null;
   question_html?: string | null;
   question_options?: string[] | null;
