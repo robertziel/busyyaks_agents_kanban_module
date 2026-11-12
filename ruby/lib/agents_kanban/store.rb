@@ -37,6 +37,8 @@ module AgentsKanban
     DUE = /\A(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)(?::(\d\d))?(Z|[+-]\d\d:?\d\d)?\z/
     SESSION = /\A[A-Za-z0-9._-]{1,100}\z/
     PING_BODY = 1500
+    DRAGGED_NOTE = "It was dragged: CI was not asked — read the PR's checks first."
+    CI_NOT_ASKED = "ci-not-asked" # the approve ping's marker: a drag approved the step, the green-CI gate was not asked
     URL_RE = %r{\Ahttps?://[^\s<>"]{3,2000}\z}
     DIALOG_REASK = 120 # an answered dialog still on screen this long after the key press is not re-posted
     FIELDS = %i[title notes labels assignee priority due due_done cover parent metadata].freeze
@@ -408,16 +410,22 @@ module AgentsKanban
 
     # To column at position (0-based; nil or past the end = last). Both columns are renumbered.
     # `transition:` names a workflow edge out of the card's column instead of a target column (Jira's "Start work").
-    def move(id, column: nil, by:, position: nil, agent: false, handoff: false, transition: nil)
+    # The green-CI gate (approval.requires_green_ci) is asked only by an explicit approval: Store#approve (the Approve
+    # button) or the step's own named transition ("Approve"). Any other operator move along the step — a drag, the
+    # catch-all edge — is never refused by it: it still approves, and its activity line says CI was not asked.
+    # `withdraw:` = Store#unapprove's move back to the step's gate: the operator's undo needs no edge in the workflow.
+    def move(id, column: nil, by:, position: nil, agent: false, handoff: false, transition: nil, approval: false,
+             withdraw: false)
       c = card!(id)
+      named = !transition.to_s.strip.empty?
       raise Invalid, "card #{id} is archived" if c[:archived_at]
 
       b = board_of(c[:project_slug])
-      column = transition_target!(b, c, column, transition, agent) unless transition.to_s.strip.empty?
+      column = transition_target!(b, c, column, transition, agent) if named
       raise Invalid, "column or transition is required" if column.nil? || column.to_s.empty?
 
       column = column!(b, column)
-      move_check!(b, c, column, agent: agent, handoff: handoff)
+      move_check!(b, c, column, agent: agent, handoff: handoff, withdraw: withdraw)
       by = who!(by)
       pos = position.nil? || position.to_s.empty? ? nil : Integer(position, exception: false)
       if !position.nil? && !position.to_s.empty? && (pos.nil? || pos.negative?)
@@ -425,12 +433,13 @@ module AgentsKanban
       end
 
       step = !agent && b.approval_for(c[:column], column)
-      green_ci!(c, b, step) if step && c[:column] != column
-      rounds = c[:column] != column ? review_rounds_after(b, c, column) : nil
+      checked = step && c[:column] != column && (approval || (named && transition.to_s.strip.casecmp?(step.name)))
+      green_ci!(c, b, step) if checked
+      rounds = c[:column] != column ? review_rounds_after(b, c, column, agent) : nil
       @db.transaction do
         place(c, column, pos)
         if c[:column] != column
-          log(c[:id], "move", "#{b.label(c[:column])} → #{b.label(column)}", by)
+          log(c[:id], "move", "#{b.label(c[:column])} → #{b.label(column)}#{' (approval withdrawn)' if withdraw}", by)
           cards.where(id: c[:id]).update(review_rounds: JSON.generate(rounds)) if rounds != review_rounds(c)
           # the gate's head / last view belong to the handoff that brought the card in: any other move ends them (a
           # drag into another gate starts with nothing recorded — its hold is read live)
@@ -439,8 +448,12 @@ module AgentsKanban
             # the operator moving a card from an approval step's gate into its target IS that approval (any other move
             # into it — from elsewhere, by a catch-all edge — is a plain move: nobody is pinged to carry on)
             cards.where(id: c[:id]).update(approved_at: @clock.call, approved_by: by)
-            log(c[:id], "approve", approval_note(b, step), by)
-            enqueue_ping(c, "approve", by, step.from)
+            note = approval_note(b, step)
+            unasked = @config.green_ci_gate? && !checked
+            note += " (dragged: CI not asked)" if unasked
+            log(c[:id], "approve", note, by)
+            # the ping says it too: the owner carries on from it (a final step merges) and must read CI itself
+            enqueue_ping(c, "approve", by, unasked ? "#{step.from} #{CI_NOT_ASKED}" : step.from)
           else
             # leaving the approved column for anywhere but a terminal one (history) withdraws the approval
             cards.where(id: c[:id]).update(approved_at: nil, approved_by: nil) if c[:approved_at] && !b.terminal?(column)
@@ -716,25 +729,49 @@ module AgentsKanban
       raise Invalid, "this board has no approval step (no gate with a single forward operator exit)" if b.approvals.empty?
 
       step = b.approval_from(c[:column])
-      unless step
+      return move(id, column: step.to, by: by, approval: true) if step
+
+      into = b.gate?(c[:column]) ? b.approval_into(c[:column]) : nil
+      unless into
         raise Invalid, "only a card in #{b.approvals.map { |a| b.label(a.from) }.join(' or ')} can be approved " \
                        "(card ##{c[:id]} is in #{b.label(c[:column])})"
       end
 
-      move(id, column: step.to, by: by)
+      approve_in_place(c, b, into, by)
+    end
+
+    # A card sitting UNAPPROVED in a gate an approval step leads into (the operator dragged it there from anywhere but
+    # the step's gate — a plain move): agents never leave a gate unapproved, so the operator approves it where it sits.
+    # The same question as the step's Approve (green CI), the same approval, activity line and ping; no move.
+    def approve_in_place(c, b, step, by)
+      raise Invalid, "card ##{c[:id]} is archived" if c[:archived_at]
+      if c[:approved_at]
+        raise Invalid, "card ##{c[:id]} is already approved (by #{c[:approved_by]}) in #{b.label(c[:column])}"
+      end
+
+      by = who!(by)
+      green_ci!(c, b, step)
+      @db.transaction do
+        cards.where(id: c[:id]).update(approved_at: @clock.call, approved_by: by, updated_at: @clock.call)
+        log(c[:id], "approve", "#{approval_note(b, step)} (approved in #{b.label(c[:column])})", by)
+        enqueue_ping(c, "approve", by, step.from)
+      end
+      card(c[:id])
     end
 
     # Back from an approval step's target to the gate it came from: the approval is withdrawn (move clears it). Only
-    # while the card still sits there approved — once its agent moved it on there is nothing to withdraw.
+    # while the card still sits there approved — once its agent moved it on there is nothing to withdraw, and the call
+    # says so. The operator's undo of the operator's own approval: it asks the workflow for no edge back.
     def unapprove(id, by:)
       c = card!(id)
       b = board_of(c[:project_slug])
       raise Invalid, "this board has no approval step (no gate with a single forward operator exit)" if b.approvals.empty?
 
       step = b.approval_into(c[:column])
-      return card(id) unless step && c[:approved_at]
+      raise Invalid, "card ##{c[:id]} is in #{b.label(c[:column])} — no approval to withdraw there" unless step
+      raise Invalid, "card ##{c[:id]} is not approved — nothing to withdraw" unless c[:approved_at]
 
-      move(id, column: step.from, by: by)
+      move(id, column: step.from, by: by, withdraw: true)
     end
 
     # ── owner session: the agent session responsible for a card ──────────────────────────────────
@@ -1301,10 +1338,15 @@ module AgentsKanban
                "is assigned to you — your session takes #{b.label(c[:column])} cards. " \
                "Read it with kanban_card id=#{c[:id]} and start the work."
              when "approve"
-               step = b.approval_from(body)
+               from, how = body.split(" ", 2)
+               step = b.approval_from(from)
+               # dragged along the step: the green-CI gate was not asked, so the owner reads the PR's checks first
+               unasked = how == CI_NOT_ASKED ? " #{DRAGGED_NOTE}" : ""
                if step.final
+                 # dragged: the merge waits for green checks (a red or unread one is not merged)
+                 merge = unasked.empty? ? "Merge it now" : "Merge it once its checks are green (red: do not merge, say so)"
                  "#{tag} #{author} APPROVED card ##{c[:id]} \"#{c[:title]}\" (#{c[:project_slug]}) " \
-                   "— it is in #{b.label(step.to)}. Merge it now, then move the card to #{b.label(step.then)} " \
+                   "— it is in #{b.label(step.to)}.#{unasked} #{merge}, then move the card to #{b.label(step.then)} " \
                    "with kanban_move id=#{c[:id]} column=#{step.then} and post the merge commit/PR with kanban_comment."
                else
                  on = if step.then && b.gate?(step.then)
@@ -1316,8 +1358,11 @@ module AgentsKanban
                       else
                         ""
                       end
+                 # approved where it sat (Store#approve_in_place): nothing moved
+                 went = "it moved #{b.label(step.from)} → #{b.label(step.to)}"
+                 went = "it stays in #{b.label(step.to)}" if c[:column] == step.to
                  "#{tag} #{author} APPROVED card ##{c[:id]} \"#{c[:title]}\" (#{c[:project_slug]}) " \
-                   "— it moved #{b.label(step.from)} → #{b.label(step.to)}. " \
+                   "— #{went}.#{unasked} " \
                    "Do the next step now#{on}, and post what you did with kanban_comment."
                end
              else
@@ -1821,11 +1866,11 @@ module AgentsKanban
 
     # Every rule a column change must pass, in order: the agent gates, the workflow, the parent dependency. One place —
     # move runs it, and ask / handoff run it BEFORE they write their fields (so a refusal leaves nothing behind).
-    def move_check!(b, c, column, agent:, handoff: false)
+    def move_check!(b, c, column, agent:, handoff: false, withdraw: false)
       return if column == c[:column]
 
       agent_move!(b, c, column, handoff: handoff) if agent
-      workflow_check!(b, c, column, agent)
+      workflow_check!(b, c, column, agent) unless withdraw
       blocked!(b, column, c[:blocked_by], "card ##{c[:id]}")
     end
 
@@ -1887,7 +1932,12 @@ module AgentsKanban
         raise Denied, "only the operator moves a card out of #{cfg.label(c[:column])}" unless e && !e.fan_out
         unless c[:approved_at]
           into = cfg.approval_into(c[:column])
-          how = into ? " (approval = the operator's move #{cfg.label(into.from)} → #{cfg.label(into.to)})" : ""
+          how = if into
+                  " (approval = the operator's move #{cfg.label(into.from)} → #{cfg.label(into.to)}, or the " \
+                    "operator's Approve on the card in #{cfg.label(into.to)})"
+                else
+                  ""
+                end
           raise Denied, "card ##{c[:id]} sits in #{cfg.label(c[:column])} without the operator's approval#{how} " \
                         "— agents never skip it; kanban_ask the operator"
         end
@@ -1918,22 +1968,28 @@ module AgentsKanban
     def loop_feeding(b, w) = b.review_columns.find { |k| loop_column?(b, k) && b.agent_targets(k).include?(w) }
 
     # The rounds after a move: entering a loop column from a work column or a gate counts a round for it; the operator
-    # sending a card from a gate back into a loop's work column (Changes requested) allows exactly ONE more round of
-    # that loop (REREVIEW: {loop column => its rounds at that moment}); entering a work column by any other move than a
-    # column's own agent edge into it (Rework from a review column or a gate, Deploy failed, Start work) starts over.
-    def review_rounds_after(b, c, column)
+    # sending a card back into a loop's work column — from a gate (Changes requested), or from the loop column itself
+    # once its rounds are used up (a drag: no gate is reachable from the work column, so the limit would leave the
+    # author no move at all) — allows exactly ONE more round of that loop (REREVIEW: {loop column => its rounds at that
+    # moment}); entering a work column by any other move than a review column's own agent edge into it (Rework from a
+    # review column or a gate, Deploy failed, Start work) starts over.
+    def review_rounds_after(b, c, column, agent)
       r = review_rounds(c)
-      rv = b.working?(column) && b.gate?(c[:column]) ? loop_feeding(b, column) : nil
-      if loop_column?(b, column) && (b.working?(c[:column]) || b.gate?(c[:column]))
+      from = c[:column]
+      feed = b.working?(column) ? loop_feeding(b, column) : nil
+      if loop_column?(b, column) && (b.working?(from) || b.gate?(from))
         r.merge(column => (r[column] || 0) + 1)
-      elsif rv
-        r.merge(REREVIEW => { rv => r[rv] || 0 })
-      elsif b.working?(column) && !b.working?(c[:column]) && !b.agent_targets(c[:column]).include?(column)
-        {} # Rework / Deploy failed / Start work: not the loop's own edge back to its work column
+      elsif feed && (b.gate?(from) || (!agent && from == feed && rounds_used_up?(c, feed)))
+        r.merge(REREVIEW => { feed => r[feed] || 0 })
+      elsif b.working?(column) && !b.working?(from) && !(b.review?(from) && b.agent_targets(from).include?(column))
+        {} # Rework / Deploy failed / Start work: not a review column's own edge back to its work column
       else
         r
       end
     end
+
+    # Has the loop column used up its rounds (round_limit! would refuse the agents' next loop move)?
+    def rounds_used_up?(c, review) = !@config.review_loop.nil? && (review_rounds(c)[review] || 0) >= round_cap(c, review)
 
     # How many rounds the loop column may reach: one more than at the operator's Changes requested, else max_rounds.
     def round_cap(c, review)
@@ -2129,21 +2185,23 @@ module AgentsKanban
       what = handoff ? "not handed off (→ #{b.label(step.from)})" : "not approved (#{b.label(step.from)} → #{b.label(step.to)})"
       again = handoff ? "hand off again in a minute" : "approve again in a minute"
       wait = handoff ? "hand off once CI is green" : "approval waits for green CI"
+      # the operator is never stuck behind the gate: a drag along the step approves without asking (Store#move)
+      drag = !handoff && c[:column] == step.from ? ". A drag into #{b.label(step.to)} approves without asking CI" : ""
       begin
         pr = @ci.approval_checks(c, step.to_h)
       rescue Delivery::Unavailable => e
-        raise Invalid, "#{what}: CI state of card ##{c[:id]} is unknown — #{e.message}"
+        raise Invalid, "#{what}: CI state of card ##{c[:id]} is unknown — #{e.message}#{drag}"
       end
-      raise Invalid, "#{what}: card ##{c[:id]} has no PR whose checks could be read" if pr.nil?
+      raise Invalid, "#{what}: card ##{c[:id]} has no PR whose checks could be read#{drag}" if pr.nil?
       if pr[:state] == "success"
         moved = !handoff && hold_from(c, pr) # approving: the PR must still be at the head the handoff saw
-        raise Invalid, "#{what}: card ##{c[:id]} — #{moved}; hand it back for review" if moved
+        raise Invalid, "#{what}: card ##{c[:id]} — #{moved}; hand it back for review#{drag}" if moved
 
         return pr
       end
 
       ref = pr[:number] ? "PR ##{pr[:number]}" : "its PR"
-      raise Invalid, "#{what}: card ##{c[:id]} — #{pr[:reason]}#{handoff ? "; #{wait}" : ''}" if pr[:reason]
+      raise Invalid, "#{what}: card ##{c[:id]} — #{pr[:reason]}#{handoff ? "; #{wait}" : ''}#{drag}" if pr[:reason]
 
       why = case pr[:state]
             when "failure" then "CI failed"
@@ -2152,7 +2210,7 @@ module AgentsKanban
             when "nochecks" then "no CI checks ran"
             else "CI state #{pr[:state]}"
             end
-      raise Invalid, "#{what}: #{ref} of card ##{c[:id]} — #{why}; #{wait}"
+      raise Invalid, "#{what}: #{ref} of card ##{c[:id]} — #{why}; #{wait}#{drag}"
     end
 
     # The activity line of an approval: the approve gate's wording as before; a step names where its agent goes next.
@@ -2170,9 +2228,25 @@ module AgentsKanban
       return unless claim || deps.blocked.include?(column)
 
       verb = claim ? "cannot be claimed" : "cannot enter #{b.label(column)}"
+      never = never_finishing(unfinished_ids)
+      dead = never.empty? ? "" : "; #{never.join(', ')} and never finish#{'es' if never.size == 1}"
+      out = never.empty? ? "" : " — clear the card's parent to end the wait"
       raise Invalid, "#{what} #{verb} while it waits for " \
                      "card#{'s' if unfinished_ids.size > 1} ##{unfinished_ids.join(', #')} " \
-                     "(not yet in #{deps.done.map { |k| b.label(k) }.join(' / ')})"
+                     "(not yet in #{deps.done.map { |k| b.label(k) }.join(' / ')}#{dead})#{out}"
+    end
+
+    # The unfinished parents that will never finish as they are — archived, or in a terminal column that finishes
+    # nothing (Cancelled) — each as "#id is archived" / "#id is in <column>": the refusal names the way out.
+    def never_finishing(ids)
+      ps = cards.where(id: ids).order(:id).all
+      boards = boards_for(ps.map { |p| p[:project_slug] }.uniq)
+      ps.filter_map do |p|
+        pb = boards[p[:project_slug]]
+        if p[:archived_at] then "##{p[:id]} is archived"
+        elsif pb.terminal?(p[:column]) then "##{p[:id]} is in #{pb.label(p[:column])}"
+        end
+      end
     end
 
     # A parent just finished: its children that still sit in a promote.from column move to promote.to (bottom), logged

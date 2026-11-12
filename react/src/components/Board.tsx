@@ -38,6 +38,7 @@ import {
   type Filter,
   type Order,
 } from "../lib/board";
+import { edgeBands, edgeScroller, glideTo, nearestStart, type EdgeBands } from "../lib/autoscroll";
 import { splitCard } from "../lib/card";
 import { useFetch } from "../lib/fetch";
 import { isoAgo, isoAt } from "../lib/format";
@@ -80,6 +81,18 @@ function writeStore(k: string, v: unknown) {
     /* not persisted in this browser: the view still works */
   }
 }
+
+// the drop slot in a list for a pointer at height y: before the first card whose middle is below it
+function slotIndex(list: HTMLElement, y: number): number {
+  const cards = Array.from(list.querySelectorAll<HTMLElement>("li.kb-card:not(.ro):not(.dragging)"));
+  const i = cards.findIndex((c) => {
+    const r = c.getBoundingClientRect();
+    return y < r.top + r.height / 2;
+  });
+  return i < 0 ? cards.length : i;
+}
+
+const GLIDE_MS = 280; // after a drag the lists glide to the nearest list start, then snapping is back on
 
 type Drag = { id: number; from: ColumnKey };
 type Over = { col: ColumnKey; index: number };
@@ -144,6 +157,61 @@ export function Board({
       window.removeEventListener("resize", fit);
     };
   });
+
+  // a dragged card near the board's left / right edge scrolls the lists sideways (lib/autoscroll.ts); while they move
+  // under a still pointer the drop slot follows them (no dragover comes until the pointer moves)
+  // Scroll snapping is off while dragging (it would fight every frame) and while the lists then glide to the nearest
+  // list start (snapping back on at once would jump there).
+  const dragging = drag !== null;
+  const [settling, setSettling] = useState(false);
+  const cancelGlide = useRef<() => void>(() => {});
+  // the edge bands: where a dragged card scrolls the lists, shown on each side they can still scroll toward
+  const [edge, setEdge] = useState<EdgeBands | null>(null);
+  useEffect(() => {
+    if (!dragging) return;
+    const el = kbRef.current;
+    if (!el) throw new Error("kanban: a card is dragged but the board's lists are not mounted");
+    cancelGlide.current();
+    setSettling(true); // set before the drop's render takes `drag` away, so snapping stays off through it
+    const s = edgeScroller(el, (x, y) => {
+      const list = document.elementFromPoint(x, y)?.closest<HTMLElement>("ol.kb-list");
+      const col = list?.closest<HTMLElement>("[data-col]")?.dataset.col;
+      if (!list || !col) return;
+      const index = slotIndex(list, y);
+      setOver((o) => (o && o.col === col && o.index === index ? o : { col, index }));
+    });
+    const bands = () => {
+      const room = { left: el.scrollLeft, right: el.scrollWidth - el.clientWidth - el.scrollLeft };
+      const b = edgeBands(s.pointer(), el.getBoundingClientRect(), room);
+      setEdge((e) => (e && e.zone === b.zone && e.left === b.left && e.right === b.right ? e : b));
+    };
+    const onOver = (e: globalThis.DragEvent) => {
+      s.move(e.clientX, e.clientY);
+      bands();
+    };
+    const onLeave = (e: globalThis.DragEvent) => {
+      if (e.relatedTarget) return;
+      s.leave(); // the pointer left the window
+      bands();
+    };
+    bands();
+    document.addEventListener("dragover", onOver, true);
+    document.addEventListener("dragleave", onLeave, true);
+    el.addEventListener("scroll", bands, { passive: true });
+    return () => {
+      document.removeEventListener("dragover", onOver, true);
+      document.removeEventListener("dragleave", onLeave, true);
+      el.removeEventListener("scroll", bands);
+      setEdge((e) => e && { zone: e.zone, left: "off", right: "off" }); // fade out at the width they had
+      s.stop();
+      const left = nearestStart(el);
+      if (Math.abs(left - el.scrollLeft) < 1) {
+        setSettling(false);
+        return;
+      }
+      cancelGlide.current = glideTo(el, left, GLIDE_MS, () => setSettling(false));
+    };
+  }, [dragging]);
 
   // live: poll the board's revision; refetch when an agent, the MCP or another tab changed it. Paused only while
   // a card is being dragged or a move is in flight, so a refresh never pulls the board from under the pointer.
@@ -356,15 +424,7 @@ export function Board({
     if (!drag) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
-    const cards = Array.from(e.currentTarget.querySelectorAll<HTMLElement>("li.kb-card:not(.ro):not(.dragging)"));
-    let index = cards.length;
-    for (let i = 0; i < cards.length; i++) {
-      const r = cards[i]!.getBoundingClientRect();
-      if (e.clientY < r.top + r.height / 2) {
-        index = i;
-        break;
-      }
-    }
+    const index = slotIndex(e.currentTarget, e.clientY);
     if (!over || over.col !== col || over.index !== index) setOver({ col, index });
   };
   const onDrop = (col: ColumnKey) => (e: DragEvent<HTMLOListElement>) => {
@@ -383,6 +443,21 @@ export function Board({
     const cur = column.cards.find((c) => c.id === d.id);
     if (cur && cur.position === position) return;
     void move(d.id, col, position);
+  };
+  // a collapsed list shows no cards to drop between: the whole strip is the target, the card lands at its bottom
+  const onDragOverCollapsed = (col: ColumnKey) => (e: DragEvent<HTMLElement>) => {
+    if (!drag) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (!over || over.col !== col) setOver({ col, index: 0 });
+  };
+  const onDropCollapsed = (col: ColumnKey) => (e: DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    if (!drag) return;
+    const d = drag;
+    setDrag(null);
+    setOver(null);
+    if (d.from !== col) void move(d.id, col);
   };
   const endDrag = () => {
     setDrag(null);
@@ -588,177 +663,187 @@ export function Board({
           </section>
         )}
 
-        <div className="kb" ref={kbRef}>
-          {cols.map((col) => {
-            const { shown: view, older } = foldOf(col);
-            const groups = order === "updated" ? dayGroups(view, nowMs) : [{ key: "", label: "", cards: view }];
-            const ghostAt = drag && over && over.col === col.column ? over.index : -1;
-            const overdue = col.cards.filter((c) => dueState(c.due, c.due_done, nowMs) === "overdue").length;
-            const soon = col.cards.filter((c) => dueState(c.due, c.due_done, nowMs) === "soon").length;
-            const isCollapsed = collapsed.includes(col.column);
-            if (isCollapsed)
+        <div className="kb-scroll" style={edge ? ({ "--kb-edge-zone": `${edge.zone}px` } as CSSProperties) : undefined}>
+          <div className={`kb${drag || settling ? " kb-snap-off" : ""}`} ref={kbRef}>
+            {cols.map((col) => {
+              const { shown: view, older } = foldOf(col);
+              const groups = order === "updated" ? dayGroups(view, nowMs) : [{ key: "", label: "", cards: view }];
+              const ghostAt = drag && over && over.col === col.column ? over.index : -1;
+              const overdue = col.cards.filter((c) => dueState(c.due, c.due_done, nowMs) === "overdue").length;
+              const soon = col.cards.filter((c) => dueState(c.due, c.due_done, nowMs) === "soon").length;
+              const isCollapsed = collapsed.includes(col.column);
+              if (isCollapsed)
+                return (
+                  <section
+                    key={col.column}
+                    className={`kb-col collapsed kb-c-${col.column}${over && over.col === col.column ? " over" : ""}`}
+                    data-col={col.column}
+                    aria-label={`${col.label} (collapsed)`}
+                    onDragOver={onDragOverCollapsed(col.column)}
+                    onDragLeave={(e) => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node | null))
+                        setOver((o) => (o && o.col === col.column ? null : o));
+                    }}
+                    onDrop={onDropCollapsed(col.column)}
+                  >
+                    <button
+                      type="button"
+                      className="kb-expand"
+                      onClick={() => toggleCollapse(col.column)}
+                      title={`Expand ${col.label}`}
+                    >
+                      <i />
+                      <span>{col.label}</span>
+                      <b>{col.cards.length}</b>
+                    </button>
+                  </section>
+                );
               return (
                 <section
                   key={col.column}
-                  className={`kb-col collapsed kb-c-${col.column}`}
+                  className={`kb-col kb-c-${col.column}`}
                   data-col={col.column}
-                  aria-label={`${col.label} (collapsed)`}
+                  aria-labelledby={`kb-h-${col.column}`}
                 >
-                  <button
-                    type="button"
-                    className="kb-expand"
-                    onClick={() => toggleCollapse(col.column)}
-                    title={`Expand ${col.label}`}
+                  <header>
+                    <h2 id={`kb-h-${col.column}`}>
+                      <i />
+                      {col.label}
+                    </h2>
+                    <span className="n">
+                      {filtering || older.length ? `${view.length}/${col.cards.length}` : col.cards.length}
+                    </span>
+                    <button
+                      type="button"
+                      className="kb-menu-btn"
+                      aria-label={`${col.label} list menu`}
+                      aria-expanded={menuCol === col.column}
+                      onClick={() => setMenuCol(menuCol === col.column ? null : col.column)}
+                    >
+                      <KbIcon name="dots" />
+                    </button>
+                    {menuCol === col.column && (
+                      <ListMenu
+                        onClose={() => setMenuCol(null)}
+                        stats={[
+                          [col.cards.length, "cards"],
+                          [overdue, "overdue"],
+                          [soon, "due 24h"],
+                          [col.cards.filter((c) => !c.assignee).length, "unassigned"],
+                        ]}
+                        onAdd={() => {
+                          setMenuCol(null);
+                          setAddCol(col.column);
+                        }}
+                        onCollapse={() => {
+                          setMenuCol(null);
+                          toggleCollapse(col.column);
+                        }}
+                      />
+                    )}
+                  </header>
+                  <ol
+                    className={`kb-list${over && over.col === col.column ? " over" : ""}`}
+                    aria-label={col.label}
+                    onDragOver={onDragOverList(col.column)}
+                    onDragLeave={(e) => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node | null))
+                        setOver((o) => (o && o.col === col.column ? null : o));
+                    }}
+                    onDrop={onDrop(col.column)}
                   >
-                    <i />
-                    <span>{col.label}</span>
-                    <b>{col.cards.length}</b>
-                  </button>
+                    {groups.map((g) => (
+                      <Fragment key={`g:${g.key}`}>
+                        {g.label && (
+                          <li className="kb-day" aria-hidden="true">
+                            <span>{g.label}</span>
+                            <b>{g.cards.length}</b>
+                          </li>
+                        )}
+                        {g.cards.map((c) => {
+                          const i = view.indexOf(c);
+                          return (
+                            <CardItem
+                              reviewCols={reviewCols}
+                              maxRounds={maxRounds}
+                              live={data.live_sessions ?? null}
+                              listened={data.listened_columns}
+                              links={data.session_links}
+                              key={c.id}
+                              card={c}
+                              colorOf={colorOf}
+                              names={names}
+                              nowMs={nowMs}
+                              ghostBefore={ghostAt === i}
+                              dragging={drag?.id === c.id}
+                              busy={busy === c.id}
+                              onOpen={() => openCard(c.id)}
+                              onToggleNames={() => {
+                                setNames(!names);
+                                writeStore("kb-label-names", !names);
+                              }}
+                              onHover={(on) =>
+                                (hoverId.current = on ? c.id : hoverId.current === c.id ? null : hoverId.current)
+                              }
+                              onDragStart={onDragStart(c)}
+                              onDragEnd={endDrag}
+                            />
+                          );
+                        })}
+                      </Fragment>
+                    ))}
+                    {ghostAt >= view.length && ghostAt >= 0 && <li className="kb-ghost" aria-hidden="true" />}
+                    {older.length > 0 && (
+                      <li className="kb-older">
+                        <button
+                          type="button"
+                          className="btn small"
+                          onClick={() => setUnfolded((u) => [...u, col.column])}
+                          title={`Cards not updated for ${col.hide_after_hours} h`}
+                        >
+                          Load older · {older.length}
+                        </button>
+                      </li>
+                    )}
+                    {(bmByCol.get(col.column) ?? []).map((t) => (
+                      <li key={`bm:${t.id}`} className="kb-card ro" title={`${t.file} — edit with the backlog CLI`}>
+                        <span className="kb-title">{t.title}</span>
+                        <div className="kb-badges">
+                          <span className="tag bmd">{t.id}</span>
+                          {t.draft && <span className="tag">draft</span>}
+                          {t.priority && <span className={`kb-prio p-${t.priority}`}>{t.priority}</span>}
+                          {(t.labels ?? []).map((l) => (
+                            <span className="tag" key={l}>
+                              {l}
+                            </span>
+                          ))}
+                          <span>{t.status}</span>
+                          <span className="spacer" />
+                          {(Array.isArray(t.assignee) ? t.assignee : t.assignee ? [t.assignee] : [])
+                            .slice(0, 2)
+                            .map((a) => (
+                              <Avatar key={a} name={a} email={a} />
+                            ))}
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                  <QuickAdd
+                    api={api}
+                    slug={slug}
+                    column={col.column}
+                    colLabel={col.label}
+                    open={addCol === col.column}
+                    setOpen={(o) => setAddCol(o ? col.column : null)}
+                    onAdded={() => void act(null, async () => {})}
+                    onError={setErr}
+                  />
                 </section>
               );
-            return (
-              <section
-                key={col.column}
-                className={`kb-col kb-c-${col.column}`}
-                data-col={col.column}
-                aria-labelledby={`kb-h-${col.column}`}
-              >
-                <header>
-                  <h2 id={`kb-h-${col.column}`}>
-                    <i />
-                    {col.label}
-                  </h2>
-                  <span className="n">
-                    {filtering || older.length ? `${view.length}/${col.cards.length}` : col.cards.length}
-                  </span>
-                  <button
-                    type="button"
-                    className="kb-menu-btn"
-                    aria-label={`${col.label} list menu`}
-                    aria-expanded={menuCol === col.column}
-                    onClick={() => setMenuCol(menuCol === col.column ? null : col.column)}
-                  >
-                    <KbIcon name="dots" />
-                  </button>
-                  {menuCol === col.column && (
-                    <ListMenu
-                      onClose={() => setMenuCol(null)}
-                      stats={[
-                        [col.cards.length, "cards"],
-                        [overdue, "overdue"],
-                        [soon, "due 24h"],
-                        [col.cards.filter((c) => !c.assignee).length, "unassigned"],
-                      ]}
-                      onAdd={() => {
-                        setMenuCol(null);
-                        setAddCol(col.column);
-                      }}
-                      onCollapse={() => {
-                        setMenuCol(null);
-                        toggleCollapse(col.column);
-                      }}
-                    />
-                  )}
-                </header>
-                <ol
-                  className={`kb-list${over && over.col === col.column ? " over" : ""}`}
-                  aria-label={col.label}
-                  onDragOver={onDragOverList(col.column)}
-                  onDragLeave={(e) => {
-                    if (!e.currentTarget.contains(e.relatedTarget as Node | null))
-                      setOver((o) => (o && o.col === col.column ? null : o));
-                  }}
-                  onDrop={onDrop(col.column)}
-                >
-                  {groups.map((g) => (
-                    <Fragment key={`g:${g.key}`}>
-                      {g.label && (
-                        <li className="kb-day" aria-hidden="true">
-                          <span>{g.label}</span>
-                          <b>{g.cards.length}</b>
-                        </li>
-                      )}
-                      {g.cards.map((c) => {
-                        const i = view.indexOf(c);
-                        return (
-                          <CardItem
-                            reviewCols={reviewCols}
-                            maxRounds={maxRounds}
-                            live={data.live_sessions ?? null}
-                            listened={data.listened_columns}
-                            links={data.session_links}
-                            key={c.id}
-                            card={c}
-                            colorOf={colorOf}
-                            names={names}
-                            nowMs={nowMs}
-                            ghostBefore={ghostAt === i}
-                            dragging={drag?.id === c.id}
-                            busy={busy === c.id}
-                            onOpen={() => openCard(c.id)}
-                            onToggleNames={() => {
-                              setNames(!names);
-                              writeStore("kb-label-names", !names);
-                            }}
-                            onHover={(on) =>
-                              (hoverId.current = on ? c.id : hoverId.current === c.id ? null : hoverId.current)
-                            }
-                            onDragStart={onDragStart(c)}
-                            onDragEnd={endDrag}
-                          />
-                        );
-                      })}
-                    </Fragment>
-                  ))}
-                  {ghostAt >= view.length && ghostAt >= 0 && <li className="kb-ghost" aria-hidden="true" />}
-                  {older.length > 0 && (
-                    <li className="kb-older">
-                      <button
-                        type="button"
-                        className="btn small"
-                        onClick={() => setUnfolded((u) => [...u, col.column])}
-                        title={`Cards not updated for ${col.hide_after_hours} h`}
-                      >
-                        Load older · {older.length}
-                      </button>
-                    </li>
-                  )}
-                  {(bmByCol.get(col.column) ?? []).map((t) => (
-                    <li key={`bm:${t.id}`} className="kb-card ro" title={`${t.file} — edit with the backlog CLI`}>
-                      <span className="kb-title">{t.title}</span>
-                      <div className="kb-badges">
-                        <span className="tag bmd">{t.id}</span>
-                        {t.draft && <span className="tag">draft</span>}
-                        {t.priority && <span className={`kb-prio p-${t.priority}`}>{t.priority}</span>}
-                        {(t.labels ?? []).map((l) => (
-                          <span className="tag" key={l}>
-                            {l}
-                          </span>
-                        ))}
-                        <span>{t.status}</span>
-                        <span className="spacer" />
-                        {(Array.isArray(t.assignee) ? t.assignee : t.assignee ? [t.assignee] : [])
-                          .slice(0, 2)
-                          .map((a) => (
-                            <Avatar key={a} name={a} email={a} />
-                          ))}
-                      </div>
-                    </li>
-                  ))}
-                </ol>
-                <QuickAdd
-                  api={api}
-                  slug={slug}
-                  column={col.column}
-                  colLabel={col.label}
-                  open={addCol === col.column}
-                  setOpen={(o) => setAddCol(o ? col.column : null)}
-                  onAdded={() => void act(null, async () => {})}
-                  onError={setErr}
-                />
-              </section>
-            );
-          })}
+            })}
+          </div>
+          <i className={`kb-edge kb-edge-l ${edge?.left ?? "off"}`} aria-hidden="true" />
+          <i className={`kb-edge kb-edge-r ${edge?.right ?? "off"}`} aria-hidden="true" />
         </div>
 
         {bm && (bmByCol.get(null) ?? []).length > 0 && (
