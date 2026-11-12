@@ -343,6 +343,46 @@
   scroll-snap-type: x proximity;
   overscroll-behavior-x: contain;
 }
+/* a card is dragged (the edge auto-scroll moves the lists freely), then the lists glide to the nearest list start */
+.ak-root .kb.kb-snap-off {
+  scroll-snap-type: none;
+}
+/* the edge bands: while a card is dragged, a soft shade over each edge the lists can still scroll toward, as wide as
+   the zone where the pointer scrolls them (--kb-edge-zone, set by Board from lib/autoscroll.ts), stronger with the
+   pointer inside it. Over the lists, outside the scroller (they do not scroll), and never a drop or pointer target */
+.ak-root .kb-scroll {
+  position: relative;
+}
+.ak-root .kb-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--kb-edge-zone);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+.ak-root .kb-edge-l {
+  left: 0;
+  border-radius: var(--ak-radius-card) 0 0 var(--ak-radius-card);
+  background: linear-gradient(to right, color-mix(in srgb, var(--ak-ink) 22%, transparent), transparent);
+}
+.ak-root .kb-edge-r {
+  right: 0;
+  border-radius: 0 var(--ak-radius-card) var(--ak-radius-card) 0;
+  background: linear-gradient(to left, color-mix(in srgb, var(--ak-ink) 22%, transparent), transparent);
+}
+.ak-root .kb-edge.on {
+  opacity: 0.55;
+}
+.ak-root .kb-edge.hot {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ak-root .kb-edge {
+    transition: none;
+  }
+}
 .ak-root .kb-col {
   scroll-snap-align: start;
   background: var(--ak-mat-fill-2);
@@ -508,7 +548,8 @@
 .ak-root .kb-list > * {
   flex-shrink: 0;
 }
-.ak-root .kb-list.over {
+.ak-root .kb-list.over,
+.ak-root .kb-col.collapsed.over {
   background: rgba(var(--ak-accent-rgb), 0.08);
   box-shadow: inset 0 0 0 1.5px rgba(var(--ak-accent-rgb), 0.35);
 }

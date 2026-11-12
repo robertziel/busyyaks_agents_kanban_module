@@ -549,7 +549,8 @@ class StoreTest < Minitest::Test
     id = local_card(m)
     m.move(id, column: "awaiting_merge", by: "operator@x") # a plain drag: no approval
     e = assert_raises(Denied) { m.move(id, transition: "Merge", by: "claude-shop-lead", agent: true) }
-    approval = "\\(approval = the operator's move Public: Human review → Awaiting merge\\)"
+    approval = "\\(approval = the operator's move Public: Human review → Awaiting merge, or the operator's Approve " \
+               "on the card in Awaiting merge\\)"
     assert_match(/sits in Awaiting merge without the operator's approval #{approval} — agents never skip it/, e.message)
     m.move(id, column: "public_human_review", by: "operator@x")
     m.move(id, column: "awaiting_merge", by: "operator@x")
@@ -601,9 +602,8 @@ class StoreTest < Minitest::Test
     limit = "review round limit reached (3/3 in Local: Agent review): the loop ends here — kanban_handoff the card to " \
             "Local: Human review with review_summary (it carries the label \"unresolved\" when needs_human + open > 0)"
     assert_equal limit, e.message
-    assert_equal "local_author", m.move(id, column: "local_author", by: "operator@x")[:column], "the operator may"
-    e = assert_raises(Denied) { m.move(id, transition: "All threads answered", by: "claude-shop-lead", agent: true) }
-    assert_match(/review round limit reached/, e.message)
+    # (the operator's drag back to Local: Author response is one more round: operator_unstuck_test.rb)
+    assert_equal "local_human_review", m.move(id, column: "local_human_review", by: "operator@x")[:column], "the operator may"
     m.move(id, column: "local_agent_review", by: "operator@x")
     assert_equal 4, m.card_json(m.card(id))[:review_round], "the operator's move still counts"
     assert_empty m.labels("p")
@@ -766,10 +766,11 @@ class StoreTest < Minitest::Test
       approval_ci.answer = answer
       step = /\Anot approved \(Local: Human review → Local: Merged\): .*#{pattern.source}/
       refused.call(step) { m.approve(id, by: "operator@x") }
-      refused.call(pattern) { m.move(id, column: "local_merged_pr", by: "operator@x") }
+      refused.call(pattern) { m.move(id, transition: "Approve", by: "operator@x") }
     end
     approval_ci.answer = { number: 7, state: "blocked", finished_at: nil, reason: "the local PR #3 is not merged (open)" }
-    blocked = "not approved (Local: Human review → Local: Merged): card ##{id} — the local PR #3 is not merged (open)"
+    blocked = "not approved (Local: Human review → Local: Merged): card ##{id} — the local PR #3 is not merged (open). " \
+              "A drag into Local: Merged approves without asking CI"
     refused.call(/\A#{Regexp.escape(blocked)}\z/) { m.approve(id, by: "operator@x") }
     approval_ci.answer = nil
     refused.call(/card ##{id} has no PR whose checks could be read/) { m.approve(id, by: "operator@x") }
@@ -797,6 +798,47 @@ class StoreTest < Minitest::Test
     m.move(id, column: "doing", by: "operator@x")
     m.move(id, column: "local_merged_pr", by: "operator@x")
     assert_equal n, approval_ci.asked.size, "a move that is no approval step never asks CI"
+  end
+
+  # the operator's drag is never refused by the green-CI gate — along a step it still approves (the activity
+  # says CI was not asked); the catch-all edge alike. Only the Approve button and the step's own transition ask CI.
+  def test_an_operator_drag_along_a_step_approves_without_asking_ci
+    m = store(board: KanbanTest.board_hash("local_v4"))
+    id = local_card(m)
+    m.move(id, transition: "Open local PR", by: "claude-shop-lead", agent: true)
+    m.handoff(id, **handoff_ok, by: "claude-shop-lead")
+    approval_ci.answer = { number: 7, state: "blocked", finished_at: nil,
+                           reason: "the local PR #7 was merged before its approval", }
+    m.move(id, column: "local_merged_pr", by: "operator@x") # the answer would refuse it: the gate was not asked
+    assert_equal ["local_merged_pr", "operator@x"], m.card(id).values_at(:column, :approved_by)
+    assert_equal "approved Local: Human review → Local: Merged — the agent carries on and moves it to Local: Deploy " \
+                 "check (dragged: CI not asked)", m.activity(id).reverse.find { |a| a[:kind] == "approve" }[:body]
+    text = m.pending_pings.last[:text]
+    assert_includes text, "it moved Local: Human review → Local: Merged. It was dragged: CI was not asked"
+    refute_includes text, AgentsKanban::Store::CI_NOT_ASKED, "the marker is read, never shown"
+    m.move(id, column: "local_human_review", by: "operator@x")
+    m.move(id, transition: "Move", column: "local_merged_pr", by: "operator@x")
+    assert_equal ["local_merged_pr", "operator@x"], m.card(id).values_at(:column, :approved_by)
+    m.move(id, column: "local_human_review", by: "operator@x")
+    assert_raises(Invalid) { m.approve(id, by: "operator@x") }
+    assert_raises(Invalid) { m.move(id, transition: "Approve", by: "operator@x") }
+    e = assert_raises(Invalid) { m.move(id, transition: "approve", by: "operator@x") } # named as Workflow#named reads it
+    assert_match(/merged before its approval/, e.message, "the step's own edge in any case asks CI")
+    assert_equal "local_human_review", m.card(id)[:column], "the Approve button and its transition still wait for green"
+  end
+
+  # the final step's ping tells the owner to merge: dragged there, it also says CI was never asked
+  def test_a_final_step_dragged_pings_merge_only_once_green
+    m = store(board: KanbanTest.board_hash("local_v4"))
+    id = local_card(m)
+    m.move(id, transition: "Move", column: "public_human_review", by: "operator@x")
+    m.pending_pings.each { |p| m.ping_result(p, "sent") }
+    m.move(id, column: "awaiting_merge", by: "operator@x")
+    text = m.pending_pings.last[:text]
+    assert_includes text, "— it is in Awaiting merge. It was dragged: CI was not asked — read the PR's checks first. " \
+                          "Merge it once its checks are green (red: do not merge, say so), then move the card"
+    refute_includes text, "Merge it now", "a dragged final step never says merge now"
+    refute_includes text, AgentsKanban::Store::CI_NOT_ASKED
   end
 
   def test_a_store_with_the_green_ci_gate_needs_the_port
