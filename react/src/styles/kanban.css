@@ -19,6 +19,7 @@
   --ak-surface-3: rgba(0, 0, 0, 0.09);
   --ak-line: rgba(0, 0, 0, 0.1);
   --ak-line-strong: rgba(0, 0, 0, 0.18);
+  --ak-step-overhang: 12px;
   --ak-row-rule: rgba(0, 0, 0, 0.08);
   --ak-track: rgba(0, 0, 0, 0.08);
   --ak-accent: #0a84ff;
@@ -378,9 +379,100 @@
 .ak-root .kb-edge.hot {
   opacity: 1;
 }
+/* the step buttons: a 36 px round glass button on each edge the lists can still scroll toward; a click glides them
+   one list that way. It hangs --ak-step-overhang (a theme token, 12 px by default; 0px for a host with no gutter beside
+   the board) outside the lists, so it rests on the list's own padding, not on a card's text, and only the circle
+   takes clicks (46 px around it on a touch screen): the cards under the edge stay clickable everywhere else. It sits
+   at mid height of the lists, never lower than 38 % of the window (in view under a tall --ak-board-height), and
+   slides in from its edge as room appears. Off (faded out, no pointer events, out of the tab order) while a card is
+   dragged or with no room that way */
+.ak-root .kb-step {
+  --kb-step-shift: 0px;
+  position: absolute;
+  z-index: 2;
+  top: min(50%, 38vh);
+  width: 36px;
+  height: 36px;
+  margin: -18px 0 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--ak-line);
+  border-radius: var(--ak-radius-pill);
+  background: color-mix(in srgb, var(--ak-panel) 88%, transparent);
+  -webkit-backdrop-filter: var(--ak-mat-blur);
+  backdrop-filter: var(--ak-mat-blur);
+  box-shadow: var(--ak-shadow-card), var(--ak-menu-shadow);
+  color: var(--ak-ink-dim);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(var(--kb-step-shift)) scale(0.8);
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+    color 0.12s ease,
+    border-color 0.12s ease,
+    background-color 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.ak-root .kb-step-l {
+  left: calc(-1 * var(--ak-step-overhang));
+  --kb-step-shift: -8px;
+}
+.ak-root .kb-step-r {
+  right: calc(-1 * var(--ak-step-overhang));
+  --kb-step-shift: 8px;
+}
+.ak-root .kb-step .ico {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2;
+  vertical-align: 0;
+  transition: transform 0.12s ease;
+}
+.ak-root .kb-step.on {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+.ak-root .kb-step.on:hover,
+.ak-root .kb-step.on:focus-visible {
+  color: var(--ak-ink);
+  border-color: var(--ak-line-strong);
+  background: var(--ak-panel);
+}
+.ak-root .kb-step-l.on:hover .ico {
+  transform: translateX(-1.5px);
+}
+.ak-root .kb-step-r.on:hover .ico {
+  transform: translateX(1.5px);
+}
+.ak-root .kb-step.on:active {
+  transform: scale(0.92);
+}
+.ak-root .kb-step:focus-visible {
+  outline: 3px solid rgba(var(--ak-accent-rgb), 0.5);
+  outline-offset: 2px;
+}
+@media (pointer: coarse) {
+  .ak-root .kb-step::after {
+    content: "";
+    position: absolute;
+    inset: -5px;
+    border-radius: inherit;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
-  .ak-root .kb-edge {
+  .ak-root .kb-edge,
+  .ak-root .kb-step,
+  .ak-root .kb-step .ico {
     transition: none;
+  }
+  .ak-root .kb-step,
+  .ak-root .kb-step.on:active,
+  .ak-root .kb-step.on:hover .ico {
+    transform: none;
   }
 }
 .ak-root .kb-col {

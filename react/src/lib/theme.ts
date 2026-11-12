@@ -35,6 +35,7 @@ export const AK_TOKENS = [
   "--ak-sans",
   "--ak-shadow-card",
   "--ak-shadow-thumb",
+  "--ak-step-overhang",
   "--ak-surface-3",
   "--ak-track",
   "--ak-vivid-blue",

@@ -132,6 +132,8 @@ table_prefix: ""
 # --ak-radius-{card,band,ctl,ctl-sm,chip,pill} --ak-shadow-card --ak-shadow-thumb --ak-menu-shadow --ak-mono --ak-sans
 # --ak-board-height (the board's FIXED height, e.g. 1000px; unset = the window below the board's top, ≥ 420px —
 # the lists scroll inside it either way, the board never grows with its cards)
+# --ak-step-overhang (how far the round left / right step buttons hang outside the lists, into the gutter beside the
+# board; default 12px; 0px for a page with no gutter there)
 theme: {}
 # CI idle watch — null = off. Else the watch pass asks the host's `ci:` port (Notifier) about each card in every board's
 # WORKING column:
