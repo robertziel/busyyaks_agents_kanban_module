@@ -421,6 +421,10 @@ Newest first; a heading names the `Schema::VERSION` step when the change brought
   `unresolved` label goes on only when `needs_human + open` is above 0; the handoff line names the counts.
 - A host pins it with a new migration (`Schema.migrate!(to: 10)`).
 - React: `Card.gate_hold` (a "⏳ <why>" badge), `BoardData.held` ("N waiting for CI" beside "waiting for you").
+- Card JSON `waiting` (decorated cards): the card waits for the operator NOW — `Store#waits_for_operator?`, the one rule
+  `waiting_counts` counts by (a question open, wherever it sits; or in a waiting column, approvable now and not only
+  blocked_external). React highlights it (`cardFaceClass` → `kb-card needs-you`: red frame + tint, a "needs you" badge),
+  so the cards the "N waiting for you" count names stand out on the board itself.
 
 ### No default launcher
 

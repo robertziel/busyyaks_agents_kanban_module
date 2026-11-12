@@ -44,6 +44,7 @@ const card = (o: Partial<Card>): Card => ({
   children: 0,
   blocked_by: [],
   needs_operator: false,
+  waiting: false,
   blocked: null,
   review_round: null,
   metadata: null,
