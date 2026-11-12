@@ -336,6 +336,20 @@ primitives, for a host without its own).
 
 Newest first; a heading names the `Schema::VERSION` step when the change brought one.
 
+### PRs assigned to cards: kanban_pr_assign (no schema step)
+
+- New MCP tool `kanban_pr_assign(id, pr_url, role, author)` → `Store#assign_pr(id, url:, role:, by:)`: the agent that
+  opened a PR assigns it to its card; stored as the card's metadata `prs.<role>` = the PR URL, merged (the other
+  metadata keys stay), logged as an `update` line `PR <role>: <url>`. `pr_url` must be
+  `https://github.com/<owner>/<repo>/pull/<n>`, `role` a lowercase word (`a-z 0-9 _ -`, ≤ 32) — the HOST names the roles
+  (e.g. `local` · `public`) and reads them back; assigning a role again replaces its PR, the same URL is a no-op, a
+  `prs` that is not an object is refused. The MCP `instructions` tell agents to call it at once after opening a PR. A
+  host reads a card's PRs from these assignments, never from branch names or PR numbers in text.
+- `Store#idle_watch_pass`: a card whose PR the `ci:` port cannot answer (`pr_checks` raising `Delivery::Unavailable` /
+  `Refused`, e.g. a bad assignment) is skipped and returned as `[id, "CI skipped: <why>"]` (the notifier logs
+  `idle watch: CI skipped: <why> on card N`); the other cards are still watched. It used to end the whole pass
+  (`idle watch skipped: <why>`); `last_commit_at` raising still does.
+
 ### blocked_external is not waiting for the operator (no schema step)
 
 - A card flagged only `blocked_external` waits for the world (another card, CI, a third party), not for the operator:

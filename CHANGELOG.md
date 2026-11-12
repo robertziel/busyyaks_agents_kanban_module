@@ -6,6 +6,17 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ## [Unreleased]
 
+### Added
+
+- **`kanban_pr_assign(id, pr_url, role, author)`**: the agent that opened a PR assigns it to its
+  card — metadata `prs.<role>` = the URL, merged into the card's metadata (`Store#assign_pr`). The MCP instructions
+  tell agents to call it at once after opening a PR; a host reads a card's PRs from it, never from branch names or text.
+
+### Changed
+
+- **The idle watch skips only the card whose PR the `ci:` port cannot answer**: `[id, "CI skipped: <why>"]`
+  for that card, the others still pinged — one bad assignment no longer silences the watch for every project.
+
 ### Changed (breaking for hosts)
 
 - **`launchers[].kind` is required**: the CLI family the command is, one of `Launch::KINDS` —

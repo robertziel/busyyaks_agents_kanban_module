@@ -408,6 +408,45 @@ module AgentsKanban
       card(id)
     end
 
+    PR_URL = %r{\Ahttps://github\.com/[\w.-]+/[\w.-]+/pull/[1-9]\d*\z}
+    PR_ROLE = /\A[a-z][a-z0-9_-]{0,31}\z/
+
+    # The agent that opened a PR assigns it to its card: metadata `prs.<role>` = the PR URL (the host names the roles,
+    # e.g. local · public, and reads them back; nothing is derived from branch names or text). Merged into the card's
+    # metadata in one transaction — the other keys stay. Re-assigning a role replaces its PR; the same URL again is a
+    # no-op. Logged as an `update` line "PR <role>: <url>".
+    def assign_pr(id, url:, role:, by:)
+      url = url.to_s.strip
+      unless url.match?(PR_URL)
+        raise Invalid, "pr_url must be a GitHub pull request URL (https://github.com/<owner>/<repo>/pull/<n>)"
+      end
+      unless role.to_s.match?(PR_ROLE)
+        raise Invalid, "role must be a lowercase word (a-z 0-9 _ -, at most 32): #{role.to_s[0, 40].inspect}"
+      end
+
+      by = who!(by)
+      prs = card_prs!(card!(id)) # refused before the transaction: a raise inside one reaches the host wrapped
+      return card(id) if prs[role] == url
+
+      @db.transaction do
+        c = card!(id) # read again inside: the host serialises writers (SQLite BEGIN IMMEDIATE, PostgreSQL lock)
+        meta = c[:metadata] ? JSON.parse(JSON.generate(c[:metadata])) : {}
+        meta["prs"] = card_prs!(c).merge(role => url)
+        cards.where(id: c[:id]).update(metadata: JSON.generate(metadata!(meta)), updated_at: @clock.call)
+        log(c[:id], "update", "PR #{role}: #{url}", by)
+      end
+      card(id)
+    end
+
+    # the card's metadata prs ({} when none); anything but an object is refused with what it is
+    def card_prs!(c)
+      prs = c[:metadata].is_a?(Hash) ? c[:metadata]["prs"] : nil
+      return {} if prs.nil?
+      raise Invalid, "card ##{c[:id]} metadata prs is not an object: #{JSON.generate(prs)[0, 200]}" unless prs.is_a?(Hash)
+
+      prs
+    end
+
     # To column at position (0-based; nil or past the end = last). Both columns are renumbered.
     # `transition:` names a workflow edge out of the card's column instead of a target column (Jira's "Start work").
     # The green-CI gate (approval.requires_green_ci) is asked only by an explicit approval: Store#approve (the Approve
@@ -1568,7 +1607,13 @@ module AgentsKanban
       rows.select { |c| c[:column] == boards[c[:project_slug]].idle_column }.each do |c|
         c = c.merge(column_label: boards[c[:project_slug]].label(c[:column]))
         last = last_activity_at(c[:id]) || c[:created_at]
-        pr = ci.pr_checks(c)
+        begin
+          pr = ci.pr_checks(c)
+        rescue Delivery::Unavailable, Delivery::Refused => e
+          # one card's PR the port cannot answer (e.g. a bad assignment) skips that card, said — never the others'
+          done << [c[:id], "CI skipped: #{e.message}"]
+          pr = nil
+        end
         if pr && %w[success failure].include?(pr[:state]) && pr[:finished_at]
           done.concat(ci_step(c, pr, last, w, now, sys))
         end
