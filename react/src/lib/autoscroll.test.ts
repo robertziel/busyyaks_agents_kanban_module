@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EDGE_SCROLL,
   STALE_MS,
+  STEP_MIN,
   easeSpeed,
   edgeBands,
   edgeScroller,
@@ -9,6 +10,8 @@ import {
   edgeZone,
   glideTo,
   nearestStart,
+  stepRoom,
+  stepStart,
 } from "./autoscroll";
 
 const box = { left: 100, right: 1100, top: 50, bottom: 650 };
@@ -293,6 +296,25 @@ describe("nearestStart", () => {
   it("clamps to the end of the range", () => {
     expect(nearestStart(board(590))).toBe(600);
   });
+  it("steps one list start right or left of the current scroll", () => {
+    expect(stepStart(board(0), "right")).toBe(230);
+    expect(stepStart(board(124), "right")).toBe(230);
+    expect(stepStart(board(230), "right")).toBe(460);
+    expect(stepStart(board(460), "left")).toBe(230);
+    expect(stepStart(board(300), "left")).toBe(230);
+    expect(stepStart(board(230.5), "left")).toBe(0);
+  });
+  it("steps to the end of the range past the last start, and to 0 before the first", () => {
+    expect(stepStart(board(500), "right")).toBe(600);
+    expect(stepStart(board(600), "right")).toBe(600);
+    expect(stepStart(board(100), "left")).toBe(0);
+    expect(stepStart(board(0), "left")).toBe(0);
+  });
+  it("skips a list start closer than STEP_MIN, so a step always moves visibly", () => {
+    expect(stepStart(board(250), "left")).toBe(0); // 230 is 20 px away
+    expect(stepStart(board(210), "right")).toBe(460); // 230 is 20 px away
+    expect(stepStart(board(230 + STEP_MIN), "left")).toBe(230);
+  });
   it("refuses a board with no lists", () => {
     expect(() => nearestStart(board(0, 0))).toThrow(/no lists/);
   });
@@ -343,5 +365,19 @@ describe("glideTo", () => {
     expect(frames.size).toBe(0);
     expect(done).toBe(0);
     expect(el.scrollLeft).toBe(100);
+  });
+});
+
+describe("stepRoom", () => {
+  const el = (scrollLeft: number, scrollWidth = 1600, clientWidth = 1000) =>
+    ({ scrollLeft, scrollWidth, clientWidth }) as unknown as HTMLElement;
+  it("shows only the right step at the start, both in the middle, only the left at the end", () => {
+    expect(stepRoom(el(0))).toEqual({ left: false, right: true });
+    expect(stepRoom(el(300))).toEqual({ left: true, right: true });
+    expect(stepRoom(el(600))).toEqual({ left: true, right: false });
+  });
+  it("shows none when the lists fit, and ignores a sub-pixel remainder", () => {
+    expect(stepRoom(el(0, 1000, 1000))).toEqual({ left: false, right: false });
+    expect(stepRoom(el(1, 1001.5, 1000))).toEqual({ left: false, right: false });
   });
 });

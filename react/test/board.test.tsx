@@ -576,6 +576,81 @@ describe("Board", () => {
     window.localStorage.removeItem("kb-collapsed:g/r");
   });
 
+  it("the edge step areas: shown on the side the lists can scroll toward, a click glides one list, off while dragging", async () => {
+    const cards = [card({ id: 3, column: "doing", title: "Drag me" })];
+    const api = fakeApi(boardData(coding, cards), cards);
+    const { container } = render(<Host api={api} />);
+    const li = (await screen.findByText("Drag me")).closest("li")!;
+    const kb = container.querySelector<HTMLElement>(".kb")!;
+    // jsdom lays nothing out: 7 lists 230 px apart in a 1000 px scroller holding 1600 px
+    let left = 0;
+    Object.defineProperties(kb, {
+      scrollWidth: { configurable: true, get: () => 1600 },
+      clientWidth: { configurable: true, get: () => 1000 },
+      scrollLeft: { configurable: true, get: () => left, set: (v: number) => (left = v) },
+      getBoundingClientRect: { configurable: true, value: () => ({ left: 0 }) },
+    });
+    Array.from(kb.children).forEach((c, i) =>
+      Object.defineProperty(c, "getBoundingClientRect", { value: () => ({ left: i * 230 - left }) }),
+    );
+    const l = container.querySelector<HTMLButtonElement>(".kb-step-l")!;
+    const r = container.querySelector<HTMLButtonElement>(".kb-step-r")!;
+    // round icon buttons: named by aria-label, the chevron is decoration
+    expect(screen.getByRole("button", { name: "Scroll the lists left", hidden: true })).toBe(l);
+    expect(screen.getByRole("button", { name: "Scroll the lists right", hidden: true })).toBe(r);
+    for (const b of [l, r]) expect(b.querySelector("svg.ico")).toHaveAttribute("aria-hidden", "true");
+    expect([l.textContent, r.textContent]).toEqual(["", ""]);
+    fireEvent.scroll(kb);
+    await waitFor(() => expect(r).toHaveClass("on"));
+    expect(l).not.toHaveClass("on");
+    expect([l.tabIndex, r.tabIndex]).toEqual([-1, 0]);
+    fireEvent.click(r);
+    await waitFor(() => expect(left).toBe(230));
+    fireEvent.scroll(kb);
+    await waitFor(() => expect(l).toHaveClass("on"));
+    // Tab reaches the step buttons before any card (a card's focus scroll would carry the lists away first)
+    expect(r.compareDocumentPosition(li) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // the focused › going off at the far end hands focus to ‹
+    r.focus();
+    for (const want of [460, 600]) {
+      fireEvent.click(r);
+      await waitFor(() => expect(left).toBe(want));
+      fireEvent.scroll(kb);
+    }
+    await waitFor(() => expect(r).not.toHaveClass("on"));
+    expect(document.activeElement).toBe(l);
+    for (const want of [460, 230, 0]) {
+      fireEvent.click(l);
+      await waitFor(() => expect(left).toBe(want));
+      fireEvent.scroll(kb);
+    }
+    await waitFor(() => expect(l).not.toHaveClass("on"));
+    expect(document.activeElement).toBe(r);
+    fireEvent.dragStart(li, { dataTransfer: { setData: () => {}, effectAllowed: "", dropEffect: "" } });
+    await waitFor(() => expect(r).not.toHaveClass("on"));
+    expect([l.tabIndex, r.tabIndex]).toEqual([-1, -1]);
+  });
+
+  it("Enter on a focused step button is the button's press, not the hovered card's shortcut", async () => {
+    const cards = [card({ id: 3, column: "doing", title: "Under the pointer" })];
+    const api = fakeApi(boardData(coding, cards), cards);
+    const onView = vi.fn();
+    const { container } = render(
+      <Board api={api} me="me" slug="g/r" view={{ card: null, panel: null, archived: false }} onView={onView} />,
+    );
+    const li = (await screen.findByText("Under the pointer")).closest("li")!;
+    fireEvent.mouseEnter(li);
+    const r = container.querySelector<HTMLButtonElement>(".kb-step-r")!;
+    r.focus();
+    fireEvent.keyDown(r, { key: "Enter" });
+    fireEvent.keyDown(r, { key: " " });
+    expect(onView).not.toHaveBeenCalled();
+    // the hover shortcut itself still works with nothing focused
+    r.blur();
+    fireEvent.keyDown(document.body, { key: "Enter" });
+    expect(onView).toHaveBeenCalledWith({ card: 3, panel: null });
+  });
+
   it("shows the api's error verbatim and keeps polling the revision", async () => {
     const cards = [card({ id: 1 })];
     const api = fakeApi(boardData(coding, cards), cards);

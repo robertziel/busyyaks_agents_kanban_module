@@ -16,6 +16,8 @@ const PATHS = {
   clip: "M14.3 7.4 8.2 13.5a4 4 0 0 1-5.7-5.7l6.1-6.1a2.7 2.7 0 0 1 3.8 3.8L6.3 11.6a1.3 1.3 0 0 1-1.9-1.9l5.7-5.6",
   download: "M8 2.5v8M4.8 7.6 8 10.8l3.2-3.2M3 13.5h10",
   file: "M4 1.8h5l3 3v9.4H4zM9 1.8v3h3",
+  chevLeft: "M9.8 3.6 5.4 8l4.4 4.4",
+  chevRight: "M6.2 3.6 10.6 8l-4.4 4.4",
 } as const;
 
 export type IconName = keyof typeof PATHS;

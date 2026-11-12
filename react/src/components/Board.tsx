@@ -38,7 +38,7 @@ import {
   type Filter,
   type Order,
 } from "../lib/board";
-import { edgeBands, edgeScroller, glideTo, nearestStart, type EdgeBands } from "../lib/autoscroll";
+import { edgeBands, edgeScroller, glideTo, nearestStart, stepRoom, stepStart, type EdgeBands } from "../lib/autoscroll";
 import { cardFaceClass, splitCard } from "../lib/card";
 import { useFetch } from "../lib/fetch";
 import { isoAgo, isoAt } from "../lib/format";
@@ -213,6 +213,46 @@ export function Board({
     };
   }, [dragging]);
 
+  // the step areas: a click on the board's left / right edge glides the lists one list that way (no scroll bar
+  // needed), shown on each side they can still scroll toward; hidden while a card is dragged (the edge bands drive
+  // the scroll then). Room is re-read on every scroll, resize and board change.
+  const [room, setRoom] = useState({ left: false, right: false });
+  useEffect(() => {
+    const el = kbRef.current;
+    if (!el) return;
+    const read = () => {
+      const { left, right } = stepRoom(el);
+      setRoom((r) => (r.left === left && r.right === right ? r : { left, right }));
+    };
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    el.addEventListener("scroll", read, { passive: true });
+    return () => {
+      ro.disconnect();
+      el.removeEventListener("scroll", read);
+    };
+  }, [data, collapsed]);
+  // a focused step button that goes off (the lists reached that end) hands focus to the other one, so the keyboard
+  // never sits on an invisible button
+  const stepL = useRef<HTMLButtonElement>(null);
+  const stepR = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const [gone, other] = !room.left
+      ? [stepL.current, stepR.current]
+      : !room.right
+        ? [stepR.current, stepL.current]
+        : [];
+    if (gone && other && document.activeElement === gone && other.tabIndex === 0) other.focus();
+  }, [room]);
+  const step = (dir: "left" | "right") => {
+    const el = kbRef.current;
+    if (!el) throw new Error("kanban: a step area was clicked but the board's lists are not mounted");
+    cancelGlide.current();
+    setSettling(true);
+    cancelGlide.current = glideTo(el, stepStart(el, dir), GLIDE_MS, () => setSettling(false));
+  };
+
   // live: poll the board's revision; refetch when an agent, the MCP or another tab changed it. Paused only while
   // a card is being dragged or a move is in flight, so a refresh never pulls the board from under the pointer.
   // NOT while a column's "Add a card" composer is open: it stays open after each add (Trello), its draft is local
@@ -305,6 +345,10 @@ export function Board({
     const all = data.columns.flatMap((c) => c.cards);
     const card = all.find((c) => c.id === cardId) ?? null;
     const k = e.key;
+    // Enter / Space on a focused control outside a card (a step button, a list menu, a link) is that control's own
+    // press — never the hovered card's shortcut, which would swallow the click
+    const control = (document.activeElement as HTMLElement | null)?.closest("button, a[href], summary");
+    if ((k === "Enter" || k === " ") && control && !control.closest(".kb-card")) return;
     const handled = () => e.preventDefault();
 
     if (k === "?") return (handled(), setHelp((h) => !h));
@@ -664,6 +708,30 @@ export function Board({
         )}
 
         <div className="kb-scroll" style={edge ? ({ "--kb-edge-zone": `${edge.zone}px` } as CSSProperties) : undefined}>
+          {/* before the lists in the DOM: Tab reaches the step buttons before every card (the cards' own focus
+              scroll would carry the lists to the far end first, where the right one is off) */}
+          <button
+            type="button"
+            className={`kb-step kb-step-l${room.left && !drag ? " on" : ""}`}
+            aria-label="Scroll the lists left"
+            title="Scroll left"
+            tabIndex={room.left && !drag ? 0 : -1}
+            ref={stepL}
+            onClick={() => step("left")}
+          >
+            <KbIcon name="chevLeft" />
+          </button>
+          <button
+            type="button"
+            className={`kb-step kb-step-r${room.right && !drag ? " on" : ""}`}
+            aria-label="Scroll the lists right"
+            title="Scroll right"
+            tabIndex={room.right && !drag ? 0 : -1}
+            ref={stepR}
+            onClick={() => step("right")}
+          >
+            <KbIcon name="chevRight" />
+          </button>
           <div className={`kb${drag || settling ? " kb-snap-off" : ""}`} ref={kbRef}>
             {cols.map((col) => {
               const { shown: view, older } = foldOf(col);

@@ -132,15 +132,45 @@ export function edgeScroller(
 // The scroll offset (clamped to the scroller's range) of the child start nearest to its current scroll: where the lists
 // glide to after a drag, since they snap to list starts.
 export function nearestStart(el: HTMLElement): number {
+  const starts = listStarts(el);
+  const best = starts.reduce((a, b) => (Math.abs(b - el.scrollLeft) < Math.abs(a - el.scrollLeft) ? b : a));
+  return clampScroll(el, best);
+}
+
+// A step never stops at a list start closer than this (px): at the far right the last start can sit a few px before
+// the end of the range, and a step there would barely move.
+export const STEP_MIN = 48;
+
+// The scroll offset of the next list start at least STEP_MIN past the current scroll toward `dir` (clamped to the
+// scroller's range): where a click on an edge's step area glides the lists — one list sideways, so the snap agrees.
+export function stepStart(el: HTMLElement, dir: "left" | "right"): number {
+  const at = el.scrollLeft;
+  const starts = listStarts(el);
+  const next =
+    dir === "right"
+      ? starts.filter((s) => s >= at + STEP_MIN).reduce((a, b) => Math.min(a, b), Infinity)
+      : starts.filter((s) => s <= at - STEP_MIN).reduce((a, b) => Math.max(a, b), -Infinity);
+  return clampScroll(el, next);
+}
+
+// Which way the lists can still scroll (more than a pixel): the sides whose step area the board shows.
+export function stepRoom(el: HTMLElement): { left: boolean; right: boolean } {
+  return { left: el.scrollLeft > 1, right: el.scrollWidth - el.clientWidth - el.scrollLeft > 1 };
+}
+
+// The scroll offset each list (a child of the scroller) starts at.
+function listStarts(el: HTMLElement): number[] {
   const r = el.getBoundingClientRect();
-  const max = el.scrollWidth - el.clientWidth;
   const starts = Array.from(
     el.children,
     (c) => c.getBoundingClientRect().left - r.left - el.clientLeft + el.scrollLeft,
   );
   if (starts.length === 0) throw new Error("kanban: the board has no lists to snap to");
-  const best = starts.reduce((a, b) => (Math.abs(b - el.scrollLeft) < Math.abs(a - el.scrollLeft) ? b : a));
-  return Math.min(max, Math.max(0, best));
+  return starts;
+}
+
+function clampScroll(el: HTMLElement, left: number): number {
+  return Math.min(el.scrollWidth - el.clientWidth, Math.max(0, left));
 }
 
 // Glides `el.scrollLeft` to `left` over `ms` on animation frames (ease-out cubic: fast, then settling), then calls done.
