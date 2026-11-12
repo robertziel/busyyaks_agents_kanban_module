@@ -45,6 +45,7 @@ module AgentsKanban
     NAMES = %w[kanban_board kanban_workflow kanban_card kanban_create kanban_move kanban_update kanban_comment
                kanban_comment_edit kanban_comment_delete kanban_handoff kanban_claim kanban_register kanban_ask
                kanban_block kanban_unblock kanban_labels kanban_label_save kanban_label_delete kanban_labels_set kanban_due_set
+               kanban_pr_assign
                kanban_checklist_add kanban_checklist_rename kanban_checklist_delete kanban_checklist_item_add
                kanban_checklist_item_edit
                kanban_checklist_toggle kanban_checklist_item_delete kanban_attach kanban_attachments kanban_attachment_get
@@ -101,6 +102,8 @@ module AgentsKanban
                "Never ask it only in chat: a question in the terminal reaches nobody and the board shows nothing " \
                "waiting. A question about no card: create the card, then ask on it. Waiting for CI, an API or " \
                "somebody outside the board: kanban_block(id, reason, url), kanban_unblock when it clears."
+      parts << "Opened a pull request for a card: kanban_pr_assign(id, pr_url, role, author) at once — the board " \
+               "knows a card's PRs only from these assignments, never from branch names or PR numbers in text."
       if cfg.handoff
         screenshots = cfg.handoff.ui_change_needs_screenshots ? ", screenshots for a UI change" : ""
         gates = cfg.handoff.columns.map(&l).join(" / ")
@@ -218,6 +221,17 @@ module AgentsKanban
                                        due_done: { type: "boolean", description: "mark the due date complete" },
                                        cover: { type: "string", enum: host.label_colors + [""] }, },
                          required: %w[id author], }, },
+        { name: "kanban_pr_assign",
+          description: "Assign a pull request to a card: call it right after you open the PR (gh pr create, or a tool " \
+                       "that opens one). The board reads a card's PRs ONLY from these assignments — its gates, CI checks " \
+                       "and the Links rail; never from branch names or PR references in text. role = which PR it is " \
+                       "(the host's roles, e.g. local for the PR on the private local repo, public for the PR on the " \
+                       "public repo); assigning a role again replaces its PR. Stored in the card's metadata prs.<role>.",
+          inputSchema: { type: "object",
+                         properties: { id: INT, author: AUTHOR,
+                                       pr_url: { type: "string", description: "https://github.com/<owner>/<repo>/pull/<n>" },
+                                       role: { type: "string", description: "which PR this is (e.g. local, public)" }, },
+                         required: %w[id pr_url role author], }, },
         { name: "kanban_comment",
           description: "Add a comment (markdown) to a card's activity: progress, findings. #{comment_ask}" \
                        "Returns {id, delivered} (the comment id; who it pings). #{REFS}",
@@ -493,6 +507,8 @@ module AgentsKanban
         attrs = a.slice("title", "labels", "priority", "due", "due_done", "cover", "parent", "metadata")
         attrs["notes"] = a["description"] if a.key?("description")
         dump(row(@store.update(int!(a, "id"), attrs, by: str!(a, "author"))))
+      when "kanban_pr_assign"
+        dump(row(@store.assign_pr(int!(a, "id"), url: str!(a, "pr_url"), role: str!(a, "role"), by: str!(a, "author"))))
       when "kanban_comment"
         c = @store.card!(int!(a, "id"))
         dump(id: @store.comment(c[:id], body: str!(a, "body"), author: str!(a, "author")),

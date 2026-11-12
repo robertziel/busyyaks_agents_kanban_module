@@ -14,7 +14,12 @@ class IdleWatchTest < Minitest::Test
 
   class FakeCi
     attr_accessor :pr, :commit, :down
-    def pr_checks(_card) = (raise AgentsKanban::Delivery::Unavailable, "github down" if @down; @pr)
+    # down: true (every card) or the ids of the cards whose PR the port cannot answer
+    def pr_checks(card)
+      raise AgentsKanban::Delivery::Unavailable, "github down" if @down == true || Array(@down).include?(card[:id])
+
+      @pr
+    end
     def last_commit_at(_card) = @commit
   end
 
@@ -184,8 +189,22 @@ class IdleWatchTest < Minitest::Test
     @ci.down = true
     @now = @fin + N * 5
     watch
-    assert_match(/idle watch skipped: github down/, @log.string)
+    assert_match(/idle watch: CI skipped: github down on card #{@id}/, @log.string)
     assert_empty pings
+  end
+
+  # one card the port cannot answer is skipped and said; the others still get their CI ping
+  def test_one_card_the_port_cannot_answer_does_not_silence_the_others
+    other = kb.create(slug: "p", title: "the other", by: "lead", column: "doing")
+    kb.set_owner(other, session: "shop", by: "lead")
+    @ci.down = [@id]
+    finish("success")
+    @now = @fin + N * 5
+    watch
+    assert_match(/idle watch: CI skipped: github down on card #{@id}/, @log.string)
+    assert_empty pings
+    other_pings = db[:"#{KanbanTest::PREFIX}card_pings"].where(card_id: other, reason: "ci_idle").count
+    assert_equal 1, other_pings, @log.string
   end
 
   def test_config_is_strict_and_the_port_required
