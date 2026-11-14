@@ -42,6 +42,7 @@ import { edgeBands, edgeScroller, glideTo, nearestStart, stepRoom, stepStart, ty
 import { cardFaceClass, splitCard } from "../lib/card";
 import { useFetch } from "../lib/fetch";
 import { isoAgo, isoAt } from "../lib/format";
+import { useGlide } from "../lib/glide";
 import { noListener } from "../lib/listen";
 import { useLiveRev } from "../lib/live";
 import type { BacklogTask, BoardShapeData, HostConfig, BoardData, Card, ColumnKey, SessionLinks } from "../types";
@@ -120,6 +121,7 @@ export function Board({
   const [drag, setDrag] = useState<Drag | null>(null);
   const [over, setOver] = useState<Over | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
+  const [ownMove, setOwnMove] = useState<{ id: number; n: number } | null>(null);
   const [filter, setFilter] = useState<Filter>(EMPTY_FILTER);
   const [order, setOrderState] = useState<Order>(() => {
     const o = readStore<string>("kb-order", "updated");
@@ -264,6 +266,13 @@ export function Board({
     () => void reload(),
     { paused: () => pause.current },
   );
+  // a card that changed place glides there (lib/glide.ts): an agent's move, a drop, the cards making room, a new
+  // filter or order. Still while a card is dragged or a move is in flight; the dropped card settles from its slot.
+  const updated = useMemo(
+    () => new Map((data?.columns ?? []).flatMap((col) => col.cards.map((c) => [c.id, c.updated] as const))),
+    [data],
+  );
+  useGlide(root, { paused: drag !== null || busy !== null, held: drag?.id ?? null, updated, own: ownMove });
   // cards that changed since the last render glow for a moment
   const seen = useRef<Map<number, string> | null>(null);
   useEffect(() => {
@@ -322,6 +331,7 @@ export function Board({
   };
   const move = (id: number, column: ColumnKey, position?: number) => {
     focusId.current = id;
+    setOwnMove((m) => ({ id, n: (m?.n ?? 0) + 1 })); // the card that moves stacks on top of its glide (lib/glide.ts)
     return act(id, () => api.move(id, position == null ? { column } : { column, position }));
   };
   const toggleCollapse = (k: ColumnKey) => {
