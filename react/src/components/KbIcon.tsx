@@ -18,6 +18,7 @@ const PATHS = {
   file: "M4 1.8h5l3 3v9.4H4zM9 1.8v3h3",
   chevLeft: "M9.8 3.6 5.4 8l4.4 4.4",
   chevRight: "M6.2 3.6 10.6 8l-4.4 4.4",
+  mic: "M8 1.8a2 2 0 0 0-2 2v4.4a2 2 0 0 0 4 0V3.8a2 2 0 0 0-2-2zM3.8 7.6a4.2 4.2 0 0 0 8.4 0M8 11.8v2.4M5.6 14.2h4.8",
 } as const;
 
 export type IconName = keyof typeof PATHS;

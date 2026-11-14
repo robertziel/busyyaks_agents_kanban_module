@@ -1251,7 +1251,494 @@
 .ak-root .mde-tool.t-code {
   font: 11px var(--ak-mono);
 }
-.ak-root .kb-detail .mde textarea {
+/* dictation (MicButton.tsx). The mic keeps ONE place — the bar's trailing edge — in every phase: the pill grows from
+   it over the room the formatting tools free (they fade where they stand: the text is read-only until it stops), so
+   the stop square is under the pointer that clicked the microphone and neither the bar nor the text below it moves.
+   One hue per meaning: --ak-dict (recording: --ak-bad; --ak-warn while the speech server cannot be reached) for the
+   pill, its focus ring, its halo and the editor's border; neutral ink while the last words are transcribed and under
+   the words not confirmed yet; --ak-ok when they have landed. The accent stays what it is everywhere: plain focus.
+   Motion is CSS only; prefers-reduced-motion gets the same states, still. */
+.ak-root .mde {
+  --ak-ease-mac: cubic-bezier(0.32, 0.72, 0, 1);
+  --ak-dict: var(--ak-bad);
+  --ak-dict-rgb: var(--ak-bad-rgb);
+  transition: box-shadow 0.3s ease;
+}
+.ak-root .mde.is-warn {
+  --ak-dict: var(--ak-warn);
+  --ak-dict-rgb: var(--ak-warn-rgb);
+}
+.ak-root .mde[data-dictation="rec"],
+.ak-root .mde[data-dictation="rec"]:focus-within {
+  box-shadow: inset 0 0 0 1.5px rgba(var(--ak-dict-rgb), 0.55);
+}
+.ak-root .mde[data-dictation="stt"],
+.ak-root .mde[data-dictation="stt"]:focus-within {
+  box-shadow: inset 0 0 0 1.5px var(--ak-line-strong);
+}
+.ak-root .mde-tool:focus-visible {
+  outline: 2px solid rgba(var(--ak-accent-rgb), 0.65);
+  outline-offset: 1px;
+}
+/* without a mic the bar is what it always was: the tools are the bar's own items */
+.ak-root .mde-kit,
+.ak-root .mde-tools {
+  display: contents;
+}
+/* with a mic: [tabs] [kit: the tools … the mic's place]; a bar too narrow for one row gives the kit the second row,
+   so the mic's row and the bar's height are the same in every phase (and under Preview: the kit keeps its height) */
+.ak-root .mde.has-mic .mde-bar {
+  container-type: inline-size;
+}
+.ak-root .mde.has-mic .mde-kit {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 24px;
+  padding-right: 26px; /* the mic's place (24px + the bar's gap) */
+}
+@container (max-width: 400px) {
+  .ak-root .mde.has-mic .mde-kit {
+    flex-basis: 100%;
+  }
+}
+.ak-root .mde.has-mic .mde-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  transform-origin: 0 50%;
+  transition:
+    opacity 0.18s ease,
+    transform 0.34s var(--ak-ease-mac),
+    visibility 0s;
+}
+.ak-root .mde.dictating .mde-tools {
+  opacity: 0;
+  transform: scale(0.96);
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.18s ease,
+    transform 0.34s var(--ak-ease-mac),
+    visibility 0s 0.18s;
+}
+/* the mic and its status, anchored to the kit's trailing edge: out of the flow, so growing moves nothing */
+.ak-root .mde-dict {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 24px;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+}
+.ak-root .mde-tool.t-mic {
+  display: inline-flex;
+  align-items: center;
+  place-items: unset;
+  flex: none;
+  border-radius: var(--ak-radius-pill);
+  -webkit-tap-highlight-color: transparent; /* the pill is its own feedback: no grey box over the morph on touch */
+  box-shadow: 0 0 0 0 rgba(var(--ak-dict-rgb), 0);
+  transition:
+    background-color 0.3s ease,
+    color 0.3s ease,
+    box-shadow 0.3s ease;
+}
+.ak-root .mde-tool.t-mic[aria-disabled="true"] {
+  cursor: default;
+}
+.ak-root .mde-tool.t-mic[data-phase="starting"] {
+  color: var(--ak-ink);
+}
+.ak-root .mde-tool.t-mic.on {
+  color: var(--ak-dict);
+  background: rgba(var(--ak-dict-rgb), 0.13);
+  /* the halo is the microphone's level (--ak-mic-level, 0 … 1, set per animation frame) */
+  box-shadow:
+    inset 0 0 0 0.5px rgba(var(--ak-dict-rgb), 0.4),
+    0 0 0 calc(var(--ak-mic-level, 0) * 5px) rgba(var(--ak-dict-rgb), 0.16);
+  transition:
+    background-color 0.3s ease,
+    color 0.3s ease;
+}
+.ak-root .mde-tool.t-mic.on:hover {
+  background: rgba(var(--ak-dict-rgb), 0.2);
+}
+.ak-root .mde-tool.t-mic[data-phase="stt"] {
+  color: var(--ak-ink-dim);
+  background: var(--ak-mat-fill);
+}
+.ak-root .mde-tool.t-mic[data-phase="done"] {
+  color: var(--ak-ok);
+  background: rgba(var(--ak-ok-rgb), 0.14);
+}
+/* the focus ring follows the pill: never the accent around a recording */
+.ak-root .mde-tool.t-mic:is([data-phase="starting"], [data-phase="rec"]):focus-visible {
+  outline-color: rgba(var(--ak-dict-rgb), 0.75);
+}
+.ak-root .mde-tool.t-mic[data-phase="stt"]:focus-visible {
+  outline-color: var(--ak-ink-faint);
+}
+.ak-root .mde-tool.t-mic[data-phase="done"]:focus-visible {
+  outline-color: rgba(var(--ak-ok-rgb), 0.75);
+}
+/* the glyphs share one 24px cell and cross-fade */
+.ak-root .mic-glyph {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+}
+.ak-root .mic-glyph > svg {
+  grid-area: 1 / 1;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0;
+  transform: scale(0.5);
+  transition:
+    opacity 0.2s ease,
+    transform 0.34s var(--ak-ease-mac);
+}
+.ak-root .mic-glyph > .g-mic .g-mic-body {
+  fill: currentColor;
+  fill-opacity: 0;
+  transition: fill-opacity 0.3s ease;
+}
+.ak-root .t-mic:is([data-phase="idle"], [data-phase="starting"]) .g-mic,
+.ak-root .t-mic[data-phase="rec"] .g-stop,
+.ak-root .t-mic:is([data-phase="starting"], [data-phase="stt"]) .g-ring,
+.ak-root .t-mic[data-phase="done"] .g-done {
+  opacity: 1;
+  transform: none;
+}
+.ak-root .t-mic[data-phase="starting"] .g-mic {
+  transform: scale(0.78);
+}
+.ak-root .t-mic[data-phase="starting"] .g-mic-body {
+  fill-opacity: 0.9;
+}
+.ak-root .mic-glyph > .g-stop {
+  fill: currentColor;
+  stroke: none;
+}
+.ak-root .mic-glyph > .g-ring {
+  width: 21px;
+  height: 21px;
+  stroke: var(--ak-dict); /* the microphone is opening: the recording's hue arrives first */
+  stroke-width: 1.2;
+}
+.ak-root .mic-glyph > .g-ring circle {
+  stroke-dasharray: 30 70;
+  transform-origin: 50% 50%;
+  animation: ak-mic-spin 0.9s linear infinite;
+  animation-play-state: paused;
+}
+.ak-root .t-mic:is([data-phase="starting"], [data-phase="stt"]) .g-ring circle {
+  animation-play-state: running;
+}
+.ak-root .t-mic[data-phase="stt"] .g-ring {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  stroke-width: 1.7;
+}
+.ak-root .mic-glyph > .g-done {
+  stroke-width: 1.8;
+}
+.ak-root .mic-glyph > .g-done path {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+}
+.ak-root .t-mic[data-phase="done"] .g-done path {
+  animation: ak-mic-check 0.42s 0.08s var(--ak-ease-mac) forwards;
+}
+/* the pill's live part grows out of the glyph, away from it (0fr → 1fr; its content is held against the glyph, so
+   the bars appear first and the time last) */
+.ak-root .mic-live {
+  display: grid;
+  grid-template-columns: 0fr;
+  transition: grid-template-columns 0.4s var(--ak-ease-mac);
+}
+.ak-root .t-mic:is([data-phase="rec"], [data-phase="stt"]) .mic-live {
+  grid-template-columns: 1fr;
+}
+.ak-root .mic-live-in {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  min-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 0.22s ease;
+}
+.ak-root .t-mic:is([data-phase="rec"], [data-phase="stt"]) .mic-live-in {
+  opacity: 1;
+  transition-delay: 0.08s;
+}
+.ak-root .mic-bars {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 16px;
+  margin-right: 1px;
+  flex: none;
+}
+.ak-root .mic-bars > i {
+  width: 2.5px;
+  height: 15px;
+  border-radius: 2px;
+  background: currentColor;
+  /* --ak-bar: this bar's level (0 … 1), set per animation frame while recording */
+  transform: scaleY(calc(0.15 + var(--ak-bar, 0) * 0.85));
+}
+.ak-root .t-mic[data-phase="stt"] .mic-bars > i {
+  animation: ak-mic-wave 1.15s ease-in-out infinite;
+  animation-delay: calc(var(--ak-i) * 0.11s - 1.15s);
+}
+/* the time shows once the pill has its width: never a clipped digit mid-morph */
+.ak-root .mic-time {
+  font: 500 11.5px var(--ak-sans);
+  font-variant-numeric: tabular-nums;
+  margin-left: 11px;
+  white-space: nowrap;
+  flex: none;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+.ak-root .t-mic:is([data-phase="rec"], [data-phase="stt"]) .mic-time {
+  opacity: 1;
+  transition: opacity 0.2s ease 0.36s;
+}
+/* the status beside the pill (up to two short lines where the bar is narrow) */
+.ak-root .mde-rec {
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 12px;
+  max-height: 24px;
+  overflow: hidden;
+  text-align: right;
+  text-wrap: balance;
+  color: var(--ak-ink-faint);
+  animation: ak-mic-status 0.36s 0.12s var(--ak-ease-mac) both; /* after the tools have faded: never over them */
+}
+/* shown beside the idle mic, where the tools are back: on a bar too narrow for both it covers them, never mixes in */
+.ak-root .mde-rec.is-none {
+  padding-left: 8px;
+  background: var(--ak-panel);
+}
+.ak-root .mde-rec.is-warn {
+  color: var(--ak-warn);
+  font-weight: 500;
+}
+.ak-root .mde-rec.is-stt {
+  background: linear-gradient(
+      90deg,
+      var(--ak-ink-faint) 0%,
+      var(--ak-ink-faint) 38%,
+      var(--ak-ink) 50%,
+      var(--ak-ink-faint) 62%,
+      var(--ak-ink-faint) 100%
+    )
+    0 0 / 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation:
+    ak-mic-status 0.36s 0.12s var(--ak-ease-mac) both,
+    ak-mic-shimmer 1.7s linear infinite;
+}
+/* a failure, under the text: the reason, and (a kept recording) Retry at its end */
+.ak-root .mde-mic-err {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  border-top: 0.5px solid rgba(var(--ak-bad-rgb), 0.3);
+  background: rgba(var(--ak-bad-rgb), 0.07);
+  border-radius: 0 0 var(--ak-radius-ctl) var(--ak-radius-ctl);
+  animation: ak-mic-in 0.36s var(--ak-ease-mac) both;
+}
+.ak-root .mde-mic-err::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  transform: translateY(-1px);
+}
+.ak-root .mde-mic-err .linklike {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 10px;
+  border-radius: var(--ak-radius-pill);
+  color: var(--ak-bad);
+  font-weight: 600;
+  background: rgba(var(--ak-bad-rgb), 0.1);
+  box-shadow: inset 0 0 0 0.5px rgba(var(--ak-bad-rgb), 0.45);
+  transition: background-color 0.2s ease;
+}
+.ak-root .mde-mic-err .linklike:hover {
+  text-decoration: none;
+  background: rgba(var(--ak-bad-rgb), 0.2);
+}
+.ak-root .mde-mic-err .linklike:focus-visible {
+  outline: 2px solid rgba(var(--ak-bad-rgb), 0.75);
+  outline-offset: 1px;
+}
+.ak-root .mde-mic-err .linklike:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+/* the words not confirmed yet, marked exactly behind them (the editor copies the textarea's box and type onto the
+   ghost): a dotted underline in ink — the mark every input method gives text still being composed, ≥ 3:1 on the
+   panel in both skins — over a breathing tint of the recording's hue */
+.ak-root .mde-area {
+  position: relative;
+  display: grid;
+  min-width: 0;
+}
+.ak-root .mde-area > textarea {
+  position: relative;
+}
+.ak-root .mde-ghost {
+  position: absolute;
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  color: transparent;
+  pointer-events: none;
+  user-select: none;
+}
+.ak-root .mde-ghost mark {
+  color: transparent;
+  background: rgba(var(--ak-dict-rgb), 0.12);
+  text-decoration: underline dotted var(--ak-ink-faint);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  text-decoration-skip-ink: none;
+  border-radius: 3px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  animation: ak-mic-pending 1.6s ease-in-out infinite;
+}
+.ak-root .mde.landed .mde-area {
+  animation: ak-mic-landed 1.3s ease-out both;
+}
+@keyframes ak-mic-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes ak-mic-check {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes ak-mic-wave {
+  0%,
+  100% {
+    transform: scaleY(0.18);
+    opacity: 0.45;
+  }
+  50% {
+    transform: scaleY(0.62);
+    opacity: 1;
+  }
+}
+@keyframes ak-mic-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+}
+@keyframes ak-mic-status {
+  from {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+}
+@keyframes ak-mic-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+/* only the tint breathes: the underline keeps its contrast */
+@keyframes ak-mic-pending {
+  50% {
+    background-color: rgba(var(--ak-dict-rgb), 0.04);
+  }
+}
+@keyframes ak-mic-landed {
+  from {
+    background-color: rgba(var(--ak-ok-rgb), 0.1);
+  }
+  to {
+    background-color: rgba(var(--ak-ok-rgb), 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ak-root .mde,
+  .ak-root .mde-tool,
+  .ak-root .mde-tool.t-mic.on,
+  .ak-root .mde.has-mic .mde-tools,
+  .ak-root .mde.dictating .mde-tools,
+  .ak-root .mic-glyph > svg,
+  .ak-root .mic-glyph .g-mic-body,
+  .ak-root .mic-live,
+  .ak-root .mic-live-in,
+  .ak-root .mic-time,
+  .ak-root .t-mic:is([data-phase="rec"], [data-phase="stt"]) .mic-time,
+  .ak-root .mde-mic-err .linklike {
+    transition: none;
+  }
+  .ak-root .mic-glyph > .g-ring circle,
+  .ak-root .t-mic[data-phase="stt"] .mic-bars > i,
+  .ak-root .t-mic[data-phase="done"] .g-done path,
+  .ak-root .mde-rec,
+  .ak-root .mde-rec.is-stt,
+  .ak-root .mde-mic-err,
+  .ak-root .mde-ghost mark,
+  .ak-root .mde.landed .mde-area {
+    animation: none;
+  }
+  /* still states: no halo, level bars at rest (a fixed shape), the check drawn, plain status text */
+  .ak-root .mde-tool.t-mic.on {
+    box-shadow: inset 0 0 0 0.5px rgba(var(--ak-dict-rgb), 0.4);
+  }
+  .ak-root .mic-bars > i {
+    transform: scaleY(calc(0.3 + 0.1 * (3 - max(var(--ak-i) - 3, 3 - var(--ak-i)))));
+  }
+  .ak-root .t-mic[data-phase="done"] .g-done path {
+    stroke-dashoffset: 0;
+  }
+  .ak-root .mde-rec.is-stt {
+    background: none;
+    color: var(--ak-ink-faint);
+  }
+}
+/* as specific as the fields' own rule (.ak-root :is(…) :is(textarea, …)), which would otherwise frame the text twice */
+.ak-root :is(.kb-add, .ak-root .kb-detail) .mde .mde-area > textarea {
   box-shadow: none;
   background: transparent;
   border-radius: 0 0 var(--ak-radius-ctl) var(--ak-radius-ctl);
@@ -1260,7 +1747,7 @@
   max-height: 55vh;
   line-height: 1.45;
 }
-.ak-root .kb-detail .mde textarea:focus {
+.ak-root :is(.kb-add, .ak-root .kb-detail) .mde .mde-area > textarea:focus {
   outline: none;
 }
 .ak-root .mde-preview {
