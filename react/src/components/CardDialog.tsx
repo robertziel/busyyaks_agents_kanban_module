@@ -5,7 +5,7 @@
 // The host injects the api and the viewer (host.tsx); the board config (columns, gates) comes with the board JSON.
 // Attachments: the sidebar Attach button, a file dropped anywhere on the dialog, or pasted / dropped into an editor (which
 // inserts the snippet) — each upload shows its progress and, on failure, the server's reason. Pictures open in a lightbox.
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type MutableRefObject, type ReactNode } from "react";
 import { errMsg } from "../api";
 import { colLabel as labelOf, useKanbanHost } from "../host";
 import { dragHasFiles, filesOf, formatBytes } from "../lib/attachments";
@@ -19,7 +19,8 @@ import type { Attachment, BoardData, BoardLabel, CardData, CardFull, Checklist }
 import { AgentLinks, Avatar, ErrorState, Html, Loading } from "./Bits";
 import { CardLinks } from "./CardLinkRow";
 import { KbIcon, type IconName } from "./KbIcon";
-import { MarkdownEditor, UploadChips } from "./MarkdownEditor";
+import { MarkdownEditor, UploadChips, type DictateHandle } from "./MarkdownEditor";
+import { matchesCombo, type KeyCombo } from "../lib/shortcut";
 import { approvedNext, approveLabel, approveTitle, operatorMoves, stepAt } from "../lib/workflow";
 import { Select } from "./Select";
 
@@ -34,10 +35,31 @@ type DialogProps = {
   onClose: () => void;
   onChanged: () => void;
   projectHref: string | null;
+  dictationShortcut: KeyCombo | null; // the host's dictation key (null: none)
 };
 
 export function CardDialog(props: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
+  // the dictation shortcut (push-to-talk) anywhere while the card is open dictates into the comment box. Caught on the
+  // WINDOW in the capture phase, before any element sees it: wherever the focus is (the dialog itself, the body, an
+  // editor that keeps its keys to itself, a menu), the key reaches it — as the Settings page's recorder reads it.
+  const dictateComment = useRef<DictateHandle | null>(null);
+  const shortcut = useRef(props.dictationShortcut);
+  shortcut.current = props.dictationShortcut;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const key = shortcut.current;
+      if (!key || !matchesCombo(e, key) || !dictateComment.current) return;
+      e.preventDefault(); // ⌥M types "µ" on a Mac: never into a field
+      e.stopPropagation(); // no board shortcut, no editor sees it
+      if (!e.repeat) dictateComment.current.hold(key); // released = stopped
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+  // while the comment box dictates, Esc and a click on the backdrop stop the dictation instead of closing the card (the
+  // words spoken so far would be lost with it)
+  const dictating = useRef(false);
   // The modal opens once per card id, not on every render: the host passes a new onClose closure each time, so Esc
   // reads the CURRENT one from a ref instead of re-running the effect (which would close and reopen the dialog).
   const onClose = useRef(props.onClose);
@@ -50,6 +72,10 @@ export function CardDialog(props: DialogProps) {
     const onCancel = (e: Event) => {
       e.preventDefault();
       if (d.querySelector(".kb-lightbox")) return; // Esc closes the picture first (its own key handler), not the card
+      if (dictating.current) {
+        dictateComment.current?.toggle();
+        return;
+      }
       onClose.current();
     };
     d.addEventListener("cancel", onCancel);
@@ -64,11 +90,20 @@ export function CardDialog(props: DialogProps) {
       className="kb-dialog"
       aria-label="Card"
       onClick={(e) => {
-        if (e.target === ref.current) props.onClose();
+        if (e.target !== ref.current) return;
+        if (dictating.current) dictateComment.current?.toggle();
+        else props.onClose();
       }}
       onKeyDown={(e) => e.stopPropagation()}
     >
-      <CardDetail key={props.id} {...props} />
+      <CardDetail
+        key={props.id}
+        {...props}
+        dictateComment={dictateComment}
+        onDictating={(on) => {
+          dictating.current = on;
+        }}
+      />
     </dialog>
   );
 }
@@ -98,7 +133,18 @@ function Section({
   );
 }
 
-function CardDetail({ id, slug, board, panel, setPanel, onClose, onChanged, projectHref }: DialogProps) {
+function CardDetail({
+  id,
+  slug,
+  board,
+  panel,
+  setPanel,
+  onClose,
+  onChanged,
+  projectHref,
+  dictateComment,
+  onDictating,
+}: DialogProps & { dictateComment: MutableRefObject<DictateHandle | null>; onDictating: (on: boolean) => void }) {
   const { api, me, config, board: shape } = useKanbanHost();
   const colLabel = (k: string) => labelOf(shape, k);
   const gates = shape.rules.gates;
@@ -106,6 +152,14 @@ function CardDetail({ id, slug, board, panel, setPanel, onClose, onChanged, proj
   const [title, setTitle] = useState<string | null>(null);
   const [desc, setDesc] = useState<string | null>(null); // null = not editing
   const [comment, setComment] = useState("");
+  const [commentDictating, setCommentDictating] = useState(false); // Save waits for the dictation's final text
+  const dictatingChanged = useCallback(
+    (on: boolean) => {
+      setCommentDictating(on);
+      onDictating(on);
+    },
+    [onDictating],
+  );
   const [editing, setEditing] = useState<{ id: number; body: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -727,7 +781,7 @@ function CardDetail({ id, slug, board, panel, setPanel, onClose, onChanged, proj
               className="kb-comment"
               onSubmit={(e: FormEvent) => {
                 e.preventDefault();
-                if (!comment.trim()) return;
+                if (!comment.trim() || commentDictating) return;
                 void sendComment(comment, true);
               }}
             >
@@ -737,19 +791,26 @@ function CardDetail({ id, slug, board, panel, setPanel, onClose, onChanged, proj
                   value={comment}
                   onChange={setComment}
                   onUpload={uploadFile}
+                  dictate
+                  dictateToggle={dictateComment}
                   ariaLabel="Comment"
                   rows={2}
                   placeholder="Write a comment… (markdown, @name)"
                   onSubmit={() => {
                     if (comment.trim()) void sendComment(comment, true);
                   }}
+                  onDictatingChange={dictatingChanged}
                 />
                 {comment.trim() && (
                   <div className="kb-row">
-                    <button className="btn primary small" disabled={busy}>
+                    <button
+                      className="btn primary small"
+                      disabled={busy || commentDictating}
+                      title={commentDictating ? "Stop the dictation first: its words are not final yet" : undefined}
+                    >
                       Save
                     </button>
-                    <span className="muted kb-hint">Ctrl+Enter</span>
+                    <span className="muted kb-hint">{commentDictating ? "stop the mic to save" : "Ctrl+Enter"}</span>
                   </div>
                 )}
               </div>
