@@ -6,7 +6,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Board, type BoardView, type KanbanApi } from "../src";
 import type { Attachment, BoardData, Card, CardData } from "../src/types";
 import { boardData, fixture } from "./fixtures";
@@ -696,6 +696,266 @@ describe("Board", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// jsdom lays nothing out: the lists 230 px apart under a 100 px header, each card 60 px under the one before it; the
+// board 2000 × 1000; a flying copy, the copies' layer (so no containing-block offset) and everything else at 0,0.
+function layout() {
+  const rect = (left: number, top: number, width: number, height: number) =>
+    ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top }) as DOMRect;
+  return vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    if (this.matches(".kb")) return rect(0, 0, 2000, 1000);
+    const col = this.closest(".kb-col");
+    if (!col || this.matches(".kb-glide")) return rect(0, 0, 0, 0);
+    const x = Array.from(col.parentElement!.children).indexOf(col) * 230;
+    if (this.matches("ol.kb-list")) return rect(x, 100, 220, 800);
+    if (!this.matches("li.kb-card, li.kb-ghost")) return rect(0, 0, 0, 0);
+    const row = Array.from(this.parentElement!.querySelectorAll("li.kb-card, li.kb-ghost")).indexOf(this); // a drop slot is a row
+    return rect(x, 100 + row * 60, 220, 54);
+  });
+}
+
+describe("cards glide to their new place", () => {
+  beforeEach(() => {
+    layout();
+  });
+  afterEach(() => vi.restoreAllMocks());
+  // the board refetches after a quick-add: by then an agent moved card 1 from To do to In progress
+  async function moveByAgent() {
+    // the list shows the latest change first: card 1 above card 2
+    const [t1, t2] = [new Date(Date.now() - 1000).toISOString(), new Date(Date.now() - 2000).toISOString()];
+    const before = [card({ id: 1, updated: t1 }), card({ id: 2, title: "Login stays", position: 1, updated: t2 })];
+    // the move is card 1's activity: its `updated` changes, card 2 only makes room
+    const moved = new Date().toISOString();
+    const after = [
+      card({ id: 1, column: "doing", updated: moved }),
+      card({ id: 2, title: "Login stays", updated: t2 }),
+    ];
+    const api = fakeApi(boardData(coding, before), before);
+    let data = boardData(coding, before);
+    api.board = () => Promise.resolve(data);
+    const view = render(<Host api={api} />);
+    await screen.findByText("Fix login");
+    const animate = vi.spyOn(Element.prototype, "animate");
+    data = boardData(coding, after);
+    fireEvent.click(screen.getAllByText("+ Add a card")[1]!);
+    const ta = screen.getByLabelText("New card title in To do");
+    fireEvent.change(ta, { target: { value: "new one" } });
+    fireEvent.keyDown(ta, { key: "Enter" });
+    await waitFor(() => expect(view.container.querySelector('li[data-id="1"]')).toHaveAttribute("data-col", "doing"));
+    return { ...view, animate, setCards: (cs: Card[]) => void (data = boardData(coding, cs)) };
+  }
+
+  it("the first load moves nothing; a card an agent moved to another list flies there as a copy, removed on landing", async () => {
+    const first = vi.spyOn(Element.prototype, "animate");
+    const { container, animate } = await moveByAgent();
+    expect(first.mock.calls.length).toBe(animate.mock.calls.length); // nothing before the move
+    const root = container.querySelector<HTMLElement>(".ak-root")!;
+    const moved = container.querySelector<HTMLElement>('li[data-id="1"]')!;
+    const shifted = container.querySelector<HTMLElement>('li[data-id="2"]')!;
+    const copies = Array.from(root.querySelectorAll<HTMLElement>(":scope > .kb-flights > li.kb-glide"));
+    expect(copies).toHaveLength(2);
+    const [up, fly] = copies as [HTMLElement, HTMLElement]; // list order: card 2 (To do), then card 1 (In progress)
+    // the copy: over the lists, out of the pointer's and the keyboard's way, not a second card 1
+    expect(fly).toHaveTextContent("Fix login");
+    expect(fly).toHaveClass("kb-card", "kb-fly");
+    expect(fly).not.toHaveAttribute("data-id");
+    expect(fly).not.toHaveAttribute("tabindex");
+    expect(fly).toHaveAttribute("inert");
+    expect(fly.style.position).toBe("fixed");
+    expect(fly.style.pointerEvents).toBe("none");
+    expect(up).not.toHaveClass("kb-fly"); // a row up in its own list: no lift
+    expect([moved.style.opacity, shifted.style.opacity]).toEqual(["0", "0"]);
+    // To do is the 2nd list (x 230), In progress the 3rd (x 460): card 1 from row 0 there to row 0 here; card 2
+    // one row up
+    const flights = animate.mock.calls.map(([frames, o]) => [(frames as Keyframe[])[0]!.translate, o]);
+    expect(flights).toEqual([
+      ["0px 60px", { duration: 214, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }],
+      ["-230px 0px", { duration: 346, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }],
+    ]);
+    expect(fly.style.getPropertyValue("--kb-glide-ms")).toBe("346ms");
+    // the card that moved (its data changed, to another list) flies above the card making room
+    expect([up.style.zIndex, fly.style.zIndex]).toEqual(["60", "3230"]);
+    // landing: the copy goes, the card shows
+    const [upAnim, flyAnim] = animate.mock.results.map((r) => r.value as Animation);
+    flyAnim!.finish();
+    expect(fly.isConnected).toBe(false);
+    expect(moved.style.opacity).toBe("");
+    expect(up.isConnected).toBe(true);
+    upAnim!.finish();
+    expect(root.querySelector(".kb-glide")).toBeNull();
+    expect(shifted.style.opacity).toBe("");
+  });
+
+  it("two cards swapping one row travel as far: the one that moved (its own data changed) flies on top", async () => {
+    const [t1, t2] = [new Date(Date.now() - 1000).toISOString(), new Date(Date.now() - 2000).toISOString()];
+    const before = [card({ id: 1, updated: t1 }), card({ id: 2, title: "Login stays", position: 1, updated: t2 })];
+    // an agent moved card 2 to the top of To do: card 2's activity, so it is the latest change; card 1 goes one row down
+    const after = [
+      card({ id: 1, position: 1, updated: t1 }),
+      card({ id: 2, title: "Login stays", updated: new Date().toISOString() }),
+    ];
+    const api = fakeApi(boardData(coding, before), before);
+    let data = boardData(coding, before);
+    api.board = () => Promise.resolve(data);
+    const { container } = render(<Host api={api} />);
+    await screen.findByText("Fix login");
+    data = boardData(coding, after);
+    fireEvent.click(screen.getAllByText("+ Add a card")[1]!);
+    const ta = screen.getByLabelText("New card title in To do");
+    fireEvent.change(ta, { target: { value: "new one" } });
+    fireEvent.keyDown(ta, { key: "Enter" });
+    const root = container.querySelector<HTMLElement>(".ak-root")!;
+    await waitFor(() => expect(root.querySelectorAll(":scope > .kb-flights > li.kb-glide")).toHaveLength(2));
+    const [up, down] = Array.from(root.querySelectorAll<HTMLElement>(":scope > .kb-flights > li.kb-glide")) as [
+      HTMLElement,
+      HTMLElement,
+    ];
+    expect(up).toHaveTextContent("Login stays"); // the copy added first, under the other by DOM order alone
+    expect(down).toHaveTextContent("Fix login");
+    expect([up.style.zIndex, down.style.zIndex]).toEqual(["2060", "60"]);
+  });
+
+  it("the board's own move names the card that moved, though `updated` (whole seconds) did not change", async () => {
+    window.localStorage.setItem("kb-order", JSON.stringify("position"));
+    try {
+      const t = new Date(Date.now() - 1000).toISOString(); // both cards: the same second, before and after
+      const before = [card({ id: 1, updated: t }), card({ id: 2, title: "Login stays", position: 1, updated: t })];
+      // the server sends a list in board order
+      const after = [
+        card({ id: 2, title: "Login stays", position: 0, updated: t }),
+        card({ id: 1, position: 1, updated: t }),
+      ];
+      const api = fakeApi(boardData(coding, before), before);
+      let data = boardData(coding, before);
+      api.board = () => Promise.resolve(data);
+      const { container } = render(<Host api={api} />);
+      await screen.findByText("Login stays");
+      data = boardData(coding, after);
+      const two = container.querySelector<HTMLElement>('li[data-id="2"]')!;
+      two.focus();
+      fireEvent.keyDown(two, { key: "ArrowUp", altKey: true }); // Alt+↑: card 2 one row up
+      const root = container.querySelector<HTMLElement>(".ak-root")!;
+      await waitFor(() => expect(root.querySelectorAll(":scope > .kb-flights > li.kb-glide")).toHaveLength(2));
+      const copies = Array.from(root.querySelectorAll<HTMLElement>(":scope > .kb-flights > li.kb-glide"));
+      const z = Object.fromEntries(copies.map((c) => [c.textContent?.includes("Login stays") ? 2 : 1, c.style.zIndex]));
+      expect(z).toEqual({ 2: "2060", 1: "60" });
+      expect(api.calls).toContain("move 2 todo");
+    } finally {
+      window.localStorage.removeItem("kb-order");
+    }
+  });
+
+  it("a render mid-flight leaves a card that did not move again alone; a new card fades in", async () => {
+    const { container, animate } = await moveByAgent();
+    const fly = container.querySelector<HTMLElement>(".ak-root > .kb-flights > li.kb-fly")!;
+    const flights = animate.mock.calls.length;
+    // the board renders again (the filter box): same places
+    fireEvent.change(screen.getByLabelText("Filter cards"), { target: { value: "login" } });
+    expect(animate.mock.calls.length).toBe(flights);
+    expect(fly.isConnected).toBe(true);
+    // card 2 is filtered out, then back: it fades in where it is, no copy
+    fireEvent.change(screen.getByLabelText("Filter cards"), { target: { value: "fix" } });
+    expect(container.querySelector('li[data-id="2"]')).toBeNull();
+    expect(container.querySelectorAll(".ak-root > .kb-flights > li.kb-glide")).toHaveLength(1); // card 2's copy went with it
+    fireEvent.change(screen.getByLabelText("Filter cards"), { target: { value: "" } });
+    const back = container.querySelector<HTMLElement>('li[data-id="2"]')!;
+    expect(animate.mock.calls.length).toBe(flights + 1);
+    expect(animate.mock.contexts.at(-1)).toBe(back);
+    expect(animate.mock.calls.at(-1)![0]).toEqual([{ offset: 0, opacity: 0, scale: 0.97 }]);
+    expect(fly.isConnected).toBe(true);
+  });
+
+  it("a card dropped in its slot gets a still copy on top while the card making room glides under it", async () => {
+    window.localStorage.setItem("kb-order", JSON.stringify("position"));
+    try {
+      const t = new Date(Date.now() - 1000).toISOString();
+      const before = [card({ id: 1, updated: t }), card({ id: 2, title: "Login stays", position: 1, updated: t })];
+      const after = [
+        card({ id: 2, title: "Login stays", position: 0, updated: t }),
+        card({ id: 1, position: 1, updated: t }),
+      ];
+      const api = fakeApi(boardData(coding, before), before);
+      let data = boardData(coding, before);
+      api.board = () => Promise.resolve(data);
+      const { container } = render(<Host api={api} />);
+      await screen.findByText("Login stays");
+      data = boardData(coding, after);
+      const two = container.querySelector<HTMLElement>('li[data-id="2"]')!;
+      const list = two.closest<HTMLElement>("ol.kb-list")!;
+      const dataTransfer = { setData() {}, effectAllowed: "", dropEffect: "" };
+      fireEvent.dragStart(two, { dataTransfer });
+      // jsdom has no DragEvent: a plain event carries the pointer's height
+      const over = Object.assign(new Event("dragover", { bubbles: true, cancelable: true }), {
+        dataTransfer,
+        clientY: 110,
+      });
+      fireEvent(list, over); // over the top half of row 0: the slot above card 1
+      await waitFor(() => expect(list.querySelector("li.kb-ghost")).not.toBeNull());
+      fireEvent.drop(list, { dataTransfer, clientY: 110 });
+      const root = container.querySelector<HTMLElement>(".ak-root")!;
+      await waitFor(() => expect(root.querySelectorAll(":scope > .kb-flights > li.kb-glide")).toHaveLength(2));
+      expect(api.calls).toContain("move 2 todo");
+      const copies = Array.from(root.querySelectorAll<HTMLElement>(":scope > .kb-flights > li.kb-glide"));
+      const z = Object.fromEntries(copies.map((c) => [c.textContent?.includes("Login stays") ? 2 : 1, c.style.zIndex]));
+      expect(z).toEqual({ 2: "2000", 1: "60" }); // the dropped card: no way to go, on top of everything else
+    } finally {
+      window.localStorage.removeItem("kb-order");
+    }
+  });
+
+  it("a flight lands at once when the window is resized or reduced motion is switched on mid-flight", async () => {
+    const { container } = await moveByAgent();
+    const layer = () => container.querySelectorAll(".ak-root > .kb-flights > li.kb-glide").length;
+    expect(layer()).toBe(2);
+    window.dispatchEvent(new Event("resize"));
+    expect(layer()).toBe(0);
+    expect(container.querySelector<HTMLElement>('li[data-id="1"]')!.style.opacity).toBe("");
+  });
+
+  it("reduced motion switched on mid-flight lands every copy", async () => {
+    const { container } = await moveByAgent();
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)") as MediaQueryList & { set(m: boolean): void };
+    try {
+      mq.set(true);
+      expect(container.querySelectorAll(".kb-glide")).toHaveLength(0);
+    } finally {
+      mq.set(false);
+    }
+  });
+
+  it("a flight moved again goes on from where its copy is now (the eased offset left), not from its scaled box", async () => {
+    const { container, animate, setCards } = await moveByAgent();
+    const fly = animate.mock.results[1]!.value as Animation & { progress: number };
+    fly.progress = 0.5; // card 1 halfway: -230 px → -115 px still to go
+    setCards([
+      card({ id: 1, updated: new Date().toISOString() }),
+      card({ id: 2, title: "Login stays", position: 1, updated: new Date(Date.now() - 2000).toISOString() }),
+    ]);
+    const one = container.querySelector<HTMLElement>('li[data-id="1"]')!;
+    one.focus();
+    fireEvent.keyDown(one, { key: "ArrowLeft", altKey: true }); // Alt+←: back to To do
+    const isOne = (el: unknown) =>
+      el instanceof HTMLElement && el.classList.contains("kb-glide") && el.textContent?.includes("Fix login");
+    await waitFor(() => expect(animate.mock.contexts.filter(isOne)).toHaveLength(2));
+    const last = animate.mock.contexts
+      .map((c, i) => [c, i] as const)
+      .filter(([c]) => isOne(c))
+      .at(-1)![1];
+    const [frames] = animate.mock.calls[last]! as [Keyframe[]];
+    // In progress (x 460) → To do (x 230), from 115 px short of In progress: 345 - 230 = +115 px
+    expect(frames[0]!.translate).toMatch(/^115px /);
+  });
+
+  it("prefers-reduced-motion: reduce → nothing moves", async () => {
+    const media = vi
+      .spyOn(window, "matchMedia")
+      .mockImplementation((q) => ({ matches: true, media: q }) as MediaQueryList);
+    const { container, animate } = await moveByAgent();
+    expect(media).toHaveBeenCalledWith("(prefers-reduced-motion: reduce)");
+    expect(animate).not.toHaveBeenCalled();
+    expect(container.querySelector(".kb-glide")).toBeNull();
   });
 });
 

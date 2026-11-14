@@ -740,6 +740,33 @@
   opacity: 0.6;
   pointer-events: none;
 }
+/* a card changing place (lib/glide.ts): its copy glides from the old spot to the new one in .kb-flights, a layer over
+   the lists (and the step areas, z 2) and under the list menus (z 5) — the copies rank among themselves inside it; on
+   the way to another list it lifts a little (--kb-glide-ms = the flight's length). A copy of a focused card shows its
+   focus ring. No copy is made under prefers-reduced-motion: reduce. */
+.ak-root .kb-flights {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+.ak-root .kb-card.kb-glide {
+  cursor: default;
+  will-change: translate;
+}
+.ak-root .kb-card.kb-glide-focus {
+  outline: 3px solid rgba(var(--ak-accent-rgb), 0.5);
+  outline-offset: 1px;
+}
+.ak-root .kb-card.kb-fly {
+  animation: kb-fly var(--kb-glide-ms) ease-in-out;
+}
+@keyframes kb-fly {
+  35% {
+    scale: 1.03;
+    filter: drop-shadow(0 10px 16px rgba(0, 0, 0, 0.22));
+  }
+}
 .ak-root .kb-cardcover {
   margin: -8px -10px 0 -13px;
   height: 28px;
