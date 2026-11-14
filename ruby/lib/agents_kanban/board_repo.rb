@@ -109,6 +109,38 @@ module AgentsKanban
       b
     end
 
+    # ── session boards (HostConfig#session_boards): a board row whose slug is the host's prefix + a session name ──
+
+    # The session board's row, or nil (archived ones too).
+    def session_row(slug) = boards_t.where(project_slug: slug.to_s).first
+
+    # Create the session's board from `board` (the host's session_boards.board), or bring an archived one back; an
+    # existing live one is touched (the session used it). → "created" | "restored" | "touched"
+    def open_session_board(slug, board, by:)
+      now = @clock.call
+      row = session_row(slug)
+      if row.nil?
+        begin
+          # its own savepoint: on PostgreSQL a failed INSERT aborts the enclosing transaction unless rolled back to one
+          @db.transaction(savepoint: true) { write(slug, board, by: by, create: true) }
+          return "created"
+        rescue Sequel::UniqueConstraintViolation
+          row = session_row(slug) || raise # a racing first call won: touch its row
+        end
+      end
+      boards_t.where(id: row[:id]).update(archived_at: nil, updated_by: by, updated_at: now)
+      row[:archived_at] ? "restored" : "touched"
+    end
+
+    def archive_session_board(slug, at:) = boards_t.where(project_slug: slug.to_s, archived_at: nil).update(archived_at: at)
+
+    # The session boards' rows: [{project_slug, updated_at, archived_at, …}] — live ones only unless archived: true.
+    def session_rows(prefix, archived: false)
+      q = boards_t.where(Sequel.function(:substr, :project_slug, 1, prefix.length) => prefix)
+      q = q.where(archived_at: nil) unless archived
+      q.order(:project_slug).all
+    end
+
     # The projects that have their own rows (not the template).
     def slugs = boards_t.exclude(project_slug: Board::TEMPLATE).order(:project_slug).select_map(:project_slug)
 

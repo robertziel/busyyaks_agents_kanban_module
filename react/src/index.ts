@@ -13,6 +13,7 @@ export { Avatar, AgentLinks, CopyChip, ErrorState, Html, Loading, sessionFor } f
 export { KanbanHostProvider, useKanbanHost, colLabel, type KanbanHostValue } from "./host";
 export { LaunchBar, type LaunchBarProps } from "./components/LaunchBar";
 export { LaunchFailureAlert, type LaunchFailureAlertProps } from "./components/LaunchFailureAlert";
+export { SessionBoards, type SessionBoardsFocus, type SessionBoardsProps } from "./components/SessionBoards";
 export { errMsg, KanbanApiError, type KanbanApi, type LaunchApi, type CardPatch } from "./api";
 export * from "./lib/launch";
 export * from "./types";
@@ -23,6 +24,7 @@ export * from "./lib/card";
 export * from "./lib/links";
 export * from "./lib/listen";
 export * from "./lib/attachments";
+export * from "./lib/sessionBoards";
 export { useLiveRev, type LiveState } from "./lib/live";
 export { useFetch, type Resource } from "./lib/fetch";
 export { ago, at, isoAgo, isoAt, initials, hue, now } from "./lib/format";

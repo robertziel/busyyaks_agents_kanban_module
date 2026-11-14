@@ -397,3 +397,16 @@ export type MoveResult = { card: Card; counts: Record<ColumnKey, number>; delive
 // or "*" (every column); `to` = a column key or "*" (a fan-out: named together with the column it goes to).
 export type WorkflowActor = "operator" | "agent" | "any";
 export type WorkflowTransition = { name: string; from: string | string[]; to: string; by: WorkflowActor };
+
+// Api#session_boards 200: the boards of ONE agent session each (HostConfig#session_boards), read-only for the operator
+export type SessionBoardColumn = { key: ColumnKey; label: string; type: ColumnTypeKey };
+export type SessionBoard = {
+  slug: string;
+  session: string;
+  archived: string | null; // iso; set once idle_hours passed with no activity (cards archived, nothing deleted)
+  last_activity: string;
+  expires: string | null; // iso: when it is archived unless something happens on it first
+  columns: SessionBoardColumn[];
+  cards: Card[];
+};
+export type SessionBoardsData = { idle_hours: number; slug_prefix: string; session_boards: SessionBoard[] };

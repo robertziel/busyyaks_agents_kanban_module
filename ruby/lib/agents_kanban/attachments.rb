@@ -54,6 +54,7 @@ module AgentsKanban
 
     def find(id) = @t.where(id: Integer(id.to_s, exception: false) || -1).first
     def find!(id) = find(id) || raise(Invalid, "no attachment #{id}")
+    def card_id_of(id) = find(id)&.dig(:card_id)
     def list(card_id) = @t.where(card_id: Integer(card_id), deleted_at: nil).order(:created_at, :id).all
     def list_json(card_id) = list(card_id).map { |a| json(a) }
 

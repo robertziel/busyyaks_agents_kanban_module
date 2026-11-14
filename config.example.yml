@@ -170,6 +170,25 @@ dependencies: false
 #                    agent gave no reason
 session_dialogs: { settle_seconds: 30, context_minutes: 10 }
 
+# SESSION BOARDS: a board that belongs to ONE agent session (any CLI in tmux: Claude Code, Hermes, Codex …), attached to
+# no project. kanban_session_board(tmux_session) creates it on the first call as `<slug_prefix><session>`; the card
+# tools work on it only for that session (every other session is refused). After idle_hours with no activity (no card
+# change, no comment, no kanban_session_board call) its cards are archived and the board hidden — kept, never
+# deleted; the session's next call brings it back. `board` = its shape (columns + transitions, validated like a
+# project board; no gate column: nobody but its session acts on it). null = no session boards.
+session_boards:
+  slug_prefix: "session:"
+  idle_hours: 24
+  board:
+    columns:
+      - { key: todo, label: To do, type: queued }
+      - { key: doing, label: In progress, type: working }
+      - { key: done, label: Done, type: done }
+    transitions:
+      - { name: Start, from: todo, to: doing, by: any }
+      - { name: Pause, from: doing, to: todo, by: any }
+      - { name: Finish, from: [todo, doing], to: done, by: any }
+
 # the cross-cutting card FLAGS (needs_operator: kanban_ask or a dialog on the owner's screen; blocked_external:
 # kanban_block with a reason + URL): a flagged card keeps its column and refuses agent moves; a needs_operator card
 # counts as waiting for you, a blocked_external one waits for the world and does not (the boards' `external`); after

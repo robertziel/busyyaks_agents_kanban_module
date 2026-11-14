@@ -27,6 +27,31 @@ module AgentsKanban
   # `start(session:, project:, type:, launcher:, argv:, prompt_template:, vars:)` → the host's result Hash; raises
   # Delivery::Unavailable / Refused), grace (seconds a registered session counts as running before it is live).
   class Api
+    # A session board (HostConfig#session_boards) is its session's own: the operator READS it (session_boards, card,
+    # board) and writes nothing on it — every mutation that reaches one of its records is 422. {method => how its
+    # first argument names the card}. A create / label create by slug never reaches one: the projects port knows no
+    # session slug (404).
+    SESSION_READ_ONLY = {
+      update: :card, move: :card, assign: :card, archive: :card, owner: :card, approve: :card,
+      dialog_answer: :card, comment: :card, checklist_create: :card, attach: :card,
+      comment_update: :comment, comment_delete: :comment,
+      checklist_update: :checklist, checklist_delete: :checklist, item_create: :checklist,
+      item_update: :item, item_delete: :item, item_convert: :item,
+      attachment_delete: :attachment, label_update: :label, label_delete: :label,
+    }.freeze
+
+    # Prepended: runs before each SESSION_READ_ONLY method.
+    module SessionReadOnly
+      SESSION_READ_ONLY.each_key do |name|
+        define_method(name) do |id, *rest, **kw, &blk|
+          slug = session_slug_of(SESSION_READ_ONLY.fetch(name), id)
+          next super(id, *rest, **kw, &blk) unless slug
+
+          [422, { error: "#{slug} is session #{@store.session_of(slug)}'s own board — read-only for the operator" }]
+        end
+      end
+    end
+
     MAX_PREVIEW = 200_000
     CARD_FIELDS = %w[title description labels assignee priority due due_done cover parent metadata].freeze
 
@@ -48,6 +73,27 @@ module AgentsKanban
     end
 
     attr_reader :store, :config
+
+    # The session board slug a record belongs to (kind: :card | :comment | :checklist | :item | :attachment | :label),
+    # nil for a project's record or an unknown id (the method answers its own 404).
+    def session_slug_of(kind, id)
+      return nil unless @store.session_boards?
+
+      slug = if kind == :label
+               @store.labels_t.where(id: Integer(id.to_s, exception: false) || -1).get(:project_slug)
+             else
+               cid = case kind
+                     when :card then id
+                     when :comment then @store.comment_card_id(id)
+                     when :checklist then @store.checklist_card_id(id)
+                     when :item then @store.item_card_id(id)
+                     when :attachment then @attachments.card_id_of(id)
+                     end
+               i = Integer(cid.to_s, exception: false)
+               i && @store.card_slugs([i])[i]
+             end
+      slug && @store.session_slug?(slug) ? slug : nil
+    end
 
     # ── reading ───────────────────────────────────────────────────────────────────────────────────
 
@@ -402,6 +448,16 @@ module AgentsKanban
       [200, { concurrency: conc, registered: rows, ended: done, sessions_error: err }]
     end
 
+    # The session boards (HostConfig#session_boards), read-only for the operator's list: 200 {idle_hours, slug_prefix,
+    # session_boards: [{slug, session, archived, last_activity, expires, columns, cards}]}; archived: true lists the
+    # archived ones too. Session boards off on this host → 404.
+    def session_boards(archived: false)
+      sb = @config.session_boards or return not_found("session boards are off on this host (session_boards: null)")
+
+      [200, { idle_hours: sb.idle_hours, slug_prefix: sb.slug_prefix,
+              session_boards: @store.session_boards(archived: archived == true), },]
+    end
+
     # ── comments ─────────────────────────────────────────────────────────────────────────────────
 
     # 201 {card, activity, delivered} — on an ask-gate card the operator's comment is the answer.
@@ -695,5 +751,6 @@ module AgentsKanban
       t.length > 160 ? "#{t[0, 159]}…" : t
     end
 
+    prepend SessionReadOnly
   end
 end

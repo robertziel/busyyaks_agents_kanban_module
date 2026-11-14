@@ -26,8 +26,10 @@ module AgentsKanban
     # is stored (a host's rollback re-adds them with restore_xy!);
     # 10 = cards.gate_head (the approval PR's head sha the CI port gave at the handoff: a card in a gate counts as waiting
     # for the operator only while its PR still has that head) and cards.gate_state (what the last watch pass saw of
-    # the card's gate: "ready" | the hold, so a change is said once)
-    VERSION = 10
+    # the card's gate: "ready" | the hold, so a change is said once);
+    # 11 = boards.archived_at (a SESSION board hidden after HostConfig#session_boards.idle_hours with no activity; its
+    # cards archived, nothing deleted)
+    VERSION = 11
     TABLES = %i[cards card_activity board_labels checklists checklist_items card_pings card_attachments session_dialogs
                 agent_sessions ci_watches boards board_columns board_transitions].freeze
 
@@ -67,6 +69,7 @@ module AgentsKanban
       end
       drop_xy(db, t) if to >= 9
       add_missing(db, t[:cards], [[:gate_head, String], [:gate_state, String, { text: true }]]) if to >= 10
+      add_missing(db, t[:boards], [[:archived_at, Integer]]) if to >= 11
       t
     end
 
