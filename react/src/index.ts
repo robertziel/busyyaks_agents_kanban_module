@@ -25,6 +25,8 @@ export * from "./lib/card";
 export * from "./lib/links";
 export * from "./lib/listen";
 export * from "./lib/attachments";
+export * from "./lib/dictation";
+export * from "./lib/shortcut";
 export * from "./lib/sessionBoards";
 export * from "./lib/peek";
 export { useLiveRev, type LiveState } from "./lib/live";

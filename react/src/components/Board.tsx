@@ -40,6 +40,8 @@ import {
 } from "../lib/board";
 import { edgeBands, edgeScroller, glideTo, nearestStart, stepRoom, stepStart, type EdgeBands } from "../lib/autoscroll";
 import { cardFaceClass, splitCard } from "../lib/card";
+import type { DictationApi } from "../lib/dictation";
+import { comboLabel, isMac, type KeyCombo } from "../lib/shortcut";
 import { useFetch } from "../lib/fetch";
 import { isoAgo, isoAt } from "../lib/format";
 import { useGlide } from "../lib/glide";
@@ -63,6 +65,7 @@ export type BoardProps = {
   navigate?: (path: string) => void; // client-side navigation for same-origin links in rendered markdown
   projectHref?: string; // where the card dialog's project link goes
   cardHref?: (slug: string, id: number) => string;
+  dictation?: DictationApi; // speech to text for the card dialog's comment box (absent = no mic)
   className?: string;
 };
 
@@ -108,6 +111,7 @@ export function Board({
   navigate,
   projectHref,
   cardHref,
+  dictation,
   className,
 }: BoardProps) {
   const showArchived = view.archived;
@@ -309,8 +313,19 @@ export function Board({
   const config: HostConfig | undefined = data?.config;
   const board: BoardShapeData | undefined = data?.board;
   const host = useMemo<KanbanHostValue | null>(
-    () => (config && board ? { api, me, config, board, navigate: navigate ?? null, cardHref: cardHref ?? null } : null),
-    [api, me, config, board, navigate, cardHref],
+    () =>
+      config && board
+        ? {
+            api,
+            me,
+            config,
+            board,
+            navigate: navigate ?? null,
+            cardHref: cardHref ?? null,
+            dictation: dictation ?? null,
+          }
+        : null,
+    [api, me, config, board, navigate, cardHref, dictation],
   );
   const columns = board?.columns ?? [];
   const colLabel = (k: ColumnKey) => (board ? labelOf(board, k) : k);
@@ -935,7 +950,7 @@ export function Board({
           </section>
         )}
 
-        {help && <ShortcutsOverlay onClose={() => setHelp(false)} />}
+        {help && <ShortcutsOverlay dictation={dictation?.shortcut ?? null} onClose={() => setHelp(false)} />}
 
         {workflowOpen && (
           <BoardEditor slug={slug} onClose={() => setWorkflowOpen(false)} onSaved={() => void reload()} />
@@ -949,6 +964,7 @@ export function Board({
             panel={panel}
             setPanel={(p) => onView({ panel: p })}
             projectHref={projectHref ?? null}
+            dictationShortcut={dictation?.shortcut ?? null}
             onClose={() => {
               focusId.current = openId;
               onView({ card: null, panel: null });
@@ -1221,7 +1237,7 @@ function ListMenu({
   );
 }
 
-function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
+function ShortcutsOverlay({ onClose, dictation }: { onClose: () => void; dictation: KeyCombo | null }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const d = ref.current;
@@ -1270,6 +1286,12 @@ function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
       <p className="muted kb-help-foot">
         Editors: <kbd>Ctrl</kbd>+<kbd>B</kbd> <kbd>I</kbd> <kbd>E</kbd> <kbd>K</kbd> format · <kbd>Ctrl</kbd>+
         <kbd>Enter</kbd> save · <kbd>Esc</kbd> cancel
+        {dictation ? (
+          <>
+            {" "}
+            · hold <kbd>{comboLabel(dictation, isMac(navigator.platform))}</kbd> to dictate a comment (open card)
+          </>
+        ) : null}
       </p>
     </dialog>
   );
