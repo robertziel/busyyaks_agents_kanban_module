@@ -82,6 +82,22 @@
   },
   "approval": { "requires_green_ci": true },
   "dependencies": false,
+  "session_boards": {
+    "slug_prefix": "session:",
+    "idle_hours": 24,
+    "board": {
+      "columns": [
+        { "key": "todo", "label": "To do", "type": "queued" },
+        { "key": "doing", "label": "In progress", "type": "working" },
+        { "key": "done", "label": "Done", "type": "done" }
+      ],
+      "transitions": [
+        { "name": "Start", "from": "todo", "to": "doing", "by": "any" },
+        { "name": "Pause", "from": "doing", "to": "todo", "by": "any" },
+        { "name": "Finish", "from": ["todo", "doing"], "to": "done", "by": "any" }
+      ]
+    }
+  },
   "session_dialogs": { "settle_seconds": 0, "context_minutes": 10 },
   "flags": { "reminder_hours": 24 },
   "review_loop": {

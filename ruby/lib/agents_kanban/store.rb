@@ -65,7 +65,10 @@ module AgentsKanban
       @clock = clock
       @ci = ci
       @tables = Schema.tables(config.table_prefix)
-      @repo = BoardRepo.new(db, tables: @tables, host: config, clock: clock, known: boards)
+      # a session board is never instantiated from the project template: only session_board! creates one
+      @repo = BoardRepo.new(db, tables: @tables, host: config, clock: clock,
+                                known: ->(s) { !session_slug?(s) && boards.call(s) })
+      @session_board = session_board_shape(config)
       @attachment_ref = %r{\(#{Regexp.escape(config.attachment_url_prefix)}/(\d+)(?:/download)?\)}
     end
 
@@ -97,6 +100,7 @@ module AgentsKanban
     # references its column key), then replace the project's rows. → board_json
     def board_save(slug, hash, by:)
       board!(slug)
+      not_session_shape!(slug)
       @repo.save(slug, hash, by: who!(by), cards_in: method(:cards_in_columns))
       board_json(slug)
     end
@@ -105,6 +109,7 @@ module AgentsKanban
     # template lacks). → board_json
     def board_reset(slug, by:)
       board!(slug)
+      not_session_shape!(slug)
       @repo.reset(slug, by: who!(by), cards_in: method(:cards_in_columns))
       board_json(slug)
     end
@@ -117,6 +122,102 @@ module AgentsKanban
         .all
         .group_by { |c| c[:column] }
         .transform_values { |cs| cs.map { |c| c[:id] } }
+    end
+
+    # ── session boards: a board of ONE agent session, no project (HostConfig#session_boards) ─────────────
+
+    def session_boards? = !@config.session_boards.nil?
+    def session_slug?(slug) = session_boards? && slug.to_s.start_with?(@config.session_boards.slug_prefix)
+    # The session a session board belongs to (nil for a project's slug).
+    def session_of(slug) = session_slug?(slug) ? slug.to_s.delete_prefix(@config.session_boards.slug_prefix) : nil
+
+    def session_slug(session)
+      raise Invalid, "session boards are off on this host (session_boards: null)" unless session_boards?
+
+      s = session.to_s.strip
+      raise Invalid, "tmux session must match #{SESSION.source}" unless s.match?(SESSION)
+
+      "#{@config.session_boards.slug_prefix}#{s}"
+    end
+
+    # The session's own board: created from the host's session_boards.board on the first call, an archived one brought
+    # back (its archived cards stay archived), a live one touched — calling it counts as the session being active.
+    # → {slug, session, state: "created" | "restored" | "touched"}
+    def session_board!(session, by:)
+      slug = session_slug(session)
+      state = @db.transaction { @repo.open_session_board(slug, @session_board, by: who!(by)) }
+      { slug: slug, session: session_of(slug), state: state }
+    end
+
+    # The host's session board shape (a Board; nil when session boards are off).
+    def board_of_session_shape = @session_board
+
+    # The card a comment / checklist / checklist item sits on (nil when there is none: the tool refuses with its own
+    # reason) — what Tools reads to tell whether a call is about a session board.
+    def comment_card_id(id) = activity_t.where(id: Integer(id, exception: false) || -1).get(:card_id)
+    def checklist_card_id(id) = checklists_t.where(id: Integer(id, exception: false) || -1).get(:card_id)
+    def item_card_id(id)
+      cl = items_t.where(id: Integer(id, exception: false) || -1).get(:checklist_id)
+      cl && checklist_card_id(cl)
+    end
+
+    # The last time anything happened on a session board: the board row (created, restored, opened by its session),
+    # any card's update, any activity entry on its cards. epoch seconds.
+    def session_board_activity(slug, row: nil)
+      row ||= @repo.session_row(slug) || raise(Invalid, "no board #{slug}")
+      ids = cards.where(project_slug: slug.to_s).select(:id)
+      # the engine's own entries (pings, reminders, archive lines — system_author) are not the session being active;
+      # cards.updated_at is not read: an engine write touches it too, and every write by an actor logs an entry
+      acted = activity_t.where(card_id: ids).exclude(author: @config.system_author).max(:created_at)
+      [row[:updated_at], acted].compact.max
+    end
+
+    # Session boards with no activity for session_boards.idle_hours: every live card archived (logged by the system
+    # author) and the board hidden (boards.archived_at) — kept, never deleted; the session's next session_board! brings
+    # the board back. → [slugs archived]
+    def session_boards_expire_pass
+      return [] unless session_boards?
+
+      now = @clock.call
+      idle = @config.session_boards.idle_hours * 3600
+      sys = @config.system_author
+      @repo.session_rows(@config.session_boards.slug_prefix).filter_map do |row|
+        slug = row[:project_slug]
+        next if now - session_board_activity(slug, row: row) < idle
+
+        # read again inside the transaction: a touch / restore / card write between the scan and here keeps the board
+        @db.transaction do
+          fresh = @repo.session_row(slug)
+          next nil if fresh.nil? || fresh[:archived_at] || now - session_board_activity(slug, row: fresh) < idle
+
+          live(slug).select(:id).all.each do |c|
+            cards.where(id: c[:id]).update(archived_at: now, updated_at: now)
+            log(c[:id], "archive", "archived: session board inactive for #{@config.session_boards.idle_hours} h", sys)
+          end
+          @repo.archive_session_board(slug, at: now)
+          slug
+        end
+      end
+    end
+
+    # The session boards for the operator's list: live ones, or every one with archived: true.
+    # → [{slug, session, archived, last_activity, expires, counts: {column => n}, cards: [card]}]
+    def session_boards(archived: false)
+      return [] unless session_boards?
+
+      idle = @config.session_boards.idle_hours * 3600
+      rows = @repo.session_rows(@config.session_boards.slug_prefix, archived: archived)
+      boards = boards_for(rows.map { |r| r[:project_slug] })
+      rows.map do |r|
+        slug = r[:project_slug]
+        b = boards.fetch(slug)
+        last = session_board_activity(slug, row: r)
+        cs = r[:archived_at] ? [] : board(slug, board: b).values.flatten
+        { slug: slug, session: session_of(slug), archived: iso(r[:archived_at]), last_activity: iso(last),
+          expires: r[:archived_at] ? nil : iso(last + idle),
+          columns: b.keys.map { |k| { key: k, label: b.label(k), type: b.type_of(k).key } },
+          cards: cs.map { |c| card_json(c) }, }
+      end
     end
 
     # ── reading ───────────────────────────────────────────────────────────────────────────────────
@@ -669,7 +770,7 @@ module AgentsKanban
       now = @clock.call
       after = @config.flags.reminder_hours * 3600
       sys = @config.system_author
-      rows = cards.where(archived_at: nil, flag_reminded_at: nil)
+      rows = project_cards.where(archived_at: nil, flag_reminded_at: nil)
                   .where(Sequel.|(Sequel.~(asked_at: nil), Sequel.~(blocked_at: nil)))
                   .all
       rows.select { |c| now - flag_since(c) >= after }.map do |c|
@@ -903,7 +1004,7 @@ module AgentsKanban
       end
       c = card_id && card(card_id)
       c = nil unless askable.(c)
-      c ||= cards.where(owner_session: session, archived_at: nil)
+      c ||= project_cards.where(owner_session: session, archived_at: nil)
         .order(Sequel.desc(:updated_at), Sequel.desc(:id))
         .all
         .lazy
@@ -1112,7 +1213,7 @@ module AgentsKanban
     def spawn_queue(only: nil)
       return [] if @config.spawn_types.empty?
 
-      q = cards.where(archived_at: nil, owner_session: nil, asked_at: nil, blocked_at: nil)
+      q = project_cards.where(archived_at: nil, owner_session: nil, asked_at: nil, blocked_at: nil)
       q = q.where(id: only) if only
       rows = q.order(:updated_at, :id).all
       boards = boards_for(rows.map { |c| c[:project_slug] }.uniq)
@@ -1300,7 +1401,7 @@ module AgentsKanban
     # assignee cleared, logged — the next registration takes them again.
     def release_session_cards(session, reason:, by:)
       now = @clock.call
-      cards.where(owner_session: session.to_s, archived_at: nil).all.each do |c|
+      project_cards.where(owner_session: session.to_s, archived_at: nil).all.each do |c|
         cards.where(id: c[:id]).update(owner_session: nil, owner_socket: nil, owner_missing_since: nil, assignee: nil,
                                        updated_at: now)
         log(c[:id], "owner", "owner session #{session} released: #{reason}", who!(by))
@@ -1452,7 +1553,7 @@ module AgentsKanban
       now = @clock.call
       sys = @config.system_author
       released = []
-      owned = cards.exclude(owner_session: nil).where(archived_at: nil).all
+      owned = project_cards.exclude(owner_session: nil).where(archived_at: nil).all
       boards = boards_for(owned.map { |c| c[:project_slug] }.uniq)
       owned.each do |c|
         b = boards[c[:project_slug]]
@@ -1607,7 +1708,7 @@ module AgentsKanban
       now = @clock.call
       sys = @config.system_author
       done = []
-      rows = cards.where(archived_at: nil).all
+      rows = project_cards.where(archived_at: nil).all
       boards = boards_for(rows.map { |c| c[:project_slug] }.uniq)
       rows.select { |c| c[:column] == boards[c[:project_slug]].idle_column }.each do |c|
         c = c.merge(column_label: boards[c[:project_slug]].label(c[:column]))
@@ -1911,7 +2012,47 @@ module AgentsKanban
     def live(slug) = cards.where(project_slug: slug, archived_at: nil)
 
     def board!(slug)
-      raise Invalid, "no board #{slug}" unless slug.is_a?(String) && !slug.empty? && @boards.call(slug)
+      raise Invalid, "no board #{slug}" unless slug.is_a?(String) && !slug.empty?
+      return if session_slug?(slug) ? live_session_board?(slug) : @boards.call(slug)
+
+      raise Invalid, session_slug?(slug) ? session_board_gone(slug) : "no board #{slug}"
+    end
+
+    def live_session_board?(slug)
+      row = @repo.session_row(slug)
+      !row.nil? && row[:archived_at].nil?
+    end
+
+    def session_board_gone(slug)
+      hours = @config.session_boards.idle_hours
+      what = @repo.session_row(slug) ? "was archived after #{hours} h with no activity" : "does not exist"
+      "session board #{slug} #{what} — kanban_session_board(tmux_session: #{session_of(slug)}) opens it again"
+    end
+
+    def not_session_shape!(slug)
+      raise Invalid, "a session board's shape is the host's session_boards.board" if session_slug?(slug)
+    end
+
+    # The host's session board shape, validated once: a Board with no gate (nobody but its session acts on it).
+    def session_board_shape(config)
+      sb = config.session_boards or return nil
+      b = Board.new(sb.board, host: config)
+      if b.waiting.any?
+        raise ConfigError, "session_boards.board: #{b.waiting.map { |k| b.label(k) }.join(', ')} waits for the operator — " \
+                           "a session board has no gate"
+      end
+      b
+    rescue Invalid => e
+      raise ConfigError, "session_boards.board: #{e.message}"
+    end
+
+    # cards on PROJECT boards only: the watchdog, the intake, the spawn queue and the idle watch never touch a session's
+    # own board (its cards stay its session's, whatever that session's state)
+    def project_cards
+      return cards unless session_boards?
+
+      pre = @config.session_boards.slug_prefix
+      cards.exclude(Sequel.function(:substr, :project_slug, 1, pre.length) => pre)
     end
 
     # Every rule a column change must pass, in order: the agent gates, the workflow, the parent dependency. One place —

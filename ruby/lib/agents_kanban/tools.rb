@@ -49,7 +49,7 @@ module AgentsKanban
                kanban_checklist_add kanban_checklist_rename kanban_checklist_delete kanban_checklist_item_add
                kanban_checklist_item_edit
                kanban_checklist_toggle kanban_checklist_item_delete kanban_attach kanban_attachments kanban_attachment_get
-               kanban_checklist_item_convert].freeze
+               kanban_checklist_item_convert kanban_session_board].freeze
 
     def self.handles?(name) = NAMES.include?(name)
 
@@ -450,7 +450,24 @@ module AgentsKanban
                     description: "Clear a card's blocked_external flag (the blocker is gone); note = what cleared it.",
                     inputSchema: { type: "object", properties: { id: INT, note: { type: "string" }, author: AUTHOR },
                                    required: %w[id author], }, })
+      defs << session_board_definition if host.session_boards
       defs
+    end
+
+    def session_board_definition
+      sb = @config.session_boards
+      shape = @store.board_of_session_shape
+      { name: "kanban_session_board",
+        description: "Your session's OWN board, attached to no project: created on the first call, columns " \
+                     "#{shape.labels.values.join(' → ')}. Its project is \"#{sb.slug_prefix}<your tmux session>\" " \
+                     "(returned as `project`): kanban_create / kanban_move / kanban_comment / kanban_checklist_* / " \
+                     "kanban_labels work on it as on any board, only for that session (author = the session or its " \
+                     "registered agent name, or tmux_session = it) — every other session is refused. After " \
+                     "#{sb.idle_hours} h with no activity its cards are archived and the board hidden (kept, never " \
+                     "deleted); calling this again brings the board back (counts as activity). Returns the board as " \
+                     "kanban_board does.",
+        inputSchema: { type: "object", properties: { tmux_session: SESSION_ARG, author: AUTHOR },
+                       required: %w[tmux_session author], }, }
     end
 
     # kanban_handoff exists on every host (a project's board may add a gate column at any time); a call on a board
@@ -472,12 +489,24 @@ module AgentsKanban
                   cards: cs.map { |c| row(c) }, }
               end, config: @config.to_h, board: @store.board_json(project[:slug], board: b), }
       out[:archived] = @store.archived(project[:slug]).map { |c| row(c) } if archived
-      out[:backlog_md] = BacklogMd.json(@backlog&.call(project, b), column: col)
+      # a session board has no repo: no Backlog.md to read
+      out[:backlog_md] = BacklogMd.json(@store.session_slug?(project[:slug]) ? nil : @backlog&.call(project, b), column: col)
       out
     end
 
     def call(name, a)
+      session_guard!(name, a)
       case name
+      when "kanban_session_board"
+        raise Invalid, "session boards are off on this host (session_boards: null)" unless @store.session_boards?
+
+        # the caller opens ITS OWN board (caller_session): a live tmux_session, never with an author that is another
+        # session's registered agent; no tmux_session → the author's own open registration, else refused
+        session = caller_session(a)
+        raise Invalid, "tmux_session is required: your tmux session name (tmux display -p '#S')" if session.nil?
+
+        opened = @store.session_board!(session, by: str!(a, "author"))
+        dump(board_json({ slug: opened[:slug] }).merge(session: session, state: opened[:state]))
       when "kanban_board" then dump(board_json(project!(a), column: a["column"], archived: a["archived"] == true))
       when "kanban_workflow" then dump(@store.board_json(project!(a)[:slug]))
       when "kanban_card" then dump(markdown_only(card_body(@store.card!(int!(a, "id")))))
@@ -687,7 +716,72 @@ module AgentsKanban
     end
 
     # (parenthesised: in an endless def `x = a or raise` parses as `(x = a) or raise`, and the raise is lost)
-    def project!(a) = (@projects.call(str!(a, "project")) || raise(Invalid, "no project #{a['project']}"))
+    def project!(a)
+      slug = str!(a, "project")
+      return { slug: slug, path: nil } if @store.session_slug?(slug) # session_guard! checked the caller already
+
+      @projects.call(slug) || raise(Invalid, "no project #{a['project']}")
+    end
+
+    # A session board belongs to ONE session: every tool that names it (project) or one of its cards, comments,
+    # checklists, items or attachments is refused unless the caller is that session — tmux_session = it, or (no
+    # tmux_session) author = the session name or its registered agent name. Registering for it or handing off on it
+    # makes no sense (no project, no gate): refused.
+    # Tools that make no sense on a session board: no project to register for, no PR, and nobody but its session acts
+    # on it — a question or a block would wait for an operator who cannot answer there (the operator's view is read-only).
+    PROJECT_ONLY = %w[kanban_register kanban_pr_assign kanban_ask kanban_block kanban_unblock].freeze
+
+    def session_guard!(name, a)
+      return unless @store.session_boards?
+
+      slugs = target_slugs(a).select { |s| @store.session_slug?(s) }
+      return if slugs.empty?
+
+      slugs.each do |slug|
+        raise Invalid, "#{name} is for project boards — #{slug} is a session board" if PROJECT_ONLY.include?(name)
+      end
+      who = caller_session(a)
+      slugs.each do |slug|
+        owner = @store.session_of(slug)
+        next if who == owner
+
+        raise Denied, "#{slug} is session #{owner}'s own board: only that session may use it " \
+                      "(tmux_session: #{owner}, verified live — or author = the agent name of its open registration)"
+      end
+    end
+
+    # Who calls: tmux_session (verified LIVE, as kanban_claim does), else the session of the open registration whose
+    # agent name (or session name) the author is. A bare author string names nobody. Identity stays what every kanban
+    # tool trusts (one MCP bearer on localhost): this keeps sessions apart, it does not stop a hostile agent.
+    #
+    # Both given and the author is the agent of ANOTHER open registration → Denied: one call names one caller.
+    def caller_session(a)
+      registered = @store.session_for_author(a["author"])&.dig(:session)
+      return registered if a["tmux_session"].to_s.strip.empty?
+
+      s = live_session!(a)
+      if registered && registered != s
+        raise Denied, "author #{a['author']} is the agent of session #{registered}, not of tmux_session #{s} — " \
+                      "one call names one caller"
+      end
+      s
+    end
+
+    # EVERY board a call touches: project, the card (id), the parent, the comment, the checklist, the item, the
+    # attachment — each record by its own id, so a session board is never reached through a field the guard did not read.
+    def target_slugs(a)
+      ids = []
+      ids << a["id"] if a.key?("id")
+      ids << a["parent"] if a.key?("parent") && !a["parent"].nil?
+      ids << @store.comment_card_id(a["comment_id"]) if a.key?("comment_id")
+      ids << @store.checklist_card_id(a["checklist_id"]) if a.key?("checklist_id")
+      ids << @store.item_card_id(a["item_id"]) if a.key?("item_id")
+      ids << @attachments.card_id_of(a["attachment_id"]) if a.key?("attachment_id")
+      ids = ids.filter_map { |i| Integer(i.to_s, exception: false) }
+      slugs = @store.card_slugs(ids).values
+      slugs << a["project"].to_s if a["project"].is_a?(String) && !a["project"].empty?
+      slugs.uniq
+    end
     def labels(slug) = @store.labels(slug).map { |l| @store.label_json(l) }
     def card_md(card_id)
       card = markdown_only(card_body(@store.card!(card_id)))[:card]

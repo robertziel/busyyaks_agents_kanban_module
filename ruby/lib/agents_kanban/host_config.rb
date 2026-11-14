@@ -56,7 +56,8 @@ module AgentsKanban
   # key, fixtures/boards/*.json are complete examples (coding.json + coding.board.json are busyyaks's).
   class HostConfig
     KEYS = %w[priorities label_colors system_author attachment_url_prefix launchers agent_types concurrency owner_sessions
-              table_prefix theme idle_watch handoff approval dependencies session_dialogs flags review_loop].freeze
+              table_prefix theme idle_watch handoff approval dependencies session_dialogs flags review_loop
+              session_boards].freeze
     OWNER_SESSION_GLOB = /\A[A-Za-z0-9._*?-]{1,100}\z/
     TABLE_PREFIX = /\A[a-z][a-z0-9_]{0,30}_\z|\A\z/
     THEME_VAR = /\A--ak-[a-z0-9-]{1,40}\z/
@@ -133,10 +134,17 @@ module AgentsKanban
     # missing)
     REVIEW_LOOP_KEYS = %w[max_rounds unresolved_label unresolved_color columns].freeze
     ReviewLoop = Struct.new(:max_rounds, :unresolved_label, :unresolved_color, :columns, keyword_init: true)
+    # session_boards: a board that belongs to ONE agent session, not to a project (Store#session_board!): its slug is
+    # slug_prefix + the session name, its shape `board` (columns + transitions, validated as a Board by the Store; no
+    # gate: nobody but the session acts on it), and after idle_hours with no activity its cards are archived and the
+    # board is hidden (Store#session_boards_expire_pass, the notifier's watch pass) — kept, never deleted
+    SESSION_BOARD_KEYS = %w[slug_prefix idle_hours board].freeze
+    SESSION_BOARD_PREFIX = /\A[a-z][a-z0-9_-]{0,30}:\z/
+    SessionBoards = Struct.new(:slug_prefix, :idle_hours, :board, keyword_init: true)
 
     attr_reader :priorities, :label_colors, :system_author, :attachment_url_prefix, :launchers, :agent_types, :concurrency,
                 :owner_sessions, :table_prefix, :theme, :idle_watch, :handoff, :approval, :dependencies, :session_dialogs,
-                :flags, :review_loop, :raw
+                :flags, :review_loop, :session_boards, :raw
 
     def self.load(path)
       raise ConfigError, "host config not found: #{path}" unless File.file?(path)
@@ -188,6 +196,7 @@ module AgentsKanban
       @session_dialogs = parse_session_dialogs(hash["session_dialogs"])
       @flags = parse_flags(hash["flags"])
       @review_loop = hash["review_loop"] && parse_review_loop(hash["review_loop"])
+      @session_boards = hash["session_boards"] && parse_session_boards(hash["session_boards"])
       freeze
     end
 
@@ -335,6 +344,24 @@ module AgentsKanban
 
       ReviewLoop.new(max_rounds: n, unresolved_label: name.strip, unresolved_color: color,
                      columns: cols.map(&:strip).freeze).freeze
+    end
+
+    def parse_session_boards(v)
+      shape!(v, SESSION_BOARD_KEYS, "session_boards")
+      prefix = v["slug_prefix"]
+      unless prefix.is_a?(String) && prefix.match?(SESSION_BOARD_PREFIX)
+        raise ConfigError, "session_boards.slug_prefix must be [a-z][a-z0-9_-]* ending in \":\" (got #{prefix.inspect})"
+      end
+
+      h = v["idle_hours"]
+      raise ConfigError, "session_boards.idle_hours must be an integer >= 1" unless h.is_a?(Integer) && h >= 1
+
+      board = v["board"]
+      unless board.is_a?(Hash) && board.key?("columns") && board.key?("transitions")
+        raise ConfigError, "session_boards.board must be a board {columns, transitions}"
+      end
+
+      SessionBoards.new(slug_prefix: prefix, idle_hours: h, board: board).freeze
     end
 
     def parse_theme(v)

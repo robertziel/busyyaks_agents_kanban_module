@@ -237,7 +237,7 @@ host: config)
   def test_host_config_has_no_board_keys_and_takes_and_spawns_for_name_types
     assert_equal %w[priorities label_colors system_author attachment_url_prefix launchers agent_types concurrency
                     owner_sessions table_prefix theme idle_watch handoff approval dependencies session_dialogs flags
-                    review_loop],
+                    review_loop session_boards],
                  AgentsKanban::HostConfig::KEYS
     e = assert_raises(AgentsKanban::ConfigError) { AgentsKanban::HostConfig.new(host_raw.merge("columns" => [])) }
     assert_match(/unknown keys columns \(columns, gates and workflow live in the database now/, e.message)

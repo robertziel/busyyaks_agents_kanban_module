@@ -37,6 +37,7 @@
   "handoff": null,
   "approval": null,
   "dependencies": true,
+  "session_boards": null,
   "session_dialogs": { "settle_seconds": 0, "context_minutes": 10 },
   "flags": { "reminder_hours": 24 },
   "review_loop": null

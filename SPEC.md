@@ -118,7 +118,7 @@ cards returned to the column of their last move into it, flagged; handoff / appr
 `Invalid` names any card or board it cannot place). `Store#board_json(slug)` →
 `{columns, transitions, rules, types, updated_by, updated}`.
 
-### 2b. The host config — `HostConfig` (all keys required; `idle_watch` / `handoff` / `approval` / `owner_sessions` / `review_loop` may be null)
+### 2b. The host config — `HostConfig` (all keys required; `idle_watch` / `handoff` / `approval` / `owner_sessions` / `review_loop` / `session_boards` may be null)
 
 | key | the rule it drives |
 |---|---|
@@ -135,12 +135,13 @@ cards returned to the column of their last move into it, flagged; handoff / appr
 | `dependencies` | `true` = parent dependencies are ENFORCED on every board (`Board#rules.dependencies`); `false` = parents are recorded and shown only |
 | `flags` | `{reminder_hours}`: a card flagged `needs_operator` / `blocked_external` that long gets ONE reminder comment by `system_author` (+ a ping to its owner) per flag (`Store#flag_reminders`, the notifier's watch pass) |
 | `review_loop` | `null` or `{max_rounds, unresolved_label, unresolved_color, columns}`: `columns` = the LOOP columns (review column keys; any other review column — a coding board's QA — counts no rounds and has no limit). Entering a loop column from a work column or a gate counts a ROUND for it (`cards.review_rounds`; entering a work column by any move other than a named agent edge of the REVIEW column left — Rework out of a review column or a gate, Deploy failed, Start work (also after the operator parked a card at the limit in To do / Backlog) — starts over); at `max_rounds` an agent's loop move (loop → work, work → loop) is `Denied` naming the gate to hand the card to, and a handoff out of the loop column must give `review_summary` — the reviewer's SUMMARY counts `{fixed, resolved_by_argument, needs_human, open}`, integers ≥ 0, exactly those keys (missing or malformed → `Invalid`): it puts `unresolved_label` on the card (created on the board with `unresolved_color` when missing) only when `needs_human + open` is above 0, and the handoff line names the counts. The operator's move from a gate into the work column a loop column feeds by a named agent edge (Changes requested) allows exactly ONE more round of that loop (`review_rounds._rereview`), then the card goes back to the gate without the label; so does the operator's drag from the loop column itself into that work column once the rounds are used up (no gate is reachable from the work column: the limit would leave the author no move) — below the limit that drag changes nothing. The "0 open threads" exit is the agents' rule (the host's prompts): the engine counts rounds, it reads no review threads. `null` = every review column counts rounds, nothing limited |
+| `session_boards` | `null` or `{slug_prefix, idle_hours, board}`: a board of ONE agent session, attached to no project. `slug_prefix` `[a-z][a-z0-9_-]*:` (e.g. `session:`); the board's slug = prefix + the tmux session name (`Store::SESSION`); a host project slug starting with the prefix is shadowed. `board` = its shape `{columns, transitions}`, validated as a Board when the Store starts (`ConfigError`; a gate column refused: nobody but its session acts on it). MCP `kanban_session_board(tmux_session, author)` (listed only when configured; the session must be live) → `Store#session_board!` creates it from `board` on the first call (never from the project template: `BoardRepo`'s `known` refuses a session slug), brings an archived one back (its cards stay archived) or touches it → the `kanban_board` JSON + `session`, `state` (`created` \| `restored` \| `touched`). Every tool touching a session board through ANY field (`project`, `id`, `parent`, `comment_id`, `checklist_id`, `item_id`, `attachment_id` — each record read by its own id) is `Denied` unless the caller IS the session: `tmux_session` = it, verified live (the `sessions` port), else `author` = the agent name (or session name) of its OPEN registration — a bare author string names nobody. Both given and `author` is the agent of ANOTHER open registration → `Denied` (one call names one caller); `kanban_session_board` opens only the caller's own board by the same rule. Identity stays what every kanban tool trusts (one MCP bearer): this keeps sessions apart, it is no defence against a hostile agent. `kanban_register` / `kanban_pr_assign` / `kanban_ask` / `kanban_block` / `kanban_unblock` on one → `Invalid` (nobody but its session acts there); the operator's `Api` is READ-ONLY on its records (`Api::SESSION_READ_ONLY`: every card / comment / checklist / item / attachment / label mutation → 422); its shape is not saved / reset (`Invalid`). The watchdog, the intake, the spawn queue, the idle watch, a failed launch's release and the dialog question's card choice skip session boards (`Store#project_cards`): their cards stay their session's. Activity = the `boards` row's `updated_at` (created / restored / opened) and any activity entry on its cards NOT by `system_author` (pings, reminders, archive lines are the engine's, not the session's); flag reminders skip session cards; the pass re-reads the activity inside its transaction (a touch in between keeps the board); `idle_hours` without any → `Store#session_boards_expire_pass` (the notifier's watch pass) archives every live card (an `archive` entry by `system_author`) and sets `boards.archived_at` — nothing is deleted; a card tool on it then says it was archived and how to open it again. Operator: `Api#session_boards(archived:)` → `{idle_hours, slug_prefix, session_boards: [{slug, session, archived, last_activity, expires, columns, cards}]}` (404 when off); React `SessionBoards` draws it read-only (`focus: {session, card}` marks a board and a card and scrolls the card into view: a session card's link) |
 | `table_prefix` | `""` or `[a-z][a-z0-9_]*_`; the engine's tables are `<prefix>cards` … |
 | `theme` | `{"--ak-*": value}` (an allowlist of CSS value characters, quotes paired, parentheses balanced, no `/*`; refused at load) applied as inline custom properties on the board's `.ak-root` and copied onto every Select menu from its trigger; `--ak-board-height` fixes the board's height; `--ak-step-overhang` (default 12px) = how far the left / right step buttons hang outside the lists, `0px` for a host with no gutter beside the board |
 
 `HostConfig#digest` = sha256 of the canonical JSON the client receives (`to_h`); a host may pin it.
 
-## 3. Tables (`Schema`, v10)
+## 3. Tables (`Schema`, v11)
 
 `cards` (+ `parent_id`, `metadata` JSON text since v2), `card_activity`, `board_labels`, `checklists`,
 `checklist_items`, `card_pings`, `card_attachments`, `session_dialogs`, `agent_sessions` (v3: `session`, `socket`,
@@ -150,7 +151,7 @@ template; v7 adds `board_columns.hide_after_hours`, null = the type's default; v
 `blocked_author`, `blocked_reason`, `blocked_url`, `flag_reminded_at` (`needs_operator` is `asked_at`) — and
 `review_rounds` (JSON `{review column => entries}`); v9 drops `board_columns.x` / `y` (the editor lays the graph out,
 nothing about it is stored); v10 adds `cards.gate_head` (the approval PR's head the handoff's green answer carried) and
-`cards.gate_state` (the last watch pass's view of the card's gate: `ready` or its hold); v5's `workflows` is carried over and dropped by `BoardRepo#seed!`) — epochs as integers. `migrate!(db, prefix:,
+`cards.gate_state` (the last watch pass's view of the card's gate: `ready` or its hold); v11 adds `boards.archived_at` (a session board hidden after `session_boards.idle_hours` idle, § 2b); v5's `workflows` is carried over and dropped by `BoardRepo#seed!`) — epochs as integers. `migrate!(db, prefix:,
 to: VERSION)`: a host migration is PINNED to the step it introduced (`to: 5` still creates `workflows`, `to: 6` the
 boards tables), so a fresh DB replays the host's migrations step by step and a rollback lands on that version's shape, JSON as text, done flags 0/1, portable DDL (`text: true` where > 255 chars may occur). `migrate!` is idempotent by introspection; the
 host's own ledger records each run. Prefix `""` = the unprefixed table names (a host whose tables already carry them needs no data move).
@@ -335,6 +336,16 @@ primitives, for a host without its own).
 ## 9. Breaking changes for hosts (config / API)
 
 Newest first; a heading names the `Schema::VERSION` step when the change brought one.
+
+### Schema v11 — session boards
+
+- New REQUIRED host key `session_boards` (`null` = off, the old behaviour): § 2b. A host adds the key and a migration
+  `Schema.migrate!(db, prefix:, to: 11)` (`boards.archived_at`).
+- New MCP tool `kanban_session_board` (only listed when configured), `Api#session_boards`, React `SessionBoards` +
+  `sessionBoardLanes` / `secondsLeft` / `leftLabel`, types `SessionBoard*`. `Tools#call` refuses another session's use of
+  a session board (`Denied`). `Attachments#card_id_of`, `Store#comment_card_id` / `#checklist_card_id` / `#item_card_id`.
+- The `card_url` port is called with a session board's slug too (`<prefix><session>`): the host links it to its own
+  page for session boards.
 
 ### PRs assigned to cards: kanban_pr_assign (no schema step)
 

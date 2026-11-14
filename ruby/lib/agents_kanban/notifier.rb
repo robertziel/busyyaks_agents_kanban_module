@@ -101,6 +101,8 @@ module AgentsKanban
       @log.puts("watchdog released cards #{released.join(', ')}") if released.any?
       reminded = @store.flag_reminders
       @log.puts("flag reminders on cards #{reminded.join(', ')}") if reminded.any?
+      shelved = @store.session_boards_expire_pass
+      @log.puts("session boards archived (inactive): #{shelved.join(', ')}") if shelved.any?
       idle_watch(live)
       approval_prefetch
       watch_dialogs
