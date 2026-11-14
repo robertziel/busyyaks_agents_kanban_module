@@ -24,6 +24,8 @@ export * from "./lib/card";
 export * from "./lib/links";
 export * from "./lib/listen";
 export * from "./lib/attachments";
+export * from "./lib/dictation";
+export * from "./lib/shortcut";
 export * from "./lib/sessionBoards";
 export { useLiveRev, type LiveState } from "./lib/live";
 export { useFetch, type Resource } from "./lib/fetch";

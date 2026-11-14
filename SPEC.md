@@ -21,6 +21,7 @@ code disagree, `ruby/` + `fixtures/` win and the fix starts there.
 | dialog press | `press: ->(session:, socket:, hash:, key:)` on Api (the host's launcher `answer` op) | `api.dialogAnswer` |
 | attachments | `root:` directory + `AttachmentPolicy.new(max_bytes:, types:)` from the host's settings | `api.attach` |
 | transport | — | the `api: KanbanApi` prop (react/src/api.ts): every call the board makes |
+| dictation | — | optional `dictation: DictationApi` prop of `<Board>` (react/src/lib/dictation.ts): `shortcut` (a `KeyCombo` or null, lib/shortcut.ts) + `transcribe(wav, prompt)` → `{text, words: [{word, start, end}]}` (16 kHz mono 16-bit WAV; `prompt` = the text confirmed so far), rejecting with the server's reason. The host's own route to its speech server (e.g. an OpenAI-compatible `/v1/audio/transcriptions`); absent = no mic anywhere |
 | checkout (git) | `git:` on `CardLinks.build` (required, no default — the engine runs no git): `branches(project)` → Set of branch names (local + remote-tracking, remote dropped), `default_ref(project)` → the checked-out branch ("HEAD" when detached / unborn), `files_at(project, refs, files)` → `{file => first ref that has it}` (paths with `..` are never asked); a port that cannot read the checkout raises | — |
 | navigation | `card_path:` on `CardLinks::Refs`; `card_url: ->(slug, id) { absolute URL }` on Tools (required): every card a tool returns carries it as `url` | `navigate`, `projectHref`, `cardHref` props; `view` / `onView` own the URL |
 | launch plan | `AgentsKanban::Launch.plan(config, type:, session:, slug:, launcher:, cards:)` → `{argv, agent, prompt_template, vars, model}`; `Launch.render` | — |
@@ -281,7 +282,7 @@ port unreachable; `Api#sessions` → `{concurrency, registered, ended, sessions_
 
 ## 6. React
 
-`<Board api me slug view onView onChanged? navigate? projectHref? cardHref? className? />` renders the board (its
+`<Board api me slug view onView onChanged? navigate? projectHref? cardHref? dictation? className? />` renders the board (its
 columns from `board.columns`, never a constant) and the card dialog inside `.ak-root` with `config.theme` inline; the
 Workflow button opens `BoardEditor`: an SVG graph (`lib/graph.ts`) of the columns as typed nodes and the transitions
 as labelled arrows, **laid out by dagre** (`@dagrejs/dagre`, the React port's one runtime dependency, MIT): left to
@@ -336,6 +337,40 @@ primitives, for a host without its own).
 ## 9. Breaking changes for hosts (config / API)
 
 Newest first; a heading names the `Schema::VERSION` step when the change brought one.
+
+### No schema step — dictation (React only)
+
+- New optional `<Board dictation>` prop (`DictationApi`, § 1): the card dialog's comment box gets a mic button, and
+  `DictationApi.shortcut` (a `KeyCombo` the host's user picks, or null = the button only) anywhere in an open card
+  is push-to-talk, caught on the window in the capture phase while a card is open (wherever the focus is: an editor that keeps its keys, a menu, the body; its default — ⌥M's "µ" — prevented): held = recording, released (the key or one of its modifiers, or the window losing the focus) =
+  stopped; key auto-repeat ignored; released before the mic opened = stopped once it opens. Matched by key position (`KeyboardEvent.code`, so ⌥M still matches where Option+M types "µ").
+  `lib/shortcut.ts`: `matchesCombo`, `comboLabel` (⌥M / Alt+M), `comboRefusal` (combos the browser, the OS or the
+  editor owns — ⌘S, ⌘M, Ctrl+W, … — and plain keys that would fire while typing), `parseCombo`.
+  Windows (`startDictation`): each re-hears `OVERLAP_SEC` (0.4 s) before the last confirmed word's end (the overlap is
+  dropped again, `appendNew`); only words ending `STABLE_SEC` (1 s) before the window's end are confirmed; a window below
+  `SILENCE_RMS` is never sent; zero-length words and a pass that is the prompt's tail are the model's echo, not speech
+  (`heardWords`); no window is longer than `MAX_WINDOW_SEC` (30 s, the least a host's size limit must accept): a server
+  that failed or answered slowly while you talked gets the oldest 30 s, which then confirms (over `FORCE_CONFIRM_SEC`),
+  and stop() sends a longer unconfirmed tail in windows of at most 30 s. A failed final pass rejects with
+  `DictationFailed` (`confirmed`, `retry()` goes on from the window that failed).
+  The editor: Save / Ctrl+Enter wait while it dictates (Ctrl+Enter stops it), Esc and the backdrop stop it instead of
+  closing the card, a failed final pass offers Retry, a recording that heard nothing says so (`onDictatingChange`). The words appear at
+  the caret while you speak (`lib/dictation.ts`: a 2.5 s sliding window, LocalAgreement-2 confirms the words two passes
+  agree on, a 25 s window with no agreement is confirmed whole, stop sends the rest once); the text is read-only while it
+  records; a failed pass shows the reason and retries, a failed final pass is shown and keeps the text confirmed so far.
+  `KanbanHostValue.dictation` (null when absent; a host that builds the value itself adds it), `MarkdownEditor`
+  `dictate` / `dictateToggle` (a `DictateHandle {toggle, hold}`), `openMic`, `startDictation`, `composeDictation`, `pcmToWav`.
+- The control (`components/MicButton.tsx`, phases `idle starting rec stt done` on `data-phase`): while it listens the
+  mic is a pill — a stop square, 7 level bars and the elapsed time — and the formatting tools and the paperclip are
+  disabled and step aside (the text is read-only). The bars and the pill's halo show the REAL microphone level:
+  `MicCapture.level()` = the RMS of the newest `LEVEL_SAMPLES` (512) samples (an AnalyserNode; 0 once released), read
+  once per animation frame while recording only, mapped by `meterLevel` (dB, `METER_FLOOR_DB` … `METER_CEIL_DB` → 0 … 1)
+  and spread by `levelBars` (the middle bar = the newest reading, the edges older and lower). The words not confirmed
+  yet are tinted behind the text (`.mde-ghost`, placed by `pendingRange`); `stt` = a turning ring and a wave; a
+  dictation that ended without an error settles as `done` (a check, the text glows once) for 1.4 s — a failed one
+  never does. Accessible names unchanged ("Dictate" / "Stop dictation", `aria-pressed`; `aria-disabled` while
+  starting / transcribing, so the keyboard focus stays on it). `prefers-reduced-motion`: the same states, still.
+  `comboKeys` (lib/shortcut.ts) = a combination's keys one by one, for key caps.
 
 ### Schema v11 — session boards
 
