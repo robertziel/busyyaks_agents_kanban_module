@@ -9,7 +9,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import { useKanbanHost } from "../host";
+import { useKanbanHostIfAny } from "../host";
 import { hue, initials } from "../lib/format";
 import type { Card, SessionLinks } from "../types";
 
@@ -172,7 +172,7 @@ export function newTabForOtherOrigins(root: HTMLElement, origin: string) {
 }
 
 export const Html = forwardRef<HTMLDivElement, HtmlProps>(function Html({ html, className = "md" }, ref) {
-  const { navigate } = useKanbanHost();
+  const navigate = useKanbanHostIfAny()?.navigate ?? null; // outside a Board (the CardPeek): ordinary links
   const box = useRef<HTMLDivElement | null>(null);
   const setRef = useCallback(
     (el: HTMLDivElement | null) => {

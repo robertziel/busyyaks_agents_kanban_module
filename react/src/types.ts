@@ -205,6 +205,8 @@ export type SessionDialogInfo = {
   posted: string;
 };
 
+export type MentionPart = { text: string; card?: number };
+
 export type Card = {
   id: number;
   project: string;
@@ -231,6 +233,9 @@ export type Card = {
   question?: string | null;
   question_html?: string | null;
   question_options?: string[] | null;
+  // each option split at the cards it mentions (the host's CardLinks.card_mention_parts; absent = plain text): a part
+  // with `card` is drawn as a mention CardPeek opens
+  question_option_parts?: MentionPart[][] | null;
   asked?: string | null;
   asked_by?: string | null;
   // kanban_block: the blocked_external flag — what the card waits for outside the board, and where it is seen

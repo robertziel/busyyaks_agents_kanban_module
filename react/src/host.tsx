@@ -25,6 +25,12 @@ export function useKanbanHost(): KanbanHostValue {
   return v;
 }
 
+// The host value when a component may render outside a Board (Html inside the CardPeek, which the host mounts once for
+// the whole page): null there — no client-side navigation is offered, links are ordinary links.
+export function useKanbanHostIfAny(): KanbanHostValue | null {
+  return useContext(Ctx);
+}
+
 // A column's label on this board — a key the board no longer has (an old card's history) shows as the key itself.
 export const colLabel = (board: { columns: { key: string; label: string }[] }, k: string): string =>
   board.columns.find((c) => c.key === k)?.label ?? k;
