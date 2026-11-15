@@ -111,6 +111,10 @@
   background: rgba(var(--ak-bad-rgb), 0.1);
   color: var(--ak-bad);
 }
+.ak-root .flash.warn {
+  background: rgba(var(--ak-warn-rgb), 0.12);
+  color: var(--ak-warn);
+}
 .ak-root .flash.ok {
   background: rgba(var(--ak-ok-rgb), 0.1);
   color: var(--ak-ok);

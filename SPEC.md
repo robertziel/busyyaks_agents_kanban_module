@@ -292,23 +292,30 @@ port unreachable; `Api#sessions` → `{concurrency, registered, ended, sessions_
 `<Board api me slug view onView onChanged? navigate? projectHref? cardHref? dictation? className? />` renders the board (its
 columns from `board.columns`, never a constant) and the card dialog inside `.ak-root` with `config.theme` inline; the
 Workflow button opens `BoardEditor`: an SVG graph (`lib/graph.ts`) of the columns as typed nodes and the transitions
-as labelled arrows, **laid out by dagre** (`@dagrejs/dagre`, the React port's one runtime dependency, MIT): left to
-right along the board order (an arrow against it is drawn back), nodes sized to their full label (wrapped onto two
-lines), every edge label a box of its own in the layering so it never sits on a node or another label. Hubs: a
-transition with one or two sources is one labelled arrow per source; `BUNDLE_FROM` (3) or more sources, up to half the
-columns, join a junction pill carrying the one label with a single arrow into the target; more than half the columns
-("Cancel from every state") is a note on the target node, no lines; `"*"` ones are listed, not drawn. **The layout is
-automatic and nothing about the drawing is stored** (schema v9 dropped `board_columns.x` / `y`): every open lays the
-graph out again. The ranks are **folded into rows** that fit the graph box (`maxWidth` = box width ÷ `MIN_TEXT_ZOOM`;
-`maxHeight` = its height ÷ the same: of every split into the greedy fold's number of rows or one more that keeps the
-width — all of them, no cap: a split is grown only from rows that fit the width (`splits(items, k, fits)`) —, the one
-that fits the height best), so the default view shows the whole board — no horizontal scroll, the zoom (≤ 1) never below `MIN_TEXT_ZOOM` = 11 px ÷
-the smallest graph font, i.e. no text under 11 px; an arrow between two rows runs orthogonally through the gutter
-between them (its own lane and channel, its label on the gutter run); − / + leave that zoom, Fit returns to it. A node
-can be dragged aside for the session only (the arrows follow, Auto-layout puts it back; never saved) — add / rename / retype (Select) / delete a
-column (the server's refusal with the card ids shown verbatim), connect two nodes by dragging from a node's port or
-"+ Transition", click an arrow, bundle or note to edit name / from / to / by or delete it, ↑ ↓ for the board order
-(= the graph's left-to-right order), Save (the whole draft, validated server-side) / Discard / Reset to template; on a
+as labelled arrows, **laid out by dagre** (`@dagrejs/dagre`, the React port's one runtime dependency, MIT): **top to
+bottom** along the board order (every edge is oriented along it; an arrow against it is drawn back up, dashed; columns
+reached from one column and not from each other sit side by side in one rank — a branch; a column nothing comes down
+into hangs under the one before it), each node a card (its type's icon in a tinted tile, its full label — wrapped at words
+onto as many lines of `MAX_LINE` characters as it needs, never cut —, the type line in mono, a status pill from its type's rules: "waits for you" for a
+waiting column, "✓ done" for one that finishes, "✕ closed" for another terminal one — `typeBadge`), on a dotted
+canvas. Every route is **orthogonal** (`Route.back` marks one against the board order): it leaves its source on the top
+or bottom side facing it and ends on its target's (ends on one side spread apart), runs vertically, and turns only in
+the gaps between ranks, each horizontal run on a track of its own (a gap too crowded for its tracks lays the graph out
+again, the ranks apart by what it lacked; still crowded after the retries → `Layout.warnings` names the gap and
+the editor shows it — never a silently degraded drawing; a column type the editor has no icon for shows
+"unknown type: <key>" on its card), so no two transitions run along one line; every edge label is a mono pill on its route's
+vertical run, a box of its own in the layering so it never sits on a node or another label. Hubs: a transition with
+one or two sources is one labelled arrow per source; `BUNDLE_FROM` (3) or more sources, up to half the columns, join a
+junction pill carrying the one label with a single arrow into the target; more than half the columns ("Cancel from
+every state") is a note on the target node, no lines; `"*"` ones are listed, not drawn. **The layout is automatic and
+nothing about the drawing is stored** (schema v9 dropped `board_columns.x` / `y`): every open lays the graph out again.
+The graph is as wide as its widest rank and runs down: the default view is its whole width at a zoom (≤ 1) never below
+`MIN_TEXT_ZOOM` = 11 px ÷ the smallest graph font, i.e. no text under 11 px; the box scrolls down; − / + leave that
+zoom, Fit returns to it. A node can be dragged aside for the session only (the arrows follow, Auto-layout puts it
+back; never saved) — add / rename / retype (Select) / delete a column (the server's refusal with the card ids shown
+verbatim), connect two nodes by dragging from a node's port (on its right side; shown and live on the card hovered, focused or selected) or "+ Transition", click an arrow, bundle
+or note to edit name / from / to / by or delete it, ↑ ↓ for the board order
+(= the graph's top-to-bottom order), Save (the whole draft, validated server-side) / Discard / Reset to template; on a
 phone the graph scrolls and zooms above the lists. A board read refused (422) shows the reason and a reset button. The card dialog's
 "Transition" list = the operator's transitions out of the card's column (`operatorMoves`), sent as `{transition, column}`: one per target, the first declared name — and, on a host with `approval.requires_green_ci`, in a step's `from` BOTH edges into the step's `to`: the step's own (asks CI) and the first other one, labelled "… (CI not asked)" (the free move is never hidden behind the gated one). A card in an approval step's `from` shows the primary approve button (the gate:
 "✓ Approve to merge"; a step: "✓ Approve → <to label>"; the tooltip names `to` and `then` from the board); approved in

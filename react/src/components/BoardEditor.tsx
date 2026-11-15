@@ -1,12 +1,13 @@
 // The BOARD EDITOR (the board's "Workflow" button): a project's columns as typed nodes in an SVG graph — each with
 // its label and TYPE (the type decides the column's rules) — and its transitions as labelled arrows between them, like
-// Jira's workflow diagram. The graph is laid out for reading (lib/graph.ts: dagre, left to right along the board order,
-// folded into rows that fit the box, labels placed off the nodes, hubs as bundles or notes) and opens showing the whole
-// of it at a readable size; a node can still be dragged aside for the session, Auto-layout puts it back, − / + / Fit
-// zoom the canvas. Add a column, rename it, retype it (Select), delete it (the server refuses
+// a flowchart. The graph is laid out for reading (lib/graph.ts: dagre, top to bottom along the board order, orthogonal
+// connectors, labels as pills on their lines, hubs as bundles or notes) and opens at its width, never below a readable
+// size; each column is a card — its type's icon, its label, its position and type, a status pill for a column that
+// waits for the operator or ends the flow; a node can still be dragged aside for the session, Auto-layout puts it
+// back, − / + / Fit zoom the canvas. Add a column, rename it, retype it (Select), delete it (the server refuses
 // with the card ids when cards sit in it); add a transition by dragging from a node's port onto another node (or the
 // "+ Transition" button), click an arrow, a bundle or a note to edit its name / from / to / by or delete it; reorder the
-// board's columns (↑ ↓ in the list, = the board's column order, = the graph's left-to-right order); Save sends the
+// board's columns (↑ ↓ in the list, = the board's column order, = the graph's top-to-bottom order); Save sends the
 // whole draft to the engine (validated there as a whole; the refusal shown verbatim) / Discard / Reset to template.
 // Everything drawn here is read from the server's `board` (shape + rules + the type set): no column, type or rule is
 // a constant of this file.
@@ -14,13 +15,23 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEven
 import { errMsg } from "../api";
 import { useKanbanHost } from "../host";
 import {
+  badgeW,
+  BADGE_H,
   center,
   isWildcard,
   keyFrom,
-  foldGraph,
-  rankGraph,
+  layoutGraph,
+  labelW,
+  LABEL_H,
   LINE_H,
   MIN_TEXT_ZOOM,
+  NODE_PAD_B,
+  NOTE_H,
+  subY,
+  TEXT_X,
+  TILE,
+  TILE_X,
+  TITLE_Y,
   junctionText,
   noteText,
   pathOf,
@@ -28,6 +39,7 @@ import {
   removeColumn,
   renameKey,
   reorder,
+  typeBadge,
   typeLine,
   withMoved,
   type Pt,
@@ -38,6 +50,7 @@ import type {
   BoardColumnDef,
   BoardShape,
   BoardShapeData,
+  ColumnType,
   ColumnTypeKey,
   WorkflowActor,
   WorkflowTransition,
@@ -54,6 +67,25 @@ const ACTORS: { value: WorkflowActor; label: string }[] = [
 type Sel = { kind: "column"; key: string } | { kind: "transition"; i: number } | null;
 type Drag = { key: string; dx: number; dy: number };
 type Link = { from: string; x: number; y: number };
+
+// each column type's icon (a 16 × 16 stroke drawing): the engine's type set is fixed (types.ts ColumnTypeKey)
+const TYPE_ICON: Record<ColumnTypeKey, string> = {
+  parked: "M5.5 3.5v9 M10.5 3.5v9",
+  queued: "M3 4.5h10 M3 8h10 M3 11.5h6",
+  working: "M5 3.2v9.6l7.5-4.8z",
+  review:
+    "M1.5 8s2.4-4.5 6.5-4.5 6.5 4.5 6.5 4.5-2.4 4.5-6.5 4.5-6.5-4.5-6.5-4.5z M8 6.2a1.8 1.8 0 1 0 0 3.6a1.8 1.8 0 1 0 0-3.6z",
+  gate: "M8 1.8l5.2 2v3.9c0 3.2-2.2 5.5-5.2 6.5-3-1-5.2-3.3-5.2-6.5v-3.9z M5.6 8l1.7 1.7 3.1-3.4",
+  done: "M8 1.8a6.2 6.2 0 1 0 0.01 0z M5.2 8.2l1.9 1.9 3.7-4",
+  cancelled: "M8 1.8a6.2 6.2 0 1 0 0.01 0z M5.8 5.8l4.4 4.4 M10.2 5.8l-4.4 4.4",
+};
+// a question mark: the glyph of a type the editor has no icon for
+const UNKNOWN_ICON = "M5.8 6a2.2 2.2 0 1 1 3.2 2c-.7.4-1 .9-1 1.6 M8 12.2v.1";
+// the icon a column's type draws; none = a type the engine's fixed set does not have — the card says so (never a blank card)
+const iconOf = (type: string): string | undefined => (TYPE_ICON as Record<string, string | undefined>)[type];
+// the pill a card carries: its type's status, or the error for a type the editor cannot draw
+const cardBadge = (c: BoardColumnDef, t: ColumnType | undefined): string | null =>
+  iconOf(c.type) && t ? typeBadge(t) : `unknown type: ${c.type}`;
 
 const clone = (s: BoardShape): BoardShape => ({
   columns: s.columns.map((c) => ({ ...c })),
@@ -76,7 +108,7 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
   const [link, setLink] = useState<Link | null>(null);
   const [zoom, setZoom] = useState(1);
   const [autoZoom, setAutoZoom] = useState(true); // the zoom follows the box until − / + is pressed; Fit turns it back on
-  const [box, setBox] = useState<{ w: number; maxH: number }>({ w: 0, maxH: 0 }); // the graph box, measured (0 = unknown: jsdom)
+  const [boxW, setBoxW] = useState(0); // the graph box's width, measured (0 = unknown: jsdom)
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [newKeys, setNewKeys] = useState<string[]>([]); // columns added in this draft: their key follows the label
@@ -116,18 +148,13 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
   const labelOf = (k: string) => draft.columns.find((c) => c.key === k)?.label ?? k;
   const typeOf = (k: ColumnTypeKey) => data.types.find((t) => t.key === k);
   const typeOptions = data.types.map((t) => ({ value: t.key, label: t.label }));
-  // the box decides the fold (rows no wider than the box at MIN_TEXT_ZOOM, the split that fits its height best) and the
-  // default zoom (the whole graph)
+  // the box's width decides the default zoom (the graph's width, never below readable text)
   useLayoutEffect(() => {
     const el = graphRef.current;
     if (!el) return;
-    const measure = () => {
-      const maxH = parseFloat(getComputedStyle(el).maxHeight);
-      setBox({ w: el.clientWidth, maxH: Number.isFinite(maxH) ? maxH : 0 });
-    };
+    const measure = () => setBoxW(el.clientWidth);
     measure();
-    // a resize re-folds once it settles (RESIZE_SETTLE_MS), not on every frame of a drag: the fold for a height draws
-    // up to a few hundred row splits
+    // a resize re-fits once it settles (RESIZE_SETTLE_MS), not on every frame of a drag
     let timer: ReturnType<typeof setTimeout> | undefined;
     const ro = new ResizeObserver(() => {
       clearTimeout(timer);
@@ -139,30 +166,27 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
       ro.disconnect();
     };
   }, []);
-  // dagre once per draft; a resize only re-folds the same ranks
-  const ranked = useMemo(
+  // dagre once per draft
+  const base = useMemo(
     () =>
-      rankGraph(draft.columns, draft.transitions, {
+      layoutGraph(draft.columns, draft.transitions, {
         typeLabel: (c) => data.types.find((t) => t.key === c.type)?.label ?? c.type,
+        badge: (c) =>
+          cardBadge(
+            c,
+            data.types.find((t) => t.key === c.type),
+          ),
       }),
     [draft, data.types],
   );
-  const base = useMemo(
-    () =>
-      foldGraph(
-        ranked,
-        box.w > 0 ? (box.w - 2) / MIN_TEXT_ZOOM : Infinity,
-        box.maxH > 0 ? (box.maxH - 2) / MIN_TEXT_ZOOM : Infinity,
-      ),
-    [ranked, box.w, box.maxH],
-  );
   const layout = useMemo(() => withMoved(base, moved), [base, moved]);
-  // the zoom that shows the whole graph, never below readable text (the box scrolls instead); 1 when the box is unknown
+  // the zoom that shows the graph's whole width, never below readable text (the box scrolls instead); 1 when the box is
+  // unknown. The graph runs down: the box scrolls vertically
   const fitted = useMemo(() => {
-    if (box.w <= 0) return 1;
-    const z = Math.min(1, (box.w - 2) / base.w, box.maxH > 0 ? (box.maxH - 2) / base.h : 1);
+    if (boxW <= 0) return 1;
+    const z = Math.min(1, (boxW - 2) / base.w);
     return clampZoom(Math.max(Math.floor(z * 100) / 100, MIN_TEXT_ZOOM)); // floored: a rounded-up zoom would overflow the box by a pixel
-  }, [box, base]);
+  }, [boxW, base]);
   useEffect(() => {
     if (autoZoom) setZoom(fitted);
   }, [autoZoom, fitted]);
@@ -363,6 +387,12 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
           <span>{error}</span>
         </div>
       )}
+      {base.warnings.length > 0 && (
+        <div className="flash warn" role="status" aria-label="Drawing warnings">
+          <i className="dot warn" />
+          <span>{base.warnings.join(" · ")}</span>
+        </div>
+      )}
       <div className="kb-be-body">
         <div className="kb-be-graph" data-testid="graph" ref={graphRef}>
           <svg
@@ -407,6 +437,7 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
               const on = selIdx === r.ti;
               const name = draft.transitions[r.ti]?.name ?? "";
               const d = pathOf(r.points);
+              const lw = labelW(name);
               return (
                 <g
                   key={r.id}
@@ -418,11 +449,25 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
                   onKeyDown={keySelects(() => selectTr(r.ti))}
                 >
                   <path d={d} className="kb-be-hit" />
-                  <path d={d} className="kb-be-line" markerEnd={on ? "url(#kb-be-arrow-sel)" : "url(#kb-be-arrow)"} />
+                  <path
+                    d={d}
+                    className={`kb-be-line${r.back ? " back" : ""}`}
+                    markerEnd={on ? "url(#kb-be-arrow-sel)" : "url(#kb-be-arrow)"}
+                  />
                   {r.label && (
-                    <text x={r.label.x} y={r.label.y + 4} textAnchor="middle" className="kb-be-elabel">
-                      {name || "(unnamed)"}
-                    </text>
+                    <g className="kb-be-epill">
+                      <rect
+                        x={r.label.x - lw / 2}
+                        y={r.label.y - LABEL_H / 2}
+                        width={lw}
+                        height={LABEL_H}
+                        rx={6}
+                        className="kb-be-ebox"
+                      />
+                      <text x={r.label.x} y={r.label.y + 4} textAnchor="middle" className="kb-be-elabel">
+                        {name || "(unnamed)"}
+                      </text>
+                    </g>
                   )}
                 </g>
               );
@@ -451,7 +496,7 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
                         <path d={d} className="kb-be-hit" />
                         <path
                           d={d}
-                          className={`kb-be-line${r.kind === "stub" ? " kb-be-stub" : ""}`}
+                          className={`kb-be-line${r.kind === "stub" ? " kb-be-stub" : ""}${r.back ? " back" : ""}`}
                           markerEnd={
                             r.kind === "link" ? (on ? "url(#kb-be-arrow-sel)" : "url(#kb-be-arrow)") : undefined
                           }
@@ -459,7 +504,7 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
                       </g>
                     );
                   })}
-                  <rect x={j.x} y={j.y} width={j.w} height={j.h} rx={j.h / 2} className="kb-be-junction" />
+                  <rect x={j.x} y={j.y} width={j.w} height={j.h} rx={6} className="kb-be-junction" />
                   <text x={j.x + j.w / 2} y={j.y + j.h / 2 + 4} textAnchor="middle" className="kb-be-jlabel">
                     {junctionText(name, n)}
                   </text>
@@ -485,11 +530,15 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
               const t = typeOf(c.type);
               const b = layout.nodes[c.key]!;
               const lines = layout.lines[c.key] ?? [c.label];
-              const typeY = 19 + (lines.length - 1) * LINE_H + 17;
+              const typeY = subY(lines.length);
+              const tileY = Math.round((typeY + NODE_PAD_B - TILE) / 2);
+              const glyph = iconOf(c.type);
+              const badge = cardBadge(c, t);
+              const bw = badge ? badgeW(badge) : 0;
               return (
                 <g
                   key={c.key}
-                  className={`kb-be-node type-${c.type}${on ? " sel" : ""}${moved[c.key] ? " moved" : ""}`}
+                  className={`kb-be-node type-${c.type}${glyph && t ? "" : " unknown"}${on ? " sel" : ""}${moved[c.key] ? " moved" : ""}`}
                   transform={`translate(${b.x} ${b.y})`}
                   onPointerDown={onNodeDown(c)}
                   onPointerUp={onNodeUp(c)}
@@ -500,15 +549,36 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
                   data-key={c.key}
                   onKeyDown={keySelects(() => setSel({ kind: "column", key: c.key }))}
                 >
-                  <rect width={b.w} height={b.h} rx="8" className="kb-be-box" />
+                  <rect width={b.w} height={b.h} rx="12" className="kb-be-box" />
+                  <rect x={TILE_X} y={tileY} width={TILE} height={TILE} rx="9" className="kb-be-tile" />
+                  <path
+                    d={glyph ?? UNKNOWN_ICON}
+                    transform={`translate(${TILE_X + (TILE - 16) / 2} ${tileY + (TILE - 16) / 2})`}
+                    className="kb-be-glyph"
+                  />
                   {lines.map((l, li) => (
-                    <text key={li} x={10} y={19 + li * LINE_H} className="kb-be-nlabel">
+                    <text key={li} x={TEXT_X} y={TITLE_Y + li * LINE_H} className="kb-be-nlabel">
                       {l}
                     </text>
                   ))}
-                  <text x={10} y={typeY} className="kb-be-ntype">
+                  <text x={TEXT_X} y={typeY} className="kb-be-ntype">
                     {typeLine(i, t?.label ?? c.type)}
                   </text>
+                  {badge && (
+                    <g className="kb-be-badge">
+                      <rect
+                        x={b.w - 12 - bw}
+                        y={tileY + (TILE - BADGE_H) / 2}
+                        width={bw}
+                        height={BADGE_H}
+                        rx="6"
+                        className="kb-be-bbox"
+                      />
+                      <text x={b.w - 12 - bw / 2} y={tileY + TILE / 2 + 4} textAnchor="middle" className="kb-be-btext">
+                        {badge}
+                      </text>
+                    </g>
+                  )}
                   <circle
                     cx={b.w}
                     cy={b.h / 2}
@@ -524,12 +594,12 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
             })}
             {draft.columns.flatMap((c) => {
               const b = layout.nodes[c.key]!;
-              const typeY = 19 + ((layout.lines[c.key] ?? [c.label]).length - 1) * LINE_H + 17;
+              const typeY = subY((layout.lines[c.key] ?? [c.label]).length);
               return (layout.notes[c.key] ?? []).map((n, ni) => (
                 <text
                   key={`n${n.ti}`}
-                  x={b.x + 10}
-                  y={b.y + typeY + 18 + ni * 18}
+                  x={b.x + TEXT_X}
+                  y={b.y + typeY + NOTE_H + ni * NOTE_H}
                   className={`kb-be-note by-${n.by}${selIdx === n.ti ? " sel" : ""}`}
                   role="button"
                   tabIndex={0}
@@ -705,7 +775,7 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
           )}
           <section className="kb-be-panel" aria-label="Columns in board order">
             <h3>
-              Columns <span className="muted">(board order = left to right)</span>
+              Columns <span className="muted">(board order = top to bottom)</span>
             </h3>
             <ol className="kb-be-cols">
               {draft.columns.map((c, i) => (
