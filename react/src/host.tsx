@@ -1,11 +1,12 @@
 // What the host injects, available to every component below the Board: the api port, who the viewer is (the
 // operator's name, as the engine records it), client-side navigation for same-origin links inside rendered markdown
-// (a router's navigate; absent = ordinary links), the host's speech-to-text port (absent = no dictation), the host config and the project's board (its columns with their
+// (a router's navigate; absent = ordinary links), the host's speech-to-text port (absent = no dictation), the card dialog's
+// terminals renderer (absent = no Terminals section), the host config and the project's board (its columns with their
 // types, its workflow and the rules derived from them) the server sent.
-import { createContext, useContext } from "react";
+import { createContext, useContext, type ReactNode } from "react";
 import type { KanbanApi } from "./api";
 import type { DictationApi } from "./lib/dictation";
-import type { BoardShapeData, HostConfig } from "./types";
+import type { BoardShapeData, CardFull, HostConfig } from "./types";
 
 export type KanbanHostValue = {
   api: KanbanApi;
@@ -17,6 +18,9 @@ export type KanbanHostValue = {
   cardHref: ((slug: string, id: number) => string) | null;
   // speech to text for the comment box (the mic button, its shortcut); null = the host offers none: no mic is shown
   dictation: DictationApi | null;
+  // the card dialog's Terminals section: what the host renders for a card's agent sessions (live terminals); null = the
+  // host offers none: no section. A host's renderer may answer null for a card with nothing to show (no section either)
+  cardTerminals: ((card: CardFull) => ReactNode) | null;
 };
 
 const Ctx = createContext<KanbanHostValue | null>(null);

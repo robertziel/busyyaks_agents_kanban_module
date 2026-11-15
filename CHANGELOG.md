@@ -8,6 +8,10 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Added
 
+- **`<Board cardTerminals>`**: an optional host renderer for the card dialog's **Terminals** section
+  (the card's agent sessions as live terminals); absent or `null` for a card = no section. `KanbanHostValue.cardTerminals`.
+  `Store#card_sessions(id)` (the open registrations working on a card) and `Store#terminal_event` (a `terminal` audit
+  event on every card a registered session owns).
 - **The live agent line**: an optional `KanbanApi.sessionsLive(id)` port; the open card dialog
   polls it and shows what the owner session does now (thinking / writing / running a tool / writing a comment on this
   card / waiting for you / idle, with the turn's time and tokens) above the newest comment, and a pulsing dot on each
