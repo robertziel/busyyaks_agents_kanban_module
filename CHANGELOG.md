@@ -8,6 +8,10 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Added
 
+- **The live agent line**: an optional `KanbanApi.sessionsLive(id)` port; the open card dialog
+  polls it and shows what the owner session does now (thinking / writing / running a tool / writing a comment on this
+  card / waiting for you / idle, with the turn's time and tokens) above the newest comment, and a pulsing dot on each
+  running session's newest comment. SPEC § 9.
 - **`kanban_pr_assign(id, pr_url, role, author)`**: the agent that opened a PR assigns it to its
   card — metadata `prs.<role>` = the URL, merged into the card's metadata (`Store#assign_pr`). The MCP instructions
   tell agents to call it at once after opening a PR; a host reads a card's PRs from it, never from branch names or text.

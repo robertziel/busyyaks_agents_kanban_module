@@ -402,6 +402,54 @@ describe("Board", () => {
     expect(screen.getByText(/the card stays in Running/)).toBeInTheDocument();
   });
 
+  it("the card dialog shows what the owner session does now and dots its newest comment (the host's sessionsLive)", async () => {
+    const cards = [card({ id: 3, column: "running", title: "Live", owner_session: "s1", assignee: "lead-s1" })];
+    const api = fakeApi(boardData(content, cards), cards);
+    const base = api.card.bind(api);
+    const comment = (id: number, author: string) => ({
+      id,
+      at: "2026-11-01T10:00:00Z",
+      kind: "comment",
+      author,
+      body: `c${id}`,
+      body_html: `<p>c${id}</p>`,
+    });
+    api.card = (id) => base(id).then((d) => ({ ...d, activity: [comment(10, "lead-s1"), comment(11, "lead-s1")] }));
+    let phase: "thinking" | "tool" = "thinking";
+    api.sessionsLive = (id) =>
+      Promise.resolve({
+        sessions: {
+          s1: {
+            state: "working",
+            state_by: "screen: live_turn_working",
+            phase,
+            elapsed_s: 42,
+            tokens: null,
+            tool: phase === "tool" ? "busyyaks · kanban_comment" : null,
+            card: phase === "tool" ? id : null,
+            subagents: null,
+          },
+        },
+      });
+    render(<Host api={api} view={{ card: 3, panel: null, archived: false }} />);
+    const line = await screen.findByText("thinking… · 42s");
+    expect(line.closest(".kb-agent-live")).toHaveTextContent("s1");
+    expect(line.closest(".kb-agent-live")).not.toHaveAttribute("aria-live"); // the timer is never announced
+    expect(document.querySelector(".kb-agent-live [aria-live]")).toHaveTextContent(/^s1 is working$/);
+    expect(screen.getAllByLabelText("s1 is thinking… · 42s")).toHaveLength(1); // the newest comment only
+    expect(screen.getByLabelText("s1 is thinking… · 42s").closest("li")).toHaveAttribute("data-comment", "11");
+    phase = "tool";
+    expect(await screen.findByText("writing a comment on this card · 42s", {}, { timeout: 5000 })).toBeInTheDocument();
+  });
+
+  it("a host without sessionsLive shows no live line", async () => {
+    const cards = [card({ id: 4, column: "running", title: "Quiet", owner_session: "s1" })];
+    const api = fakeApi(boardData(content, cards), cards);
+    render(<Host api={api} view={{ card: 4, panel: null, archived: false }} />);
+    await screen.findByLabelText("Comment");
+    expect(document.querySelector(".kb-agent-live")).toBeNull();
+  });
+
   it("a card on a workflow board moves by TRANSITION: the list holds the operator's transitions and sends the name", async () => {
     const cards = [
       card({
