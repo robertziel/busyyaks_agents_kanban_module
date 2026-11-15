@@ -113,7 +113,7 @@ Element.prototype.scrollIntoView = () => {};
 describe("comment dictation", () => {
   it("no DictationApi → no mic", async () => {
     renderBoard();
-    await screen.findByRole("textbox", { name: "Comment" });
+    await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     expect(screen.queryByRole("button", { name: "Dictate" })).toBeNull();
   });
 
@@ -126,7 +126,7 @@ describe("comment dictation", () => {
       }),
     );
     const api = renderBoard({ transcribe, shortcut: ALT_M });
-    const box = await screen.findByRole("textbox", { name: "Comment" });
+    const box = await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
     expect(await screen.findByText(/listening/, undefined, SLOW)).toBeInTheDocument();
     expect(box).toHaveAttribute("readonly");
@@ -148,7 +148,7 @@ describe("comment dictation", () => {
         }),
       shortcut: ALT_M,
     });
-    const box = await screen.findByRole("textbox", { name: "Comment" });
+    const box = await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     fireEvent.change(box, { target: { value: "Fix login" } });
     // push-to-talk: held down → recording (the key's auto-repeat changes nothing); released → stopped
     const dialog = screen.getByRole("dialog", { name: "Card" });
@@ -175,7 +175,7 @@ describe("comment dictation", () => {
       scrolled.push(this);
     };
     renderBoard({ transcribe: () => Promise.resolve({ text: "", words: [w(" hi", 0, 0.3)] }), shortcut: ALT_M });
-    const box = await screen.findByRole("textbox", { name: "Comment" });
+    const box = await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     fireEvent.click(screen.getByRole("button", { name: /Add a more detailed description/ })); // its editor stops every key
     const desc = await screen.findByRole("textbox", { name: "Description" });
     desc.focus();
@@ -198,7 +198,7 @@ describe("comment dictation", () => {
     mic.open = () => new Promise((r) => (open = r));
     const transcribe = vi.fn(() => Promise.resolve({ text: "", words: [w(" hi", 0, 0.3)] }));
     renderBoard({ transcribe, shortcut: ALT_M });
-    const box = await screen.findByRole("textbox", { name: "Comment" });
+    const box = await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     const dialog = screen.getByRole("dialog", { name: "Card" });
     fireEvent.keyDown(dialog, { key: "µ", code: "KeyM", altKey: true });
     fireEvent.keyUp(window, { key: "µ", code: "KeyM", altKey: true }); // a tap: released while the mic opens
@@ -219,7 +219,7 @@ describe("comment dictation", () => {
       transcribe: () => Promise.resolve({ text: "hi", words: [w(" hi", 0.0, 0.3)] }),
       shortcut: ctrlShiftD,
     });
-    await screen.findByRole("textbox", { name: "Comment" });
+    await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     expect(screen.getByRole("button", { name: "Dictate" })).toHaveAttribute("title", "Dictate (hold Ctrl+Shift+D)");
     const dialog = screen.getByRole("dialog", { name: "Card" });
     fireEvent.keyDown(dialog, { key: "µ", code: "KeyM", altKey: true });
@@ -231,7 +231,7 @@ describe("comment dictation", () => {
   it("no shortcut: the mic button works, no key starts it", async () => {
     mic.open = () => Promise.resolve(speakingMic());
     renderBoard({ transcribe: () => Promise.resolve({ text: "hi", words: [w(" hi", 0.0, 0.3)] }), shortcut: null });
-    await screen.findByRole("textbox", { name: "Comment" });
+    await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     fireEvent.keyDown(screen.getByRole("dialog", { name: "Card" }), { key: "µ", code: "KeyM", altKey: true });
     expect(screen.queryByText(/listening/)).toBeNull();
     expect(screen.getByRole("button", { name: "Dictate" })).toHaveAttribute("title", "Dictate");
@@ -254,7 +254,7 @@ describe("comment dictation", () => {
         dictation={{ transcribe: () => Promise.resolve({ text: "x", words: [w(" x", 0.0, 0.3)] }), shortcut: ALT_M }}
       />,
     );
-    await screen.findByRole("textbox", { name: "Comment" });
+    await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
     view.unmount();
     resolve({ sampleRate: 16000, samples: () => [], level: () => 0, release });
@@ -264,7 +264,7 @@ describe("comment dictation", () => {
   it("a refused microphone and a failed transcription show their reason", async () => {
     mic.open = () => Promise.reject(Object.assign(new Error("Permission denied"), { name: "NotAllowedError" }));
     renderBoard({ transcribe: () => Promise.reject(new Error("502 · speech server unreachable")), shortcut: ALT_M });
-    await screen.findByRole("textbox", { name: "Comment" });
+    await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Microphone blocked — allow it for this site");
     mic.open = () => Promise.resolve(speakingMic());
@@ -282,7 +282,7 @@ describe("comment dictation", () => {
       transcribe: () => Promise.resolve({ text: "", words: [w(" Ship", 0, 0.5)] }),
       shortcut: ALT_M,
     });
-    const box = await screen.findByRole("textbox", { name: "Comment" });
+    const box = await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     fireEvent.change(box, { target: { value: "Draft" } });
     fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
     await screen.findByText(/listening/, undefined, SLOW);
@@ -309,7 +309,7 @@ describe("comment dictation", () => {
         : Promise.resolve({ text: "", words: [w(" Ship", 0, 0.5)] }),
     );
     renderBoard({ transcribe, shortcut: ALT_M });
-    const box = await screen.findByRole("textbox", { name: "Comment" });
+    const box = await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
     await screen.findByText(/listening/, undefined, SLOW);
     fireEvent.click(screen.getByRole("button", { name: "Stop dictation" }));
@@ -325,7 +325,7 @@ describe("comment dictation", () => {
     mic.open = () => Promise.resolve(speakingMic());
     const transcribe = vi.fn(() => Promise.reject(new Error("speech server unreachable")));
     const { api } = renderBoardIn({ transcribe, shortcut: ALT_M });
-    const box = await screen.findByRole("textbox", { name: "Comment" });
+    const box = await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     fireEvent.change(box, { target: { value: "Note:" } });
     fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
     await screen.findByText(/listening/, undefined, SLOW);
@@ -351,7 +351,7 @@ describe("comment dictation", () => {
     renderBoardIn({ transcribe: () => Promise.resolve({ text: "hi", words: [w(" hi", 0.0, 0.3)] }), shortcut: ALT_M }, {
       attach,
     } as unknown as Partial<KanbanApi>);
-    const box = await screen.findByRole("textbox", { name: "Comment" });
+    const box = await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     const file = new File(["x"], "a.png", { type: "image/png" });
     fireEvent.paste(box, { clipboardData: { files: [file], items: [] } });
     expect(attach).toHaveBeenCalledTimes(1);
@@ -370,7 +370,7 @@ describe("comment dictation", () => {
     mic.open = () => Promise.resolve(speakingMic());
     mic.open = () => Promise.resolve(speakingMic());
     renderBoard({ transcribe: () => Promise.resolve({ text: "", words: [] }), shortcut: ALT_M });
-    await screen.findByRole("textbox", { name: "Comment" });
+    await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
     await screen.findByText(/listening/, undefined, SLOW);
     fireEvent.click(screen.getByRole("button", { name: "Stop dictation" }));
@@ -398,7 +398,7 @@ describe("comment dictation", () => {
     const transcribe = () =>
       new Promise<{ text: string; words: { word: string; start: number; end: number }[] }>((r) => (answer = r));
     renderBoard({ transcribe, shortcut: ALT_M });
-    await screen.findByRole("textbox", { name: "Comment" });
+    await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     const button = screen.getByRole("button", { name: "Dictate" });
     const bold = screen.getByRole("button", { name: "Bold (Ctrl+B)" });
     expect(button).toHaveAttribute("data-phase", "idle");
@@ -494,7 +494,7 @@ describe("comment dictation", () => {
       return a ? Promise.resolve(a) : Promise.reject(new Error("502 · speech server unreachable"));
     });
     const { container } = renderBoardIn({ transcribe, shortcut: ALT_M });
-    const box = await screen.findByRole("textbox", { name: "Comment" });
+    const box = await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     fireEvent.change(box, { target: { value: "Fix:" } });
     fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
     await screen.findByText(/listening/, undefined, SLOW);
@@ -523,7 +523,7 @@ describe("comment dictation", () => {
     ];
     const transcribe = vi.fn(() => answers.shift()!());
     const { container } = renderBoardIn({ transcribe, shortcut: ALT_M });
-    await screen.findByRole("textbox", { name: "Comment" });
+    await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     const button = screen.getByRole("button", { name: "Dictate" });
     fireEvent.click(button);
     await screen.findByText(/listening/, undefined, SLOW);
@@ -548,7 +548,7 @@ describe("comment dictation", () => {
   it("the mic keeps its place: one slot beside the tools, still there under Preview while it records", async () => {
     mic.open = () => Promise.resolve(speakingMic());
     renderBoard({ transcribe: () => Promise.resolve({ text: "", words: [] }), shortcut: ALT_M });
-    await screen.findByRole("textbox", { name: "Comment" });
+    await screen.findByRole("textbox", { name: "Comment" }, SLOW);
     const button = screen.getByRole("button", { name: "Dictate" });
     const slot = button.closest(".mde-dict")!;
     const kit = slot.parentElement!;

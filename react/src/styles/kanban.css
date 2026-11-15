@@ -3432,23 +3432,29 @@
   overflow: auto;
   border: 1px solid var(--ak-line);
   border-radius: 10px;
-  background: var(--ak-panel-2, var(--ak-panel));
+  /* a dotted canvas, like a flowchart tool's */
+  background-color: var(--ak-panel-2, var(--ak-panel));
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--ak-ink) 16%, transparent) 1px, transparent 1.4px);
+  background-size: 16px 16px;
   align-self: start;
   max-height: calc(
     100vh - 230px
-  ); /* the dialog's height minus its header, footer and margins: the folded graph uses it */
+  ); /* the dialog's height minus its header, footer and margins: the graph scrolls down */
   touch-action: pan-x pan-y;
 }
 .ak-root .kb-be-graph svg {
   display: block;
+  margin: 0 auto; /* a graph narrower than its box sits in the middle of it */
   font: 500 12px/1 var(--ak-sans, sans-serif);
   user-select: none;
   -webkit-user-select: none;
 }
+/* a column: a white card with a soft shadow, its type's icon in a tinted tile, the label, the type line in mono */
 .ak-root .kb-be-box {
   fill: var(--ak-panel);
-  stroke: var(--ak-line-strong, var(--ak-line));
-  stroke-width: 1.5;
+  stroke: var(--ak-line);
+  stroke-width: 1;
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.06)) drop-shadow(0 6px 14px rgba(0, 0, 0, 0.05));
 }
 .ak-root .kb-be-node {
   cursor: grab;
@@ -3458,35 +3464,100 @@
 .ak-root .kb-be-node:focus-visible .kb-be-box,
 .ak-root .kb-be-node.sel .kb-be-box {
   stroke: var(--ak-accent);
-  stroke-width: 2.5;
+  stroke-width: 2;
 }
 .ak-root .kb-be-node.type-parked .kb-be-box {
   stroke-dasharray: 4 3;
 }
-.ak-root .kb-be-node.type-working .kb-be-box {
+.ak-root .kb-be-tile {
+  fill: var(--ak-panel-2, var(--ak-panel));
+  stroke: var(--ak-line);
+  stroke-width: 1;
+}
+.ak-root .kb-be-glyph {
+  fill: none;
+  stroke: var(--ak-ink-dim);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.ak-root .kb-be-node.type-working .kb-be-tile,
+.ak-root .kb-be-node.type-review .kb-be-tile {
   fill: rgba(var(--ak-accent-rgb), 0.1);
+  stroke: rgba(var(--ak-accent-rgb), 0.25);
 }
-.ak-root .kb-be-node.type-review .kb-be-box {
-  fill: rgba(var(--ak-accent-rgb), 0.05);
+.ak-root .kb-be-node.type-working .kb-be-glyph,
+.ak-root .kb-be-node.type-review .kb-be-glyph {
+  stroke: var(--ak-accent);
 }
-.ak-root .kb-be-node.type-asks_operator .kb-be-box,
-.ak-root .kb-be-node.type-handoff .kb-be-box {
+.ak-root .kb-be-node.type-gate .kb-be-tile {
   fill: rgba(var(--ak-warn-rgb), 0.12);
+  stroke: rgba(var(--ak-warn-rgb), 0.3);
 }
-.ak-root .kb-be-node.type-approved .kb-be-box,
-.ak-root .kb-be-node.type-done .kb-be-box {
+.ak-root .kb-be-node.type-gate .kb-be-glyph {
+  stroke: var(--ak-warn);
+}
+.ak-root .kb-be-node.type-done .kb-be-tile {
   fill: rgba(var(--ak-ok-rgb), 0.12);
+  stroke: rgba(var(--ak-ok-rgb), 0.3);
+}
+.ak-root .kb-be-node.type-done .kb-be-glyph {
+  stroke: var(--ak-ok);
+}
+.ak-root .kb-be-node.type-cancelled .kb-be-nlabel,
+.ak-root .kb-be-node.type-parked .kb-be-nlabel {
+  fill: var(--ak-ink-dim);
 }
 .ak-root .kb-be-nlabel {
   fill: var(--ak-ink);
   font-weight: 600;
-  font-size: 14px;
+  font-size: 15px;
   pointer-events: none;
 }
 .ak-root .kb-be-ntype {
   fill: var(--ak-ink-faint);
+  font-family: var(--ak-mono);
   font-size: 11.5px;
   pointer-events: none;
+}
+/* the status pill at a card's right end: waits for the operator (a gate), ends the flow (done / closed) */
+.ak-root .kb-be-bbox {
+  fill: color-mix(in srgb, var(--ak-ink) 7%, transparent);
+}
+.ak-root .kb-be-btext {
+  fill: var(--ak-ink-dim);
+  font-size: 11.5px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.ak-root .kb-be-node.type-gate .kb-be-bbox {
+  fill: rgba(var(--ak-warn-rgb), 0.14);
+}
+.ak-root .kb-be-node.type-gate .kb-be-btext {
+  fill: var(--ak-warn);
+}
+.ak-root .kb-be-node.type-done .kb-be-bbox {
+  fill: rgba(var(--ak-ok-rgb), 0.14);
+}
+.ak-root .kb-be-node.type-done .kb-be-btext {
+  fill: var(--ak-ok);
+}
+/* a type the editor has no icon for: the card says so, in the error colour */
+.ak-root .kb-be-node.unknown .kb-be-box {
+  stroke: var(--ak-bad);
+}
+.ak-root .kb-be-node.unknown .kb-be-bbox {
+  fill: rgba(var(--ak-bad-rgb), 0.14);
+}
+.ak-root .kb-be-node.unknown .kb-be-btext,
+.ak-root .kb-be-node.unknown .kb-be-glyph {
+  fill: none;
+  stroke: var(--ak-bad);
+}
+.ak-root .kb-be-node.unknown .kb-be-btext {
+  fill: var(--ak-bad);
+  stroke: none;
 }
 /* a note: a transition from more than half the columns, written on its target node instead of drawn as lines; clickable
    like an arrow */
@@ -3507,12 +3578,23 @@
   font-weight: 700;
   text-decoration: underline;
 }
+/* the port on a card's right side (routes end on the top and bottom only): drag from it onto another card to add a
+   transition */
 .ak-root .kb-be-port {
-  fill: var(--ak-accent);
-  stroke: var(--ak-panel);
+  fill: var(--ak-panel);
+  stroke: var(--ak-accent);
   stroke-width: 2;
   cursor: crosshair;
   touch-action: none;
+  /* hidden and inert until the card is hovered, focused or selected (a tap selects it): a press on a card selects it */
+  opacity: 0;
+  pointer-events: none;
+}
+.ak-root .kb-be-node:hover .kb-be-port,
+.ak-root .kb-be-node:focus-visible .kb-be-port,
+.ak-root .kb-be-node.sel .kb-be-port {
+  opacity: 1;
+  pointer-events: auto;
 }
 .ak-root .kb-be-edge {
   cursor: pointer;
@@ -3523,10 +3605,14 @@
   stroke: transparent;
   stroke-width: 14;
 }
+/* a transition: an orthogonal connector; one against the board order (back up the flow) is dashed */
 .ak-root .kb-be-line {
   fill: none;
   stroke: var(--ak-ink-dim);
   stroke-width: 1.6;
+}
+.ak-root .kb-be-line.back {
+  stroke-dasharray: 5 4;
 }
 .ak-root .kb-be-edge.by-operator .kb-be-line {
   stroke: var(--ak-warn);
@@ -3544,7 +3630,7 @@
 .ak-root .kb-be-junction {
   fill: var(--ak-panel);
   stroke: var(--ak-ink-dim);
-  stroke-width: 1.4;
+  stroke-width: 1.2;
 }
 .ak-root .kb-be-edge.by-operator .kb-be-junction {
   stroke: var(--ak-warn);
@@ -3554,21 +3640,23 @@
 }
 .ak-root .kb-be-jlabel {
   fill: var(--ak-ink);
-  font-size: 12.5px;
+  font-family: var(--ak-mono);
+  font-size: 12px;
   pointer-events: none;
 }
 .ak-root .kb-be-edge.sel .kb-be-line,
 .ak-root .kb-be-edge:focus-visible .kb-be-line {
   stroke: var(--ak-accent);
-  stroke-width: 3;
+  stroke-width: 2.6;
 }
 .ak-root .kb-be-edge.sel .kb-be-stub {
   stroke-width: 2;
   opacity: 1;
 }
-.ak-root .kb-be-edge.sel .kb-be-junction {
+.ak-root .kb-be-edge.sel .kb-be-junction,
+.ak-root .kb-be-edge.sel .kb-be-ebox {
   stroke: var(--ak-accent);
-  stroke-width: 2.5;
+  stroke-width: 1.6;
 }
 .ak-root .kb-be-arrowhead {
   fill: var(--ak-ink-dim);
@@ -3576,13 +3664,16 @@
 .ak-root .kb-be-arrowhead.sel {
   fill: var(--ak-accent);
 }
+/* a transition's name: a mono pill on its line */
+.ak-root .kb-be-ebox {
+  fill: var(--ak-panel);
+  stroke: var(--ak-line);
+  stroke-width: 1;
+}
 .ak-root .kb-be-elabel {
   fill: var(--ak-ink);
-  font-size: 13.5px;
-  paint-order: stroke;
-  stroke: var(--ak-panel-2, var(--ak-panel));
-  stroke-width: 4px;
-  stroke-linejoin: round;
+  font-family: var(--ak-mono);
+  font-size: 12px;
   pointer-events: none;
 }
 .ak-root .kb-be-edge.sel .kb-be-elabel,
@@ -3725,6 +3816,9 @@
 @media (max-width: 900px) {
   .ak-root .kb-be-body {
     grid-template-columns: minmax(0, 1fr);
+    /* each row its content's height: an auto row in this height-bound body shrinks the scrolling graph box towards 0
+       (a scroll container's minimum size) and the lists below were drawn over it */
+    grid-auto-rows: max-content;
     overflow: auto;
   }
   .ak-root .kb-be-graph {

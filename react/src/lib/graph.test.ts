@@ -4,18 +4,19 @@ import {
   BUNDLE_FROM,
   junctionText,
   keyFrom,
-  foldGraph,
   layoutGraph,
-  rankGraph,
   LINE_H,
   MAX_LINE,
   NOTE_CHAR_W,
+  NOTE_H,
+  subY,
+  TEXT_X,
   pathOf,
   planTransitions,
   removeColumn,
   renameKey,
   reorder,
-  splits,
+  nodeH,
   typeLine,
   withMoved,
   wrapLabel,
@@ -29,6 +30,8 @@ const col = (key: string, label = key, type: BoardColumnDef["type"] = "review"):
   type,
   hide_after_hours: 72,
 });
+// the type line shows the raw type key: these tests pick no host names for the types
+const OPTS = { typeLabel: (c: BoardColumnDef) => c.type };
 const right = (b: Box) => b.x + b.w;
 const bottom = (b: Box) => b.y + b.h;
 const inside = (p: { x: number; y: number }, b: Box, slack = 0.5) =>
@@ -71,17 +74,23 @@ describe("planTransitions — how each transition is drawn", () => {
 });
 
 describe("wrapLabel", () => {
-  it("keeps a short label on one line and wraps a long one at a word boundary onto at most two", () => {
+  it("keeps a short label on one line and wraps a long one at word boundaries, every line up to MAX_LINE", () => {
     expect(wrapLabel("In progress")).toEqual(["In progress"]);
-    expect(wrapLabel("Pre-review PR (mirror)")).toEqual(["Pre-review PR", "(mirror)"]);
-    expect(wrapLabel("Local: Author response")).toEqual(["Local: Author", "response"]);
-    expect(wrapLabel("Allow merge (public)")).toEqual(["Allow merge", "(public)"]);
+    expect(wrapLabel("Public: Author response")).toEqual(["Public: Author response"]);
+    expect(wrapLabel("Waiting for the operator's final approval")).toEqual([
+      "Waiting for the operator's",
+      "final approval",
+    ]);
     expect(wrapLabel("a".repeat(MAX_LINE + 5))).toEqual(["a".repeat(MAX_LINE + 5)]); // one word: never cut
-    expect(wrapLabel("one two three four five six seven").length).toBe(2);
+    const long = "Waiting for the operator's final approval before the public release goes out";
+    const lines = wrapLabel(long);
+    expect(lines.length).toBeGreaterThan(2);
+    expect(lines.join(" ")).toBe(long);
+    for (const l of lines) expect(l.length).toBeLessThanOrEqual(MAX_LINE);
   });
 });
 
-describe("layoutGraph — dagre left to right along the board order", () => {
+describe("layoutGraph — dagre top to bottom along the board order", () => {
   const chain = ["backlog", "todo", "doing", "review", "done"].map((k) => col(k, k[0]!.toUpperCase() + k.slice(1)));
   const ts: WorkflowTransition[] = [
     { name: "Prioritise", from: "backlog", to: "todo", by: "any" },
@@ -90,18 +99,22 @@ describe("layoutGraph — dagre left to right along the board order", () => {
     { name: "Fixes needed", from: "review", to: "doing", by: "any" },
     { name: "Ship", from: "review", to: "done", by: "operator" },
   ];
-  it("ranks follow the board order: each column sits right of the one before; nodes are sized to their wrapped label", () => {
-    const l = layoutGraph(chain, ts);
-    const xs = chain.map((c) => l.nodes[c.key]!.x);
-    for (let i = 1; i < xs.length; i++) expect(xs[i]!).toBeGreaterThan(right(l.nodes[chain[i - 1]!.key]!));
-    expect(l.nodes.backlog!.h).toBe(12 + LINE_H + 16);
-    const wide = layoutGraph([col("a", "Pre-review PR (mirror)"), col("b", "x")], []);
-    expect(wide.lines.a).toEqual(["Pre-review PR", "(mirror)"]);
-    expect(wide.nodes.a!.h).toBe(12 + 2 * LINE_H + 16);
+  it("ranks follow the board order: each column sits below the one before; nodes are sized to their wrapped label", () => {
+    const l = layoutGraph(chain, ts, OPTS);
+    const ys = chain.map((c) => l.nodes[c.key]!.y);
+    for (let i = 1; i < ys.length; i++) expect(ys[i]!).toBeGreaterThan(bottom(l.nodes[chain[i - 1]!.key]!));
+    expect(l.nodes.backlog!.h).toBe(nodeH(1, 0));
+    expect(nodeH(2, 1)).toBe(subY(2) + 15 + NOTE_H);
+    expect(subY(2) - subY(1)).toBe(LINE_H);
+    const label = "Waiting for the operator's final approval";
+    const wide = layoutGraph([col("a", label), col("b", "x")], [], OPTS);
+    expect(wide.lines.a).toEqual(["Waiting for the operator's", "final approval"]);
+    expect(wide.nodes.a!.h).toBe(nodeH(2, 0));
     expect(wide.nodes.a!.w).toBeGreaterThan(wide.nodes.b!.w);
+    expect(wide.nodes.a!.w).toBeGreaterThanOrEqual(TEXT_X + "Waiting for the operator's".length * 8.6);
   });
   it("an arrow against the board order is laid out reversed and drawn back: it starts at its source and ends on its target's border", () => {
-    const l = layoutGraph(chain, ts);
+    const l = layoutGraph(chain, ts, OPTS);
     const back = l.routes.find((r) => r.ti === 3)!;
     expect(back.kind).toBe("arrow");
     const first = back.points[0]!;
@@ -116,60 +129,46 @@ describe("layoutGraph — dagre left to right along the board order", () => {
     }
   });
   it("a node is wide enough for its type line, a junction for its text", () => {
-    const narrow = layoutGraph([col("a", "x", "gate"), col("b", "y")], []);
+    const narrow = layoutGraph([col("a", "x", "gate"), col("b", "y")], [], OPTS);
     const wide = layoutGraph([col("a", "x", "gate"), col("b", "y")], [], {
       typeLabel: (c) => (c.type === "gate" ? "Waits for the operator" : c.type),
     });
     expect(wide.nodes.a!.w).toBeGreaterThan(narrow.nodes.a!.w);
-    expect(wide.nodes.a!.w).toBeGreaterThanOrEqual(typeLine(0, "Waits for the operator").length * NOTE_CHAR_W + 22);
+    expect(wide.nodes.a!.w).toBeGreaterThanOrEqual(TEXT_X + typeLine(0, "Waits for the operator").length * NOTE_CHAR_W);
     const six = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m"].map((k) => col(k));
-    const l = layoutGraph(six, [
-      { name: "Ask the operator", from: ["b", "c", "d", "e", "f", "g"], to: "a", by: "agent" },
-    ]);
+    const l = layoutGraph(
+      six,
+      [{ name: "Ask the operator", from: ["b", "c", "d", "e", "f", "g"], to: "a", by: "agent" }],
+      OPTS,
+    );
     expect(l.junctions[0]!.w).toBeGreaterThanOrEqual(junctionText("Ask the operator", 6).length * 7 + 18);
     expect(junctionText("", 3)).toBe("(unnamed) · 3");
   });
-  it("folds the ranks into rows no wider than maxWidth, in board order; a route between rows is orthogonal, outside every node", () => {
-    const one = layoutGraph(chain, ts);
-    const l = layoutGraph(chain, ts, { maxWidth: 420 });
-    expect(one.rows).toBe(1);
-    expect(l.rows).toBeGreaterThan(1);
-    expect(l.w).toBeLessThanOrEqual(420);
-    // reading order: a later column is right of the one before on its row, or on a lower row
-    for (let i = 1; i < chain.length; i++) {
-      const a = l.nodes[chain[i - 1]!.key]!;
-      const b = l.nodes[chain[i]!.key]!;
-      expect(b.x > a.x || b.y > bottom(a)).toBe(true);
-    }
-    const cross = l.routes.filter((r) => r.ortho);
-    expect(cross.length).toBeGreaterThan(0);
-    for (const r of cross) {
-      expect(onBorder(r.points[0]!, l.nodes[r.from]!)).toBe(true);
-      expect(onBorder(r.points[r.points.length - 1]!, l.nodes[r.to]!)).toBe(true);
+  it("every route is orthogonal: it leaves its source on the top or bottom border, ends on its target's, and runs only up, down or across", () => {
+    const l = layoutGraph(chain, ts, OPTS);
+    for (const r of l.routes) {
+      const first = r.points[0]!;
+      const last = r.points[r.points.length - 1]!;
+      expect(onBorder(first, l.nodes[r.from]!)).toBe(true);
+      expect([l.nodes[r.from]!.y, bottom(l.nodes[r.from]!)]).toContain(first.y);
+      expect([l.nodes[r.to]!.y, bottom(l.nodes[r.to]!)]).toContain(last.y);
       for (let i = 1; i < r.points.length; i++) {
         const p = r.points[i - 1]!;
         const q = r.points[i]!;
-        expect(p.x === q.x || p.y === q.y).toBe(true); // orthogonal
+        expect(p.x === q.x || p.y === q.y).toBe(true);
       }
     }
+    expect(l.routes.filter((r) => r.back).map((r) => r.ti)).toEqual([3]); // Fixes needed: review → doing, back up
   });
   it("is deterministic", () => {
-    expect(layoutGraph(chain, ts, { maxWidth: 400 })).toEqual(layoutGraph(chain, ts, { maxWidth: 400 }));
-  });
-  it("one rankGraph folds for any width, in any order, exactly as layoutGraph lays out that width; folding never changes it", () => {
-    const ranked = rankGraph(chain, ts);
-    const before = structuredClone(ranked);
-    for (const w of [420, Infinity, 300, 700, 420])
-      expect(foldGraph(ranked, w)).toEqual(layoutGraph(chain, ts, { maxWidth: w }));
-    expect(ranked).toEqual(before);
-    expect(foldGraph(ranked)).toEqual(layoutGraph(chain, ts));
+    expect(layoutGraph(chain, ts, OPTS)).toEqual(layoutGraph(chain, ts, OPTS));
   });
   it("a note: the target node grows a row per note; no route is drawn for it", () => {
     const ts2: WorkflowTransition[] = [
       ...ts,
       { name: "Cancel", from: ["backlog", "todo", "doing", "review"], to: "done", by: "operator" },
     ];
-    const l = layoutGraph(chain, ts2);
+    const l = layoutGraph(chain, ts2, OPTS);
     expect(l.notes.done).toEqual([
       {
         kind: "note",
@@ -180,23 +179,38 @@ describe("layoutGraph — dagre left to right along the board order", () => {
         by: "operator",
       },
     ]);
-    expect(l.nodes.done!.h).toBe(l.nodes.backlog!.h + 18);
+    expect(l.nodes.done!.h).toBe(l.nodes.backlog!.h + NOTE_H);
     expect(l.nodes.done!.w).toBeGreaterThan(l.nodes.backlog!.w); // wide enough for the note text
     expect(l.routes.some((r) => r.ti === 5)).toBe(false);
   });
-  it("a moved node keeps its place; the routes touching it end on its new border, the others stay", () => {
-    const base = layoutGraph(chain, ts);
-    const moved = withMoved(base, { doing: { x: 400, y: 300 } });
-    expect(moved.nodes.doing).toMatchObject({ x: 400, y: 300 });
-    expect(moved.nodes.backlog).toEqual(base.nodes.backlog);
-    const start = moved.routes.find((r) => r.ti === 1)!; // todo → doing
-    expect(onBorder(start.points[start.points.length - 1]!, moved.nodes.doing!)).toBe(true);
-    expect(moved.routes.find((r) => r.ti === 0)).toEqual(base.routes.find((r) => r.ti === 0));
-    expect(moved.h).toBeGreaterThanOrEqual(300 + moved.nodes.doing!.h);
+  it("a moved node keeps its place; the routes touching it end on its new border, still orthogonal; the others stay", () => {
+    const base = layoutGraph(chain, ts, OPTS);
+    for (const to of [
+      { x: 400, y: 300 },
+      { x: 3, y: 900 },
+      { x: base.nodes.doing!.x + 37, y: base.nodes.doing!.y - 5 },
+    ]) {
+      const moved = withMoved(base, { doing: to, done: { x: 50, y: 40 } });
+      expect(moved.nodes.doing).toMatchObject(to);
+      expect(moved.nodes.backlog).toEqual(base.nodes.backlog);
+      for (const r of moved.routes) {
+        const first = r.points[0]!;
+        const last = r.points[r.points.length - 1]!;
+        expect(onBorder(first, moved.nodes[r.from]!), r.id).toBe(true);
+        expect(onBorder(last, moved.nodes[r.to]!), r.id).toBe(true);
+        for (let i = 1; i < r.points.length; i++) {
+          const p = r.points[i - 1]!;
+          const q = r.points[i]!;
+          expect(Math.abs(p.x - q.x) < 0.01 || Math.abs(p.y - q.y) < 0.01, `${r.id} segment ${i}`).toBe(true);
+        }
+      }
+      expect(moved.routes.find((r) => r.ti === 0)).toEqual(base.routes.find((r) => r.ti === 0));
+      expect(moved.h).toBeGreaterThanOrEqual(to.y + moved.nodes.doing!.h);
+    }
   });
   it("an empty board has a size", () => {
-    expect(layoutGraph([], [])).toMatchObject({ nodes: {}, routes: [] });
-    expect(layoutGraph([], []).w).toBeGreaterThan(0);
+    expect(layoutGraph([], [], OPTS)).toMatchObject({ nodes: {}, routes: [] });
+    expect(layoutGraph([], [], OPTS).w).toBeGreaterThan(0);
   });
 });
 
@@ -270,38 +284,5 @@ describe("draft edits", () => {
     ]);
     expect(renameKey(ts, "qa", "review")[0]!.from).toEqual(["doing", "review"]);
     expect(renameKey(ts, "doing", "work")[1]!.to).toBe("work");
-  });
-});
-
-describe("splits", () => {
-  it("cuts a list into k non-empty runs in order, every way", () => {
-    expect(splits([1, 2, 3, 4], 2)).toEqual([
-      [[1], [2, 3, 4]],
-      [
-        [1, 2],
-        [3, 4],
-      ],
-      [[1, 2, 3], [4]],
-    ]);
-    expect(splits([1, 2, 3], 3)).toEqual([[[1], [2], [3]]]);
-    expect(splits([1, 2, 3], 1)).toEqual([[[1, 2, 3]]]);
-    expect(splits([1, 2], 3)).toEqual([]);
-    expect(splits([1, 2], 0)).toEqual([]);
-  });
-  it("no cap: C(14, 4) = 1001 ways for 15 ranks in 5 rows, every one", () => {
-    const ranks = Array.from({ length: 15 }, (_, i) => i);
-    expect(splits(ranks, 4)).toHaveLength(364);
-    expect(splits(ranks, 5)).toHaveLength(1001);
-  });
-  it("only the runs that fit: a run that does not fit is never extended, and a split's last run must fit too", () => {
-    const sum = (run: number[]) => run.reduce((a, b) => a + b, 0);
-    const fits = (run: number[]) => sum(run) <= 5;
-    expect(splits([1, 2, 3, 4], 2, fits)).toEqual([]); // 1 | 2+3+4 and 1+2 | 3+4 and 1+2+3 | 4: a run over 5 in each
-    expect(splits([1, 2, 3, 4], 3, fits)).toEqual([
-      [[1], [2, 3], [4]],
-      [[1, 2], [3], [4]],
-    ]);
-    const all = splits([1, 2, 3, 4], 3);
-    expect(all.filter((sp) => sp.every(fits))).toEqual(splits([1, 2, 3, 4], 3, fits));
   });
 });

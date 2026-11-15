@@ -1,24 +1,23 @@
-// The workflow graph's READABILITY, proven on the real board shapes (fixtures/boards/*.board.json) at the widths the
-// editor folds for: the drawn path of every route (sampled along the SVG path the editor draws, pathOf's rounded
-// polyline) never enters a node or junction it does not connect; no two transitions' runs lie along one line; no label sits on a node or another label
-// (a line may pass under a label: .kb-be-elabel draws a halo in the panel colour behind its text); no two boxes overlap; a folded drawing is never wider than it was asked to be.
+// The workflow graph's READABILITY, proven on the real board shapes (fixtures/boards/*.board.json) and 150 random ones:
+// the drawn path of every route (sampled along the SVG path the editor draws, pathOf's rounded polyline) never enters
+// a node or junction it does not connect; every route is orthogonal; no two transitions' runs lie along one line; no
+// label pill sits on a node or another label (a line passes under its own pill: the pill is filled); no two boxes
+// overlap; the graph runs top to bottom along the board order and is never wider than the desktop box at a readable zoom.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  foldGraph,
-  foldRows,
+  typeBadge,
   layoutGraph,
-  LABEL_CHAR_W,
+  MAX_TRIES,
+  LABEL_H,
+  labelW,
   MIN_TEXT_PX,
   MIN_TEXT_ZOOM,
   pathOf,
   planTransitions,
-  rankGraph,
   SMALLEST_FONT_PX,
-  splits,
   type Box,
-  type FoldedRows,
   type Layout,
   type Pt,
   type Route,
@@ -28,6 +27,8 @@ import { TYPES } from "./fixtures";
 
 const boards = join(__dirname, "..", "..", "fixtures", "boards");
 const shape = (name: string) => JSON.parse(readFileSync(join(boards, `${name}.board.json`), "utf8")) as BoardShape;
+// as the editor does: a type the engine does not know (a stored legacy board's) shows its key, next to the editor's
+// "unknown type: <key>" pill
 const typeLabel = (c: { type: string }) => TYPES.find((t) => t.key === c.type)?.label ?? c.type;
 
 // ── geometry ──
@@ -87,8 +88,8 @@ function labelBoxes(l: Layout, s: BoardShape): Box[] {
   return l.routes
     .filter((r) => r.label)
     .map((r) => {
-      const w = (s.transitions[r.ti]!.name || "(unnamed)").length * LABEL_CHAR_W + 10;
-      return { key: `label ${r.id}`, x: r.label!.x - w / 2, y: r.label!.y - 9, w, h: 18 };
+      const w = labelW(s.transitions[r.ti]!.name);
+      return { key: `label ${r.id}`, x: r.label!.x - w / 2, y: r.label!.y - LABEL_H / 2, w, h: LABEL_H };
     });
 }
 
@@ -110,11 +111,15 @@ function problems(l: Layout, s: BoardShape): string[] {
     for (const b of boxes)
       if (!touches(b.key) && pts.some((p) => inside(p, b, 2))) out.push(`${r.id} (${r.from}→${r.to}) through ${b.key}`);
   }
+  // every run is vertical or horizontal (orthogonal connectors)
+  for (const r of l.routes)
+    r.points.slice(1).forEach((q, i) => {
+      const p = r.points[i]!;
+      if (Math.abs(p.x - q.x) > 0.01 && Math.abs(p.y - q.y) > 0.01) out.push(`${r.id} diagonal at ${p.x},${p.y}`);
+    });
   // two routes of different transitions never run along each other: no two overlapping vertical runs less than 3px
-  // apart (a line is drawn up to 3px wide), nor two such horizontal runs (the orthogonal routes between rows, and their stubs at a node's border)
-  const runs = l.routes
-    .filter((r) => r.ortho)
-    .flatMap((r) => r.points.slice(1).map((q, i) => ({ r, p: r.points[i]!, q })));
+  // apart (a line is drawn up to 3px wide), nor two such horizontal runs
+  const runs = l.routes.flatMap((r) => r.points.slice(1).map((q, i) => ({ r, p: r.points[i]!, q })));
   const span = (u: number, v: number) => [Math.min(u, v), Math.max(u, v)] as const;
   const shared = (a: readonly [number, number], b: readonly [number, number]) =>
     Math.min(a[1], b[1]) - Math.max(a[0], b[0]);
@@ -142,139 +147,89 @@ function problems(l: Layout, s: BoardShape): string[] {
 }
 
 // the box the editor gets at 1920 × 1080 (the dialog's graph column, measured in Chromium: 1434 on the local preview)
-// and on a 390px phone (322 there)
 const DESKTOP_BOX_W = 1434;
-const PHONE_BOX_W = 322;
-const fold = (boxW: number) => (boxW - 2) / MIN_TEXT_ZOOM;
+const BOARDS = ["legacy_v2_prereview", "local_v4", "legacy_v2", "coding", "content", "local_v3", "mirror_v3"];
 
-describe("the workflow graph is readable on every board shape, at every fold", () => {
-  for (const name of ["legacy_v2_prereview", "local_v4", "legacy_v2", "coding", "content"]) {
-    for (const [what, maxWidth] of [
-      ["one row", Infinity],
-      ["1920px desktop", fold(DESKTOP_BOX_W)],
-      ["1280px laptop", fold(900)],
-      ["phone", fold(PHONE_BOX_W)],
-    ] as const) {
-      it(`${name} · ${what}`, () => {
-        const s = shape(name);
-        const l = layoutGraph(s.columns, s.transitions, { typeLabel, maxWidth });
-        expect(problems(l, s)).toEqual([]);
-        // as wide as asked, or folded as far as it goes (one rank per row: a phone scrolls)
-        if (Number.isFinite(maxWidth) && l.w > maxWidth) expect(l.rows).toBe(l.ranks);
-        if (!Number.isFinite(maxWidth)) expect(l.rows).toBe(1);
-      });
-    }
-  }
+describe("the workflow graph is readable on every board shape", () => {
+  for (const name of BOARDS)
+    it(name, () => {
+      const s = shape(name);
+      const l = layoutGraph(s.columns, s.transitions, { typeLabel, badge: () => "waits for you" });
+      expect(problems(l, s)).toEqual([]);
+      expect(l.warnings).toEqual([]);
+      // no horizontal scroll on a desktop at a readable zoom
+      expect(l.w * MIN_TEXT_ZOOM).toBeLessThanOrEqual(DESKTOP_BOX_W - 2);
+    });
 });
 
-// the editor's own fold: its box's width AND height (card #271: the split into rows that fits the height best, among
-// the fewest rows and one more) — as readable as the width-only fold, never wider than the box, never taller than the
-// greedy fold of the same width
-describe("the fold for a box's width and height", () => {
-  const BOXES = [
-    [1434, 850],
-    [1434, 600],
-    [1100, 700],
-    [900, 900],
-    [700, 500],
-    [PHONE_BOX_W, 390],
-  ] as const;
-  for (const name of ["legacy_v2_prereview", "local_v4", "legacy_v2", "coding", "content"]) {
-    it(`${name}: no problems at ${BOXES.length} boxes`, () => {
+describe("top to bottom along the board order", () => {
+  for (const name of BOARDS)
+    it(`${name}: an arrow along the board order runs down (its target below its source), one against it runs back up`, () => {
       const s = shape(name);
-      const ranked = rankGraph(s.columns, s.transitions, { typeLabel });
-      for (const [w, h] of BOXES) {
-        const byWidth = foldGraph(ranked, fold(w));
-        const l = foldGraph(ranked, fold(w), fold(h));
-        expect(problems(l, s), `${w} × ${h}`).toEqual([]);
-        if (byWidth.w <= fold(w)) expect(l.w, `${w} × ${h}`).toBeLessThanOrEqual(fold(w));
-        expect(l.h, `${w} × ${h}`).toBeLessThanOrEqual(Math.max(byWidth.h, fold(h)));
+      const l = layoutGraph(s.columns, s.transitions, { typeLabel });
+      const order = s.columns.map((c) => c.key);
+      for (const r of l.routes.filter((x) => x.kind === "arrow")) {
+        const down = order.indexOf(r.from) < order.indexOf(r.to);
+        expect(r.back, r.id).toBe(!down);
+        const a = l.nodes[r.from]!;
+        const b = l.nodes[r.to]!;
+        if (down) expect(b.y, `${r.from} → ${r.to}`).toBeGreaterThan(a.y + a.h);
+        else expect(a.y, `${r.from} → ${r.to}`).toBeGreaterThan(b.y + b.h);
       }
     });
-  }
+  it("a branch: two columns reached from one, not from each other, sit side by side in one rank; their merge below", () => {
+    const col = (key: string) => ({ key, label: key, type: "working" as const, hide_after_hours: 72 });
+    const columns = ["check", "manager", "finance", "onboarded"].map(col);
+    const transitions = [
+      { name: "No", from: "check", to: "manager", by: "any" as const },
+      { name: "Yes", from: "check", to: "finance", by: "any" as const },
+      { name: "Approve", from: "manager", to: "onboarded", by: "any" as const },
+      { name: "Approve", from: "finance", to: "onboarded", by: "any" as const },
+    ];
+    const l = layoutGraph(columns, transitions, { typeLabel });
+    expect(l.nodes.manager!.y).toBe(l.nodes.finance!.y);
+    expect(l.nodes.manager!.y).toBeGreaterThan(l.nodes.check!.y);
+    expect(l.nodes.onboarded!.y).toBeGreaterThan(l.nodes.finance!.y);
+    expect(l.ranks).toBe(3);
+    expect(problems(l, { columns, transitions })).toEqual([]);
+  });
+  it("a badge widens its card", () => {
+    const s = shape("coding");
+    const plain = layoutGraph(s.columns, s.transitions, { typeLabel });
+    const badged = layoutGraph(s.columns, s.transitions, { typeLabel, badge: () => "waits for you" });
+    const k = s.columns[0]!.key;
+    expect(badged.nodes[k]!.w).toBeGreaterThanOrEqual(plain.nodes[k]!.w);
+  });
 });
 
-// the height search keeps the best split of all: every split into the width fold's rows and one more is drawn here,
-// unpruned (no width filter), and the best that fits the width by the same order (the largest share of the height up
-// to zoom 1, then the fewer rows, the lower, the narrower) is the one foldGraph returned
-describe("the height fold picks the best split", () => {
-  const BOXES = [
-    [1434, 850],
-    [1100, 700],
-    [900, 900],
-  ] as const;
-  for (const name of ["legacy_v2_prereview", "local_v4", "legacy_v2", "coding", "content"]) {
-    it(`${name}: the best of every split at ${BOXES.length} boxes`, () => {
-      const s = shape(name);
-      const ranked = rankGraph(s.columns, s.transitions, { typeLabel });
-      for (const [w, h] of BOXES) {
-        const maxW = fold(w);
-        const maxH = fold(h);
-        const byWidth = foldGraph(ranked, maxW);
-        const l = foldGraph(ranked, maxW, maxH);
-        expect(l.w, `${w} × ${h}`).toBeLessThanOrEqual(Math.max(maxW, byWidth.w));
-        if (byWidth.w > maxW || byWidth.rows < 2) continue; // no height search: the width fold stands
-        const fit = (o: { h: number }) => Math.min(1 / MIN_TEXT_ZOOM, maxH / o.h);
-        const better = (o: FoldedRows, b: FoldedRows) =>
-          fit(o) !== fit(b)
-            ? fit(o) > fit(b)
-            : o.rows !== b.rows
-              ? o.rows < b.rows
-              : o.h !== b.h
-                ? o.h < b.h
-                : o.w < b.w;
-        let best: FoldedRows = byWidth;
-        for (let k = byWidth.rows; k <= Math.min(byWidth.rows + 1, ranked.ranks.length - 1); k++)
-          for (const rows of splits(ranked.ranks, k)) {
-            const o = foldRows(ranked, rows);
-            if (o.w <= maxW && better(o, best)) best = o;
-          }
-        expect({ rows: l.rows, w: l.w, h: l.h }, `${w} × ${h}`).toEqual({ rows: best.rows, w: best.w, h: best.h });
-      }
-    });
-  }
-});
-
-// the height-aware fold draws many splits; the ones too wide are skipped undrawn, so the 15-column local board folds
-// for the desktop box in a few ms (≈ 10 ms measured; 42 ms before the skip) — the bound is 10× that, for slow CI hosts
-it("the fold for the desktop box takes under 100 ms on the 15-column local board", () => {
+// dagre runs once, and again per crowded gap (up to MAX_TRIES more): the work bound is counted, not timed — a
+// wall-clock bound measured the CI host (one agent ran a layout 10× slower than a laptop), not the code
+it("layoutGraph runs dagre at most MAX_TRIES + 1 times, and the 15-column local board needs 2", () => {
   const s = shape("local_v4");
-  const ranked = rankGraph(s.columns, s.transitions, { typeLabel });
-  foldGraph(ranked, fold(1434), fold(850)); // warm-up
-  const t = performance.now();
-  for (let i = 0; i < 5; i++) foldGraph(ranked, fold(1434), fold(850));
-  expect((performance.now() - t) / 5).toBeLessThan(100);
+  expect(layoutGraph(s.columns, s.transitions, { typeLabel }).tries).toBe(2);
+  expect(layoutGraph(s.columns, s.transitions, { typeLabel, retries: 0 }).tries).toBe(1);
+  for (const f of ["coding", "content", "legacy_v2", "legacy_v2_prereview", "local_v3", "local_v4", "mirror_v3"]) {
+    const b = shape(f);
+    expect(layoutGraph(b.columns, b.transitions, { typeLabel }).tries).toBeLessThanOrEqual(MAX_TRIES + 1);
+  }
 });
 
-// every graph box width from a phone to a wide screen, in 10px steps: the fold changes at many of them. dagre runs once
-// per board (rankGraph: the width does not reach it) and every width folds that one drawing (foldGraph, what layoutGraph
-// does); a fold equal to one already checked has the same problems (problems() is a pure function of the layout), so
-// each distinct drawing is checked once — every width still gets its own fold and its own width check
-describe("readable at every box width from 300 to 2400px", () => {
-  const BANDS = [
-    [300, 900],
-    [910, 1600],
-    [1610, 2400],
-  ] as const;
-  for (const name of ["legacy_v2_prereview", "local_v4", "legacy_v2", "coding", "content"]) {
-    const s = shape(name);
-    let ranked: ReturnType<typeof rankGraph> | undefined;
-    const checked = new Map<string, string[]>();
-    for (const [lo, hi] of BANDS)
-      it(`${name} · ${lo}..${hi}px`, () => {
-        ranked ??= rankGraph(s.columns, s.transitions, { typeLabel });
-        const bad: string[] = [];
-        for (let boxW = lo; boxW <= hi; boxW += 10) {
-          const l = foldGraph(ranked, fold(boxW));
-          const key = JSON.stringify(l);
-          let pr = checked.get(key);
-          if (!pr) checked.set(key, (pr = problems(l, s)));
-          if (pr.length) bad.push(`${boxW}px: ${pr.slice(0, 3).join("; ")}`);
-          if (l.w > fold(boxW) && l.rows !== l.ranks) bad.push(`${boxW}px: ${l.w} wide in ${l.rows} rows`);
-        }
-        expect(bad).toEqual([]);
-      });
-  }
+describe("a drawing it cannot keep is said, never silently degraded", () => {
+  it("a gap still too crowded after its retries: a warning names it; with the retries the same board lays out clean", () => {
+    const col = (key: string) => ({ key, label: key, type: "working" as const, hide_after_hours: 72 });
+    const columns = ["a", "b", "c"].map(col);
+    // 40 transitions a → b and b → c: their label boxes sit side by side, and every one turns in the gaps
+    const transitions = Array.from({ length: 40 }, (_, i) => ({
+      name: `t${i}`,
+      from: i % 2 ? "a" : "b",
+      to: i % 2 ? "c" : "a",
+      by: "any" as const,
+    }));
+    expect(layoutGraph(columns, transitions, { typeLabel }).warnings).toEqual([]);
+    const l = layoutGraph(columns, transitions, { typeLabel, retries: 0 });
+    expect(l.warnings.length).toBeGreaterThan(0);
+    expect(l.warnings[0]).toMatch(/^gap \d+: \d+ connectors turn in \d+px/);
+  });
 });
 
 // seeded random boards (mulberry32: the same boards on every run): 2..19 columns of random labels (one word longer than
@@ -331,53 +286,27 @@ function randomBoard(rnd: () => number): BoardShape {
   }
   return { columns, transitions };
 }
-describe("readable on 150 seeded random boards, at 8 box widths each", () => {
+describe("readable on 150 seeded random boards", () => {
   const rnd = mulberry32(234);
   const all = Array.from({ length: 150 }, () => randomBoard(rnd));
   for (let from = 0; from < all.length; from += 10)
     it(`boards ${from}..${from + 9}: no route through a node, no label on a label or node, no two transitions along one line`, () => {
       const bad: string[] = [];
       all.slice(from, from + 10).forEach((s, i) => {
-        const ranked = rankGraph(s.columns, s.transitions, { typeLabel }); // dagre once per board, folded per width
-        for (const boxW of [322, 520, 700, 900, 1100, 1434, 1800, 2400]) {
-          const l = foldGraph(ranked, fold(boxW));
-          const pr = problems(l, s);
-          if (pr.length) bad.push(`board ${from + i} at ${boxW}px: ${pr.slice(0, 2).join("; ")}`);
-        }
+        // the editor's own pills: a column the operator approves "waits for you", a done one "✓ done", others none
+        const badge = (c: { type: string }) => typeBadge(TYPES.find((t) => t.key === c.type));
+        const l = layoutGraph(s.columns, s.transitions, { typeLabel, badge });
+        const pr = [...problems(l, s), ...l.warnings];
+        if (pr.length) bad.push(`board ${from + i}: ${pr.slice(0, 2).join("; ")}`);
       });
       expect(bad).toEqual([]);
     });
 });
 
-describe("the default view at 1920 × 1080 shows the whole graph at a readable size", () => {
-  // the graph box's max-height as kanban.css sets it (calc(100vh - Npx)), at a 1080px viewport
-  const css = readFileSync(join(__dirname, "..", "src", "styles", "kanban.css"), "utf8");
-  const m = /\.ak-root \.kb-be-graph \{[^}]*max-height:\s*calc\(\s*100vh - (\d+)px\s*\)/.exec(css);
-  if (!m) throw new Error(".kb-be-graph max-height is not calc(100vh - Npx): update this test with the new rule");
-  const BOX_H = 1080 - Number(m[1]);
-  for (const name of ["legacy_v2_prereview", "local_v4"]) {
-    it(`${name}: folded into rows, no horizontal scroll, the whole height inside the box, text ≥ ${MIN_TEXT_PX}px`, () => {
-      const s = shape(name);
-      // the editor folds for its box: the width and the height at MIN_TEXT_ZOOM (BoardEditor)
-      const l = layoutGraph(s.columns, s.transitions, {
-        typeLabel,
-        maxWidth: fold(DESKTOP_BOX_W),
-        maxHeight: (BOX_H - 2) / MIN_TEXT_ZOOM,
-      });
-      expect(l.rows).toBeGreaterThan(1);
-      const zoom = Math.min(1, (DESKTOP_BOX_W - 2) / l.w, (BOX_H - 2) / l.h);
-      expect(zoom).toBeGreaterThanOrEqual(MIN_TEXT_ZOOM);
-      expect(l.w * zoom).toBeLessThanOrEqual(DESKTOP_BOX_W - 2);
-      expect(l.h * zoom).toBeLessThanOrEqual(BOX_H - 2);
-      expect(SMALLEST_FONT_PX * zoom).toBeGreaterThanOrEqual(MIN_TEXT_PX);
-    });
-  }
-});
-
 describe("the smallest text the graph draws", () => {
   it(`every .kb-be-* font in the graph is at least SMALLEST_FONT_PX (${SMALLEST_FONT_PX}px), so MIN_TEXT_ZOOM keeps it ≥ ${MIN_TEXT_PX}px`, () => {
     const css = readFileSync(join(__dirname, "..", "src", "styles", "kanban.css"), "utf8");
-    const graphClasses = ["kb-be-nlabel", "kb-be-ntype", "kb-be-note", "kb-be-jlabel", "kb-be-elabel"];
+    const graphClasses = ["kb-be-nlabel", "kb-be-ntype", "kb-be-note", "kb-be-jlabel", "kb-be-elabel", "kb-be-btext"];
     for (const cls of graphClasses) {
       const rule = new RegExp(`\\.ak-root \\.${cls} \\{([^}]*)\\}`).exec(css);
       expect(rule, cls).not.toBeNull();
@@ -405,7 +334,7 @@ describe("hubs on the real boards", () => {
   });
   it("local v4 (15 columns): Cancel (13 of 15 sources) and Rework (8) are notes — more than half; both review loops are arrows both ways", () => {
     const s = shape("local_v4");
-    const l = layoutGraph(s.columns, s.transitions, { typeLabel, maxWidth: fold(DESKTOP_BOX_W) });
+    const l = layoutGraph(s.columns, s.transitions, { typeLabel });
     expect(l.notes.cancelled!.map((n) => n.name)).toEqual(["Cancel"]);
     expect(l.notes.doing!.map((n) => n.name)).toEqual(["Rework"]);
     expect(Object.keys(l.junctions)).toEqual([]);

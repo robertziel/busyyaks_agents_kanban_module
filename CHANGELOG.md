@@ -23,6 +23,18 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Changed (breaking for hosts)
 
+- **The workflow graph runs top to bottom, as a flowchart**: `BoardEditor` draws each column as a
+  card (type icon tile, label, mono type line, a status pill from `typeBadge`) on a dotted canvas; dagre lays it out
+  top to bottom along the board order (branches side by side), every route orthogonal with its label as a pill on the
+  line, a route against the board order dashed. `lib/graph`: `layoutGraph(columns, transitions, {typeLabel, badge})`
+  is the whole layout (`typeLabel` required; a node dagre leaves unplaced throws; no fold: the graph scrolls down);
+  `rankGraph`, `foldGraph`, `foldRows`, `splits` and the
+  `maxWidth` / `maxHeight` options are gone; `Layout.rows` is gone; `Route.ortho` is replaced by `Route.back`. `Layout.warnings` lists what the drawing
+  could not keep (shown in the editor); `LayoutOpts.retries`; `Layout.tries` counts the dagre layouts it took; `wrapLabel` wraps onto as many lines as a label needs;
+  a dragged card's routes stay orthogonal (`withMoved`); the port is on the card's right side, live only on the card in
+  focus. New
+  exports: `typeBadge`, `labelW`, `nodeH`, `subY` and the card's offsets (`TILE`, `TILE_X`, `TEXT_X`, `TITLE_Y`, …).
+
 - **`launchers[].kind` is required**: the CLI family the command is, one of `Launch::KINDS` —
   `claude_code` (the argv every launcher had so far: `--model`, the prompt, `--remote-control <session>` LAST) or
   `hermes` (`-m <model>`, `-q <prompt>`, no remote control). A host config without it fails `HostConfig` with

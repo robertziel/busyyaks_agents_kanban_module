@@ -3,11 +3,11 @@
 // renamed, deleted (the server's refusal with the card ids shown verbatim); a transition is added from/to and edited;
 // the board order is changed with ↑ ↓; Save sends the whole draft; Discard drops it; Reset goes through the api.
 // The graph is laid out by dagre (lib/graph.ts): natural size, zoom, a nudge by drag, bundles and notes for hubs.
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { Board, KanbanApiError, layoutGraph, MIN_TEXT_ZOOM, type KanbanApi } from "../src";
+import { Board, KanbanApiError, layoutGraph, MIN_TEXT_ZOOM, typeBadge, type KanbanApi } from "../src";
 import type { BoardShape, BoardShapeData, Card } from "../src/types";
 import { boardData, fixture, TYPES } from "./fixtures";
 
@@ -301,18 +301,40 @@ describe("BoardEditor", () => {
     expect(within(dlg).getByRole("button", { name: "Transition Pick: Backlog → To do" })).toBeInTheDocument();
   });
 
-  it("the graph is drawn at its natural size (the layout's bounds), left to right along the board order; − / + / Fit zoom it", async () => {
+  it("the graph is drawn at its natural size (the layout's bounds), top to bottom along the board order; − / + / Fit zoom it", async () => {
     const dlg = await open(api());
     const svg = within(dlg).getByRole("group", { name: /^Workflow graph/ });
     const l = layoutGraph(coding.shape.columns, coding.shape.transitions, {
       typeLabel: (c) => TYPES.find((t) => t.key === c.type)!.label,
+      badge: (c) => typeBadge(TYPES.find((t) => t.key === c.type)),
     });
     expect(svg.getAttribute("viewBox")).toBe(`0 0 ${l.w} ${l.h}`);
     expect([svg.getAttribute("width"), svg.getAttribute("height")]).toEqual([String(l.w), String(l.h)]); // zoom 1 = 1 unit per px
-    const xs = coding.shape.columns.map(
-      (c) => boxOf(within(dlg).getByRole("button", { name: new RegExp(`^Column ${c.label} `) })).x,
+    const ys = coding.shape.columns.map(
+      (c) => boxOf(within(dlg).getByRole("button", { name: new RegExp(`^Column ${c.label} `) })).y,
     );
-    for (let i = 1; i < xs.length; i++) expect(xs[i]!).toBeGreaterThan(xs[i - 1]!);
+    for (let i = 1; i < ys.length; i++) expect(ys[i]!).toBeGreaterThan(ys[i - 1]!);
+    // each card: its type's icon tile, the type line, a status pill for a column the operator approves or one that ends
+    const gate = within(dlg).getByRole("button", { name: /^Column Human Check / });
+    expect(gate.querySelector(".kb-be-tile")).not.toBeNull();
+    expect(gate.querySelector(".kb-be-glyph")!.getAttribute("d")).toBeTruthy();
+    expect(gate.querySelector(".kb-be-btext")!.textContent).toBe("waits for you");
+    expect(
+      within(dlg)
+        .getByRole("button", { name: /^Column Merged / })
+        .querySelector(".kb-be-btext")!.textContent,
+    ).toBe("✓ done");
+    expect(
+      within(dlg)
+        .getByRole("button", { name: /^Column Backlog / })
+        .querySelector(".kb-be-btext"),
+    ).toBeNull();
+    // a transition's name is a pill on its line; one back up the board order is dashed
+    expect(
+      within(dlg)
+        .getByRole("button", { name: /^Transition Start work: / })
+        .querySelector(".kb-be-ebox"),
+    ).not.toBeNull();
     fireEvent.click(within(dlg).getByRole("button", { name: "Zoom out" }));
     expect(svg.getAttribute("width")).toBe(String(Math.round(l.w * 0.8)));
     fireEvent.click(within(dlg).getByRole("button", { name: "Zoom in" }));
@@ -379,18 +401,12 @@ describe("BoardEditor", () => {
     expect(boxOf(within(dlg).getByRole("button", { name: "Column Backlog (Parked)" })).x).toBe(b0.x);
   });
 
-  // the default view at 1920 × 1080: the graph box measured 1435 wide, max-height calc(100vh − 230px) = 850
+  // the default view at 1920 × 1080: the graph box measured 1435 wide
   for (const name of ["legacy_v2_prereview", "local_v4"] as const) {
-    it(`the default view shows the whole ${name} graph at a readable size: folded into rows, no horizontal scroll`, async () => {
-      const box = { w: 1435, maxH: 850 };
-      const gcs = window.getComputedStyle.bind(window);
+    it(`the default view shows the ${name} graph's whole width at a readable size: no horizontal scroll, it scrolls down`, async () => {
+      const box = { w: 1435 };
       const width = vi.spyOn(Element.prototype, "clientWidth", "get").mockImplementation(function (this: Element) {
         return this.classList.contains("kb-be-graph") ? box.w : 0;
-      });
-      const style = vi.spyOn(window, "getComputedStyle").mockImplementation((el: Element, pseudo?: string | null) => {
-        const st = gcs(el, pseudo);
-        if (!el.classList.contains("kb-be-graph")) return st;
-        return new Proxy(st, { get: (t, k) => (k === "maxHeight" ? `${box.maxH}px` : (Reflect.get(t, k) as unknown)) });
       });
       try {
         const f = fixture(name);
@@ -400,13 +416,11 @@ describe("BoardEditor", () => {
         const zoom = Number(svg.getAttribute("width")) / vw;
         const l = layoutGraph(f.shape.columns, f.shape.transitions, {
           typeLabel: (c) => TYPES.find((t) => t.key === c.type)!.label,
-          maxWidth: (box.w - 2) / MIN_TEXT_ZOOM,
-          maxHeight: (box.maxH - 2) / MIN_TEXT_ZOOM,
+          badge: (c) => typeBadge(TYPES.find((t) => t.key === c.type)),
         });
-        expect([vw, vh]).toEqual([l.w, l.h]); // the folded layout, for the box's width and height
-        expect(l.rows).toBeGreaterThan(1);
+        expect([vw, vh]).toEqual([l.w, l.h]);
         expect(Number(svg.getAttribute("width"))).toBeLessThanOrEqual(box.w - 2); // no horizontal scroll (the box has a 1px border)
-        expect(Number(svg.getAttribute("height"))).toBeLessThanOrEqual(box.maxH - 2); // the whole graph, no vertical scroll
+        expect(vh).toBeGreaterThan(vw); // the flow runs down
         expect(zoom).toBeGreaterThanOrEqual(MIN_TEXT_ZOOM); // every text ≥ 11px (graph-layout.test.ts: SMALLEST_FONT_PX)
         // − / + leave the automatic zoom; Fit returns to it
         fireEvent.click(within(dlg).getByRole("button", { name: "Zoom in" }));
@@ -417,10 +431,48 @@ describe("BoardEditor", () => {
         expect(Number(svg.getAttribute("width"))).toBe(Math.round(vw * zoom));
       } finally {
         width.mockRestore();
-        style.mockRestore();
       }
     });
   }
+
+  it("at every box width the zoom is the graph's width, never below MIN_TEXT_ZOOM: wider than that, the box scrolls sideways", async () => {
+    const f = fixture("local_v4");
+    for (const w of [322, 520, 700, 900, 1100, 1435, 2400]) {
+      const width = vi.spyOn(Element.prototype, "clientWidth", "get").mockImplementation(function (this: Element) {
+        return this.classList.contains("kb-be-graph") ? w : 0;
+      });
+      try {
+        const dlg = await open(api(f));
+        const svg = within(dlg).getByRole("group", { name: /^Workflow graph/ });
+        const vw = Number(svg.getAttribute("viewBox")!.split(" ")[2]);
+        const zoom = Number(svg.getAttribute("width")) / vw;
+        expect(zoom, `${w}px`).toBeGreaterThanOrEqual(MIN_TEXT_ZOOM - 0.01);
+        expect(zoom, `${w}px`).toBeLessThanOrEqual(1);
+        // fits the box, or sits at the floor (and the box scrolls sideways)
+        if (Number(svg.getAttribute("width")) > w - 2) expect(zoom, `${w}px`).toBeLessThanOrEqual(MIN_TEXT_ZOOM + 0.01);
+      } finally {
+        width.mockRestore();
+        cleanup();
+      }
+    }
+  });
+
+  it("a column of a type the editor has no icon for says so on its card; a drawing the layout could not keep shows a warning", async () => {
+    const f = fixture("coding");
+    const odd = {
+      ...f,
+      board: {
+        ...f.board,
+        columns: f.board.columns.map((c, i) => (i === 1 ? { ...c, type: "mystery" as unknown as typeof c.type } : c)),
+      },
+    };
+    const dlg = await open(api(odd));
+    const card = within(dlg).getByRole("button", { name: /^Column To do / });
+    expect(card.classList.contains("unknown")).toBe(true);
+    expect(card.querySelector(".kb-be-btext")!.textContent).toBe("unknown type: mystery");
+    expect(card.querySelector(".kb-be-glyph")!.getAttribute("d")).toBeTruthy();
+    expect(within(dlg).queryByRole("status", { name: "Drawing warnings" })).toBeNull(); // the real boards draw clean
+  });
 
   it("the 13-column legacy v2 board: a transition from 6 columns is ONE bundle (junction + label), not 5 labelled arrows; clicking it edits the transition", async () => {
     const a = api(legacyV2);
@@ -438,11 +490,10 @@ describe("BoardEditor", () => {
     fireEvent.click(bundle);
     expect(within(dlg).getByLabelText<HTMLInputElement>("Transition name").value).toBe("Ask the operator");
     expect(bundle.classList.contains("sel")).toBe(true);
-    // every column's full label is drawn (wrapped, never cut)
+    // every column's full label is drawn (never cut; wrapped past MAX_LINE characters)
     const approved = within(dlg).getByRole("button", { name: "Column PR approved (mirror) (Review)" });
     expect([...approved.querySelectorAll("text.kb-be-nlabel")].map((t) => t.textContent)).toEqual([
-      "PR approved",
-      "(mirror)",
+      "PR approved (mirror)",
     ]);
   });
 
