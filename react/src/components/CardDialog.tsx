@@ -153,6 +153,18 @@ function Section({
   );
 }
 
+// The host's terminals for this card's agent sessions (KanbanHostValue.cardTerminals): no renderer, or nothing to show
+// for this card (null) → no section
+function CardTerminals({ render, card }: { render: ((card: CardFull) => ReactNode) | null; card: CardFull }) {
+  const body = render ? render(card) : null;
+  if (body == null || body === false) return null;
+  return (
+    <Section icon={<KbIcon name="terminal" />} title="Terminals">
+      {body}
+    </Section>
+  );
+}
+
 function CardDetail({
   id,
   slug,
@@ -165,7 +177,7 @@ function CardDetail({
   dictateComment,
   onDictating,
 }: DialogProps & { dictateComment: MutableRefObject<DictateHandle | null>; onDictating: (on: boolean) => void }) {
-  const { api, me, config, board: shape } = useKanbanHost();
+  const { api, me, config, board: shape, cardTerminals } = useKanbanHost();
   const colLabel = (k: string) => labelOf(shape, k);
   const gates = shape.rules.gates;
   const { data, error, loading, reload } = useFetch<CardData>(() => api.card(id), [id]);
@@ -703,6 +715,8 @@ function CardDetail({
               </button>
             )}
           </Section>
+
+          <CardTerminals render={cardTerminals} card={c} />
 
           {(files.length > 0 || uploads.length > 0) && (
             <Section
