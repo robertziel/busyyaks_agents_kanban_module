@@ -287,6 +287,37 @@ describe("Board", () => {
     await waitFor(() => expect(api.calls).toContain("comment 2 A"));
   });
 
+  it("card mentions: an option's parts mark the cards it names, the dependency line names its parent (CardPeek reads data-card-id)", async () => {
+    const cards = [
+      card({
+        id: 2,
+        column: "qa",
+        title: "Ask",
+        parent: 5,
+        blocked_by: [5],
+        needs_operator: true,
+        question: "Which?",
+        question_html: "<p>Which?</p>",
+        question_options: ["Hold #5 first", "Ship"],
+        question_option_parts: [[{ text: "Hold " }, { text: "#5", card: 5 }, { text: " first" }], [{ text: "Ship" }]],
+        asked_by: "lead",
+        asked: "2026-11-09T10:00:00Z",
+        owner_session: "s1",
+      }),
+    ];
+    const api = fakeApi(boardData(coding, cards), cards);
+    render(<Host api={api} view={{ card: 2, panel: null, archived: false }} />);
+    const q = await screen.findByRole("region", { name: "Question for you" });
+    const hold = within(q).getByRole("button", { name: "Hold #5 first" });
+    expect(
+      Array.from(hold.querySelectorAll("[data-card-id]")).map((e) => [e.textContent, e.getAttribute("data-card-id")]),
+    ).toEqual([["#5", "5"]]);
+    expect(within(q).getByRole("button", { name: "Ship" }).querySelector("[data-card-id]")).toBeNull();
+    expect(screen.getByText("card #5")).toHaveAttribute("data-card-id", "5");
+    fireEvent.click(hold);
+    await waitFor(() => expect(api.calls).toContain("comment 2 Hold #5 first"), { timeout: 2000 });
+  });
+
   it("a blocked card shows the badge on its face and the section in the dialog; a review card its round", async () => {
     const cards = [
       card({

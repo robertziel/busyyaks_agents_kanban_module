@@ -67,7 +67,8 @@ module AgentsKanban
           return pr_link(n) if pr_n == n
           return ["comment", "#a-#{n}"] if activity_ids.include?(n) # an activity on this card wins over a card id
 
-          slugs[n] == slug ? ["card", card_path.call(slug, n)] : nil
+          # a bare #N is a card only on THIS board: no board (a report, a note) → no card, never a link to nowhere
+          slug && slugs[n] == slug ? ["card", card_path.call(slug, n)] : nil
         end
       end
 
@@ -222,10 +223,13 @@ module AgentsKanban
         '0 0 8 .2z"/></svg>',
     }.freeze
 
-    def chip(kind, url, inner, title: nil)
+    # card_id: a card chip carries data-card-id, which the React CardPeek reads to show that card's details on hover.
+    def chip(kind, url, inner, title: nil, card_id: nil)
       ext = url.start_with?("/", "#") ? "" : ' target="_blank" rel="noopener"'
       t = title ? %( title="#{CGI.escapeHTML(title)}") : ""
-      %(<a class="gh-ref gh-#{kind}" href="#{CGI.escapeHTML(url)}"#{ext}#{t}>#{ICONS.fetch(kind, ICONS["site"])}#{inner}</a>)
+      d = card_id ? %( data-card-id="#{Integer(card_id)}") : ""
+      icon = ICONS.fetch(kind, ICONS["site"])
+      %(<a class="gh-ref gh-#{kind}" href="#{CGI.escapeHTML(url)}"#{ext}#{t}#{d}>#{icon}#{inner}</a>)
     end
 
     # A commit as GitHub shows it in a timeline: glyph, short sha, subject. compact: glyph + sha only, the subject in
@@ -353,10 +357,32 @@ module AgentsKanban
 
         kind_url = refs.resolve(kind, n, slugs) or next
         out << plain.call(t[at...(pos - off)])
-        out << chip(kind_url[0], kind_url[1], %(<span>#{s[pos, len]}</span>), title: "#{REF_TITLE[kind_url[0]]} ##{n}")
+        out << chip(kind_url[0], kind_url[1], %(<span>#{s[pos, len]}</span>), title: "#{REF_TITLE[kind_url[0]]} ##{n}",
+                                                                            card_id: kind_url[0] == "card" ? n : nil)
         at = pos - off + len
       end
       out << plain.call(t[at..].to_s)
+    end
+
+    # A plain text (a question's option, a button label: never markdown, never HTML) split at the cards it mentions, as
+    # refs resolves them — the same rule as the chips: "card #N", or a bare #N that is a card on this board and not an
+    # activity on this card / the handoff PR. → [{text:}, {text: "#7", card: 7}, …]; joined, the texts are the input.
+    def card_mention_parts(text, refs)
+      text = text.to_s
+      toks = ref_tokens(text)
+      slugs = toks.empty? ? {} : refs.card_slugs.call(toks.map { |t| t[1] }.uniq.first(500))
+      parts = []
+      at = 0
+      toks.each do |kind, n, pos, len|
+        kind_url = refs.resolve(kind, n, slugs)
+        next unless kind_url && kind_url[0] == "card"
+
+        parts << { text: text[at...pos] } if pos > at
+        parts << { text: text[pos, len], card: n }
+        at = pos + len
+      end
+      parts << { text: text[at..] } if at < text.length
+      parts
     end
 
     # "jenkins · job #123" from a Jenkins build URL (…/job/<name>/<n>/), else the host. A multibranch job name is the

@@ -15,7 +15,7 @@ import { useFetch } from "../lib/fetch";
 import { isoAt } from "../lib/format";
 import { pingLine } from "../lib/listen";
 import { useLiveRev } from "../lib/live";
-import type { Attachment, BoardData, BoardLabel, CardData, CardFull, Checklist } from "../types";
+import type { Attachment, BoardData, BoardLabel, CardData, CardFull, Checklist, MentionPart } from "../types";
 import { AgentLinks, Avatar, ErrorState, Html, Loading } from "./Bits";
 import { CardLinks } from "./CardLinkRow";
 import { KbIcon, type IconName } from "./KbIcon";
@@ -70,6 +70,25 @@ export function CardDialog(props: DialogProps) {
     >
       <CardDetail key={props.id} {...props} />
     </dialog>
+  );
+}
+
+// A plain text with the cards it mentions marked for CardPeek (data-card-id). parts = the server's split of this text
+// (the same card row); a host that sends none shows the text as written.
+function Mentions({ text, parts }: { text: string; parts?: MentionPart[] | null }) {
+  if (!parts) return <>{text}</>;
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.card ? (
+          <span key={i} className="kb-mention" data-card-id={p.card}>
+            {p.text}
+          </span>
+        ) : (
+          <span key={i}>{p.text}</span>
+        ),
+      )}
+    </>
   );
 }
 
@@ -507,7 +526,7 @@ function CardDetail({ id, slug, board, panel, setPanel, onClose, onChanged, proj
               )}
               {!c.dialog && options.length > 0 && (
                 <div className="kb-q-opts" role="group" aria-label="Answer options">
-                  {options.map((o) => (
+                  {options.map((o, i) => (
                     <button
                       type="button"
                       key={o}
@@ -516,7 +535,7 @@ function CardDetail({ id, slug, board, panel, setPanel, onClose, onChanged, proj
                       onClick={() => void sendComment(o, false)}
                       title="Post this as your answer"
                     >
-                      {o}
+                      <Mentions text={o} parts={c.question_option_parts?.[i]} />
                     </button>
                   ))}
                 </div>
@@ -1038,7 +1057,10 @@ function CardDetail({ id, slug, board, panel, setPanel, onClose, onChanged, proj
             <p className="kb-side-meta muted kb-deps">
               {c.parent && (
                 <>
-                  waits for card #{c.parent}
+                  waits for{" "}
+                  <span className="kb-mention" data-card-id={c.parent} tabIndex={0}>
+                    card #{c.parent}
+                  </span>
                   {c.blocked_by.length > 0 ? <b className="err"> · not done</b> : " · done"}
                   <br />
                 </>

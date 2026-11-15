@@ -145,6 +145,38 @@ class CardLinksTest < Minitest::Test
     assert_equal html, CL.linkify(html, [], refs: refs)
   end
 
+  # a card chip names its card for the React CardPeek (data-card-id); no other chip does
+  def test_card_chips_carry_their_card_id
+    out = CL.linkify("<p>card #77, #6, comment #148, PR #12</p>", [], refs: refs)
+    assert_includes out, %(href="/projects/o/other?tab=board&amp;card=77" title="card #77" data-card-id="77">)
+    assert_includes out, %(href="/projects/acme/shop?tab=board&amp;card=6" title="card #6" data-card-id="6">)
+    assert_equal 2, out.scan("data-card-id").size
+  end
+
+  # outside a card (a report, a note: no board) only "card #N" names a card — a bare #N that is no card stays text, never
+  # a link to a board that is not there
+  def test_without_a_board_a_bare_number_is_no_card
+    r = CL::Refs.new(repo: nil, activity_ids: Set.new, slug: nil, card_slugs: ->(ids) { CARDS.slice(*ids) },
+                     card_path: ->(slug, id) { "/projects/#{slug}?tab=board&card=#{id}" })
+    assert_equal [["card", "/projects/acme/shop?tab=board&card=6", "#6"]], link("<p>#12, #6 and card #6</p>", r)[0, 1]
+    assert_equal 1, link("<p>#12, #6 and card #6</p>", r).size
+  end
+
+  # a question's option (plain text) split at the cards it mentions — the chips' rule: "card #N" on any board, a bare #N
+  # on this board that is no activity here; PR / comment refs and unknown numbers stay text
+  def test_card_mention_parts_split_plain_text_at_the_cards_it_names
+    assert_equal [{ text: "Hold " }, { text: "#6", card: 6 }, { text: " until " }, { text: "#10", card: 10 },
+                  { text: " is public" },],
+                 CL.card_mention_parts("Hold #6 until #10 is public", refs)
+    assert_equal [{ text: "Publish card " }, { text: "#77", card: 77 }, { text: " first, see comment #148 and PR #12" }],
+                 CL.card_mention_parts("Publish card #77 first, see comment #148 and PR #12", refs)
+    assert_equal [{ text: "#197 is an activity here; #77 is on another board; #555 is nothing" }],
+                 CL.card_mention_parts("#197 is an activity here; #77 is on another board; #555 is nothing", refs)
+    assert_equal [{ text: "no refs at all" }], CL.card_mention_parts("no refs at all", refs)
+    assert_equal [], CL.card_mention_parts("", refs)
+    assert_equal [{ text: "é " }, { text: "#4", card: 4 }], CL.card_mention_parts("é #4", refs), "char offsets, not bytes"
+  end
+
   # the work's PRs live on the handoff pr_url's repo (a private *_local repo, not origin)
   def test_pr_references_follow_the_handoff_repo_and_full_urls_are_never_rewritten
     local = "https://github.com/o/widgets_local"
