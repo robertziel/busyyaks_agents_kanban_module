@@ -19,6 +19,7 @@ import {
   type CSSProperties,
   type DragEvent,
   type FormEvent,
+  type ReactNode,
 } from "react";
 import { errMsg, type KanbanApi } from "../api";
 import { KanbanHostProvider, colLabel as labelOf, type KanbanHostValue } from "../host";
@@ -47,7 +48,16 @@ import { isoAgo, isoAt } from "../lib/format";
 import { useGlide } from "../lib/glide";
 import { noListener } from "../lib/listen";
 import { useLiveRev } from "../lib/live";
-import type { BacklogTask, BoardShapeData, HostConfig, BoardData, Card, ColumnKey, SessionLinks } from "../types";
+import type {
+  BacklogTask,
+  BoardShapeData,
+  HostConfig,
+  BoardData,
+  Card,
+  CardFull,
+  ColumnKey,
+  SessionLinks,
+} from "../types";
 import { Avatar, ErrorState, Loading } from "./Bits";
 import { BoardEditor } from "./BoardEditor";
 import { CardDialog, PANELS, type Panel } from "./CardDialog";
@@ -66,6 +76,7 @@ export type BoardProps = {
   projectHref?: string; // where the card dialog's project link goes
   cardHref?: (slug: string, id: number) => string;
   dictation?: DictationApi; // speech to text for the card dialog's comment box (absent = no mic)
+  cardTerminals?: (card: CardFull) => ReactNode; // the card dialog's Terminals section (absent = none)
   className?: string;
 };
 
@@ -112,6 +123,7 @@ export function Board({
   projectHref,
   cardHref,
   dictation,
+  cardTerminals,
   className,
 }: BoardProps) {
   const showArchived = view.archived;
@@ -323,9 +335,10 @@ export function Board({
             navigate: navigate ?? null,
             cardHref: cardHref ?? null,
             dictation: dictation ?? null,
+            cardTerminals: cardTerminals ?? null,
           }
         : null,
-    [api, me, config, board, navigate, cardHref, dictation],
+    [api, me, config, board, navigate, cardHref, dictation, cardTerminals],
   );
   const columns = board?.columns ?? [];
   const colLabel = (k: ColumnKey) => (board ? labelOf(board, k) : k);

@@ -289,7 +289,7 @@ port unreachable; `Api#sessions` → `{concurrency, registered, ended, sessions_
 
 ## 6. React
 
-`<Board api me slug view onView onChanged? navigate? projectHref? cardHref? dictation? className? />` renders the board (its
+`<Board api me slug view onView onChanged? navigate? projectHref? cardHref? dictation? cardTerminals? className? />` renders the board (its
 columns from `board.columns`, never a constant) and the card dialog inside `.ak-root` with `config.theme` inline; the
 Workflow button opens `BoardEditor`: an SVG graph (`lib/graph.ts`) of the columns as typed nodes and the transitions
 as labelled arrows, **laid out by dagre** (`@dagrejs/dagre`, the React port's one runtime dependency, MIT): **top to
@@ -351,6 +351,18 @@ primitives, for a host without its own).
 ## 9. Breaking changes for hosts (config / API)
 
 Newest first; a heading names the `Schema::VERSION` step when the change brought one.
+
+### No schema step — card terminals
+
+- `Store#card_sessions(id)` → the open registrations working on a card (its owner session, then each registration whose
+  agent name is the assignee; `session_json` + `owner`), and `Store#terminal_event(session:, socket:, by:, text:)` → one
+  `terminal` event by the operator on every live card the session works on — owns, or is assigned to its agent
+  name (a session with no open registration: `Denied`).
+  A host that shows an agent session's screen records each open / take control / release with it.
+- New optional `<Board cardTerminals>` prop, `(card: CardFull) => ReactNode`: the card dialog shows what it renders for
+  the open card in a **Terminals** section (after the description); absent, or `null` for that card = no section. The
+  engine renders nothing of its own there — the host draws its live terminals of the card's agent sessions.
+  `KanbanHostValue.cardTerminals` (null when absent; a host that builds the value itself adds it).
 
 ### No schema step — the live agent line (React only)
 

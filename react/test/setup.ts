@@ -1,4 +1,11 @@
 import "@testing-library/jest-dom/vitest";
+import { configure } from "@testing-library/react";
+
+// findBy* / waitFor wait up to 3 s, not testing-library's 1 s: every test file renders the board and its card dialog for
+// the first time in its own cold jsdom worker, all workers at once (vitest maxWorkers = every CPU), and on a loaded CI
+// agent that first render took 1.5-2 s (engine CI, three different files). A wait, not a check: an element that never
+// comes still fails, 2 s later.
+configure({ asyncUtilTimeout: 3000 });
 
 // jsdom has no ResizeObserver and its <dialog> has no showModal/close: the board sizes its lists with the first and
 // opens the card modal with the second. Stubs, so the tests see the real components, not a branch written for them.

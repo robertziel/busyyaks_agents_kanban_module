@@ -1275,6 +1275,39 @@ module AgentsKanban
 
     def open_session(session) = sessions_t.where(session: session.to_s, ended_at: nil).first
 
+    # ── terminals: a host's live view of an agent session's screen ─────────────────────────────────────────────────
+    # The engine draws no terminal; it answers which sessions work on a card and records who opened / drove one.
+
+    # The open registrations working on a card: its owner session, then every session acting as its assignee (the
+    # registration's agent name) — each once, owner first. A card nobody registered works on → []. Sessions only: the
+    # host checks each is live.
+    def card_sessions(id)
+      c = card!(id)
+      owner = c[:owner_session] && sessions_t.where(ended_at: nil, session: c[:owner_session],
+                                                     socket: c[:owner_socket] || "default").first
+      agents = c[:assignee].to_s.strip.empty? ? [] : sessions_t.where(ended_at: nil, agent_name: c[:assignee]).order(:id).all
+      [owner, *agents].compact.uniq { |r| [r[:session], r[:socket]] }.map { |r| session_json(r).merge(owner: r.equal?(owner)) }
+    end
+
+    # The operator opened, took or released control of a registered session's terminal: one "terminal" event, by them,
+    # on every card the session works on (not archived) — the cards it owns and the cards assigned to its agent name,
+    # the same two links card_sessions follows — the audit trail. A session with no open registration is refused (a
+    # host shows terminals of registered sessions only). → the card ids it was logged on (works on none → []).
+    def terminal_event(session:, by:, text:, socket: "default")
+      reg = sessions_t.where(ended_at: nil, session: session.to_s, socket: socket.to_s).first
+      raise Denied, "session #{session} (socket #{socket}) has no open registration: no terminal" unless reg
+
+      line = text.to_s.strip
+      raise Invalid, "terminal event text is required" if line.empty?
+
+      by = who!(by)
+      mine = Sequel.&({ owner_session: reg[:session], owner_socket: reg[:socket] })
+      mine = Sequel.|(mine, { assignee: reg[:agent_name] }) unless reg[:agent_name].to_s.strip.empty?
+      ids = cards.where(archived_at: nil).where(mine).order(:id).select_map(:id)
+      @db.transaction { ids.each { |cid| log(cid, "terminal", "#{line} · session #{reg[:session]}", by) } }
+      ids
+    end
+
     # One registration per session: a second one (the same session registering twice) is refused with the first.
     def not_registered!(session)
       open = open_session(session) or return
