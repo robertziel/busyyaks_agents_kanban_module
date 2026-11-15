@@ -4229,3 +4229,70 @@
   line-clamp: 3;
   overflow: hidden;
 }
+
+/* The card dialog's live agent line + the dot on a running session's newest comment (SPEC § 9): the dot pulses while
+   the turn runs (working: accent; blocked on the operator: warn); still under prefers-reduced-motion. */
+.ak-root .kb-activity > li.kb-agent-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border-radius: var(--ak-radius-ctl);
+  background: var(--ak-mat-fill-2);
+  font-size: 12.5px;
+  color: var(--ak-ink-faint);
+}
+.ak-root .kb-agent-live-text {
+  color: var(--ak-ink);
+  font-variant-numeric: tabular-nums;
+}
+.ak-root .kb-live-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ak-ink-faint);
+  vertical-align: middle;
+}
+.ak-root .kb-live-dot.on,
+.ak-root .t-working .kb-live-dot.on {
+  background: var(--ak-accent);
+  animation: kb-live-pulse 1.4s ease-in-out infinite;
+}
+.ak-root .t-blocked .kb-live-dot.on,
+.ak-root .kb-live-dot.on.t-blocked {
+  background: var(--ak-warn);
+}
+.ak-root .t-idle .kb-live-dot {
+  background: var(--ak-ok);
+}
+.ak-root .kb-ameta .kb-live-dot {
+  margin-right: 6px;
+}
+@keyframes kb-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ak-root .kb-live-dot.on {
+    animation: none;
+  }
+}
+.ak-root .kb-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

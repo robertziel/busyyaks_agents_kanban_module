@@ -312,6 +312,20 @@ export type SessionLinks = {
   terminal_url: string;
   model?: string | null;
 };
+// What an agent session does now (the host's sessionsLive port; SPEC § 1, § 9): its state, and — while it works and the host can
+// read it — the phase (thinking · tool · writing), how long the turn runs, the tokens its status shows, the running tool
+// and the card a comment-writing tool writes on. A field the host cannot read is null, never guessed.
+export type SessionLive = {
+  state: string; // the host's session state, e.g. working · blocked · idle · unknown
+  state_by?: string | null; // which reading said so
+  phase: "thinking" | "tool" | "writing" | "subagents" | null; // subagents = no turn of its own, its subagents run
+  elapsed_s: number | null;
+  tokens: string | null; // as the status line shows it, e.g. "↓ 1.6k"
+  tool: string | null;
+  card: number | null;
+  subagents: number | null;
+};
+export type SessionsLive = { sessions: Record<string, SessionLive> };
 export type Ping = {
   at: string;
   done_at: string | null;
