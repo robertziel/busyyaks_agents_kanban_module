@@ -14,7 +14,8 @@ import { activityAnchor, activityAnchorId, jumpNeedsDetails, SPOKEN } from "../l
 import { useFetch } from "../lib/fetch";
 import { isoAt } from "../lib/format";
 import { pingLine } from "../lib/listen";
-import { useLiveRev } from "../lib/live";
+import { liveAnnounce, liveDots, liveLine } from "../lib/agentLive";
+import { useLivePoll, useLiveRev } from "../lib/live";
 import type { Attachment, BoardData, BoardLabel, CardData, CardFull, Checklist, MentionPart } from "../types";
 import { AgentLinks, Avatar, ErrorState, Html, Loading } from "./Bits";
 import { CardLinks } from "./CardLinkRow";
@@ -195,6 +196,10 @@ function CardDetail({
     () => void reload(),
     { paused: () => pause.current },
   );
+  // what the card's agent sessions do now (the host's optional sessionsLive port): the owner's line above the newest
+  // comment, a dot on each running session's newest comment
+  const sessionsLive = api.sessionsLive;
+  const live = useLivePoll(sessionsLive ? () => sessionsLive(id) : null);
   const [details, setDetails] = useState(true);
   const [uploads, setUploads] = useState<{ key: number; name: string; pct: number; error?: string }[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -309,6 +314,15 @@ function CardDetail({
     );
   };
   const comments = [...data.activity].reverse().filter((e) => details || SPOKEN.has(e.kind));
+  const liveSessions = live.value?.sessions;
+  const dots = liveDots(
+    comments.filter((e) => e.kind === "comment"),
+    c,
+    liveSessions,
+    c.id,
+  );
+  const ownerLive = c.owner_session ? liveSessions?.[c.owner_session] : undefined;
+  const ownerLine = ownerLive ? liveLine(ownerLive, c.id) : null;
   const press = (key: string) => void run(() => api.dialogAnswer(id, key));
   const options = c.question_options ?? [];
   const files = c.attachments;
@@ -840,6 +854,21 @@ function CardDetail({
               </p>
             )}
             <ol className="kb-activity">
+              {c.owner_session && (ownerLine || live.error) && (
+                <li
+                  className={`kb-agent-live t-${ownerLine?.tone ?? "unknown"}${live.error ? " err" : ""}`}
+                  title={ownerLive?.state_by ? `read from ${ownerLive.state_by}` : undefined}
+                >
+                  {/* a screen reader hears the state when it changes, never the timer ticking every poll */}
+                  <span className="kb-sr-only" aria-live="polite">
+                    {ownerLine ? `${c.owner_session} ${liveAnnounce(ownerLine)}` : ""}
+                  </span>
+                  <span className={`kb-live-dot${ownerLine?.running ? " on" : ""}`} aria-hidden="true" />
+                  <b>{c.owner_session}</b>
+                  {ownerLine && <span className="kb-agent-live-text">{ownerLine.text}</span>}
+                  {live.error && <span className="ag-err">live status: {live.error}</span>}
+                </li>
+              )}
               {comments.map((e) =>
                 e.kind === "question" || e.kind === "answer" ? (
                   <li
@@ -866,7 +895,15 @@ function CardDetail({
                     <Avatar name={e.author} email={e.author} />
                     <div className="kb-cbody">
                       <div className="kb-ameta">
-                        <b>{e.author}</b> <AgentLinks who={e.author} card={c} links={data.session_links} />
+                        <b>{e.author}</b>{" "}
+                        {dots.has(e.id) && (
+                          <span
+                            className={`kb-live-dot on t-${dots.get(e.id)?.tone}`}
+                            title={`${dots.get(e.id)?.session} · ${dots.get(e.id)?.text}`}
+                            aria-label={`${dots.get(e.id)?.session} is ${dots.get(e.id)?.text}`}
+                          />
+                        )}
+                        <AgentLinks who={e.author} card={c} links={data.session_links} />
                         <span className="muted" title={e.at}>
                           {isoAt(e.at)}
                         </span>

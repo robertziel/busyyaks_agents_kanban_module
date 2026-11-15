@@ -22,6 +22,7 @@ code disagree, `ruby/` + `fixtures/` win and the fix starts there.
 | attachments | `root:` directory + `AttachmentPolicy.new(max_bytes:, types:)` from the host's settings | `api.attach` |
 | transport | — | the `api: KanbanApi` prop (react/src/api.ts): every call the board makes |
 | dictation | — | optional `dictation: DictationApi` prop of `<Board>` (react/src/lib/dictation.ts): `shortcut` (a `KeyCombo` or null, lib/shortcut.ts) + `transcribe(wav, prompt)` → `{text, words: [{word, start, end}]}` (16 kHz mono 16-bit WAV; `prompt` = the text confirmed so far), rejecting with the server's reason. The host's own route to its speech server (e.g. an OpenAI-compatible `/v1/audio/transcriptions`); absent = no mic anywhere |
+| live agent line | — | optional `api.sessionsLive(id)` → `{sessions: {name → SessionLive}}` (react/src/types.ts): what the card's agent sessions do now — `state`, and while working `phase` (thinking · tool · writing · subagents), `elapsed_s`, `tokens`, `tool`, the `card` a comment tool writes on, `subagents`; a field the host cannot read is null. The open card dialog polls it every 3 s (`useLivePoll`); absent = no live line |
 | checkout (git) | `git:` on `CardLinks.build` (required, no default — the engine runs no git): `branches(project)` → Set of branch names (local + remote-tracking, remote dropped), `default_ref(project)` → the checked-out branch ("HEAD" when detached / unborn), `files_at(project, refs, files)` → `{file => first ref that has it}` (paths with `..` are never asked); a port that cannot read the checkout raises | — |
 | navigation | `card_path:` on `CardLinks::Refs`; `card_url: ->(slug, id) { absolute URL }` on Tools (required): every card a tool returns carries it as `url` | `navigate`, `projectHref`, `cardHref` props; `view` / `onView` own the URL |
 | launch plan | `AgentsKanban::Launch.plan(config, type:, session:, slug:, launcher:, cards:)` → `{argv, agent, prompt_template, vars, model}`; `Launch.render` | — |
@@ -343,6 +344,21 @@ primitives, for a host without its own).
 ## 9. Breaking changes for hosts (config / API)
 
 Newest first; a heading names the `Schema::VERSION` step when the change brought one.
+
+### No schema step — the live agent line (React only)
+
+- New optional `KanbanApi.sessionsLive(id)` (§ 1): the open card dialog polls it every 3 s (`lib/live.ts` `useLivePoll`:
+  tab visible, a poll in flight not overlapped until it has been pending for 5 intervals (a stalled connection then no
+  longer blocks the next), the last good value kept beside a failed poll's error; n failed polls in a row wait
+  `pollDelay` = 3 s × 2^n, at most 30 s, until one succeeds). A screen reader hears only the state when it changes
+  (`liveAnnounce`: "<session> is working / is waiting for you / is idle", in a visually hidden `aria-live` span), never
+  the counter. Above the newest comment, the
+  owner session's line (`li.kb-agent-live`): its name and what it does — `thinking… · 42s`,
+  `writing… · 1m 5s · ↓ 1.2k tokens` (the host names writing only from evidence, e.g. a rising token count), `running Bash`, `waiting for its subagents · 1 subagent` (no turn of its own), `writing a comment on this card` (a comment tool whose `card` is
+  this card), `waiting for you (a dialog or question)` (blocked), `idle`, `state unknown`, `· N subagents`
+  (`lib/agentLive.ts` `liveLine`); a failed poll shows `live status: <the reason>`. A pulsing dot (`.kb-live-dot.on`)
+  marks the newest comment of each session whose turn runs now (`liveDots`: the author resolved to its session as the
+  agent links do — its own name, or the card's assignee → its owner session). Nothing changes for a host without the port.
 
 ### No schema step — dictation (React only)
 

@@ -58,3 +58,60 @@ export function useLiveRev(
 
   return state;
 }
+
+// A value polled every `every` ms while the tab is visible (fetch null = nothing to poll: value stays null). The last
+// good value is kept beside a failed poll's error, never replaced by a substitute; a poll in flight is not overlapped
+// until it has been pending for 5 intervals (a stalled connection then no longer blocks the next).
+// Failures back off: after n failed polls in a row the next waits every × 2^n, at most POLL_BACKOFF_MAX_MS; the first
+// success polls at `every` again.
+export const POLL_BACKOFF_MAX_MS = 30_000;
+export function pollDelay(every: number, failures: number): number {
+  return Math.min(every * 2 ** failures, Math.max(every, POLL_BACKOFF_MAX_MS));
+}
+export function useLivePoll<T>(
+  fetch: (() => Promise<T>) | null,
+  every = 3000,
+): { value: T | null; error: string | null } {
+  const fetcher = useRef(fetch);
+  fetcher.current = fetch;
+  const [state, setState] = useState<{ value: T | null; error: string | null }>({ value: null, error: null });
+  const key = fetch ? 1 : 0;
+
+  useEffect(() => {
+    if (!key) return;
+    let stop = false;
+    // as useLiveRev: one that has not settled after 5 intervals (a stalled connection) no longer blocks the next
+    let inFlightSince = 0;
+    let failures = 0;
+    let lastAt = 0;
+    const tick = async () => {
+      if (stop || document.hidden || !fetcher.current) return;
+      if (inFlightSince && Date.now() - inFlightSince < every * 5) return;
+      if (failures && Date.now() - lastAt < pollDelay(every, failures) - every / 2) return; // backing off
+      const mine = Date.now();
+      inFlightSince = mine;
+      lastAt = mine;
+      try {
+        const value = await fetcher.current();
+        failures = 0;
+        if (!stop) setState({ value, error: null });
+      } catch (e) {
+        failures += 1;
+        if (!stop) setState((s) => ({ ...s, error: e instanceof Error ? e.message : String(e) }));
+      } finally {
+        if (inFlightSince === mine) inFlightSince = 0;
+      }
+    };
+    void tick();
+    const id = window.setInterval(() => void tick(), every);
+    const vis = () => void tick();
+    document.addEventListener("visibilitychange", vis);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", vis);
+    };
+  }, [key, every]);
+
+  return state;
+}
