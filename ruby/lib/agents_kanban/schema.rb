@@ -28,8 +28,10 @@ module AgentsKanban
     # for the operator only while its PR still has that head) and cards.gate_state (what the last watch pass saw of
     # the card's gate: "ready" | the hold, so a change is said once);
     # 11 = boards.archived_at (a SESSION board hidden after HostConfig#session_boards.idle_hours with no activity; its
-    # cards archived, nothing deleted)
-    VERSION = 11
+    # cards archived, nothing deleted);
+    # 12 = agent_sessions.lead_id / needs_lead / lead_key_digest + CHECK (needs_lead = 0 OR lead_id IS NOT NULL):
+    # lead-first boards — a session of a type `under` a lead exists only under a lead registration
+    VERSION = 12
     TABLES = %i[cards card_activity board_labels checklists checklist_items card_pings card_attachments session_dialogs
                 agent_sessions ci_watches boards board_columns board_transitions].freeze
 
@@ -70,6 +72,7 @@ module AgentsKanban
       drop_xy(db, t) if to >= 9
       add_missing(db, t[:cards], [[:gate_head, String], [:gate_state, String, { text: true }]]) if to >= 10
       add_missing(db, t[:boards], [[:archived_at, Integer]]) if to >= 11
+      add_lead(db, t[:agent_sessions]) if to >= 12
       t
     end
 
@@ -97,6 +100,21 @@ module AgentsKanban
       db.alter_table(t) do
         set_column_default :x, nil
         set_column_default :y, nil
+      end
+    end
+
+    # v12 (lead-first boards): agent_sessions.lead_id (the lead registration a session runs under),
+    # needs_lead (1 = its type is `under` a lead) and lead_key_digest (a lead's key, SHA-256 hex; the key itself is
+    # never stored). The CHECK makes a session that needs a lead and has none unwritable — by any code path. Added with
+    # the columns, once (an existing row predates lead-first: needs_lead 0).
+    def add_lead(db, table)
+      return if db.schema(table).map(&:first).include?(:needs_lead)
+
+      db.alter_table(table) do
+        add_column :lead_id, Integer
+        add_column :needs_lead, Integer, null: false, default: 0
+        add_column :lead_key_digest, String
+        add_constraint(:"#{table}_lead_required", Sequel.lit("needs_lead = 0 OR lead_id IS NOT NULL"))
       end
     end
 

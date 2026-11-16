@@ -16,7 +16,8 @@ class TerminalTest < Minitest::Test
   def test_card_sessions_are_the_owner_then_the_assignees_registrations
     assert_empty kb.card_sessions(@id), "nobody registered works on it"
     kb.set_owner(@id, session: "lead_1", by: "me")
-    kb.register_session(session: "worker_1", project: "p", type: "team", launcher: "fullclaude", by: "op")
+    kb.register_session(session: "worker_1", project: "p", type: "team", launcher: "fullclaude", by: "op",
+                        lead_id: kb.open_session("lead_1")[:id])
     agent = kb.open_session("worker_1")[:agent_name]
     kb.update(@id, { "assignee" => agent }, by: "me")
     rows = kb.card_sessions(@id)
@@ -45,7 +46,8 @@ class TerminalTest < Minitest::Test
   # an assignee-only session (a worker on a card another session owns) is logged on the cards assigned to it too
   def test_terminal_event_logs_on_the_cards_assigned_to_the_session
     kb.set_owner(@id, session: "lead_1", by: "me")
-    kb.register_session(session: "worker_1", project: "p", type: "team", launcher: "fullclaude", by: "op")
+    kb.register_session(session: "worker_1", project: "p", type: "team", launcher: "fullclaude", by: "op",
+                        lead_id: kb.open_session("lead_1")[:id])
     kb.update(@id, { "assignee" => kb.open_session("worker_1")[:agent_name] }, by: "me")
     other = kb.create(slug: "p", title: "not its card", by: "me", column: "doing")
     assert_equal [@id], kb.terminal_event(session: "worker_1", by: "op", text: "took control of the terminal")

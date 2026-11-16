@@ -144,7 +144,6 @@ export function rulesOf(shape: BoardShape, host: HostConfig): BoardRules {
         : null,
     idle_column: working,
     review_columns: of("review"),
-    spawn_columns: [],
     hide_after_hours: Object.fromEntries(shape.columns.map((c) => [c.key, c.hide_after_hours])),
   };
 }

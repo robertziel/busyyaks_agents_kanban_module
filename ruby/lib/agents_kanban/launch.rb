@@ -88,8 +88,8 @@ module AgentsKanban
 
     def kind(config, launcher) = KINDS.fetch(config.launcher(launcher).kind)
 
-    # The argv for an agent type (its launcher by key; none named → AgentType#launcher!: the type's spawn_launcher or
-    # only launcher, else refused), built by the launcher's kind. prompt: the rendered prompt (Launch.render) or nil.
+    # The argv for an agent type (its launcher by key; none named → AgentType#launcher!: the type's only launcher, else
+    # refused), built by the launcher's kind. prompt: the rendered prompt (Launch.render) or nil.
     # extra: more flags after the configured args (a host's per-launch options), never one the kind sets itself.
     def argv(config, type:, session:, launcher: nil, extra: [], prompt: nil)
       t = config.agent_type(type)
@@ -122,7 +122,7 @@ module AgentsKanban
       lk = t.launcher!(launcher)
       { type: t.key, launcher: lk, kind: config.launcher(lk).kind, remote_control: kind(config, lk).remote_control?,
         argv: argv(config, type: t.key, session: session, launcher: launcher, extra: extra),
-        model: t.model_for(launcher), agent: agent, prompt_template: t.prompt,
+        model: t.model_for(lk), agent: agent, prompt_template: t.prompt,
         vars: { slug: slug.to_s, session: session.to_s, agent: agent, type: t.key, cards: card_list }, }
     end
 

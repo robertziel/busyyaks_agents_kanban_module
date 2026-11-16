@@ -1132,7 +1132,8 @@ class StoreTest < Minitest::Test
   def test_agent_types_are_the_projects_registrations_newest_wins
     assert_equal({}, kb.agent_types("g/r"))
     kb.register_session(session: "tl_g_r", project: "g/r", type: "lead", launcher: "fullclaude", by: "op")
-    kb.register_session(session: "w_1", project: "g/r", type: "team", launcher: "fullclaude", by: "op")
+    kb.register_session(session: "w_1", project: "g/r", type: "team", launcher: "fullclaude", by: "op",
+                        lead_id: kb.open_session("tl_g_r")[:id])
     kb.register_session(session: "on_p", project: "p", type: "lead", launcher: "fullclaude", by: "op")
     assert_equal({ "claude-tl_g_r" => "lead", "team-w_1" => "team" }, kb.agent_types("g/r"))
     kb.end_session("tl_g_r", reason: "done", by: "op")
@@ -1192,7 +1193,8 @@ class StoreTest < Minitest::Test
   def test_sessions_sync_ends_gone_sessions_after_the_grace_and_the_caps_refuse_with_who_runs
     kb.register_session(session: "s1", project: "g/r", type: "lead", launcher: "fullclaude", by: "op")
     @now += 10
-    kb.register_session(session: "s2", project: "p", type: "team", launcher: "fullclaude", by: "op")
+    kb.register_session(session: "s2", project: "g/r", type: "team", launcher: "fullclaude", by: "op",
+                        lead_id: kb.open_session("s1")[:id])
     # s2 is not live yet but was registered 0 s ago: starting, counts as running; s1 live
     assert_equal [], kb.sessions_sync(%w[s1].to_set, grace: 60)
     c = kb.concurrency(%w[s1].to_set, grace: 60)
@@ -1205,10 +1207,11 @@ class StoreTest < Minitest::Test
     assert_equal "1/1 lead session already runs for g/r (agent_types[lead].max_per_project): s1 (lead, g/r)", e.message
     assert_equal 2, kb.launch_check!(type: "lead", project: "p", live: %w[s1].to_set, grace: 60)[:running],
                  "a lead for another project may start"
-    kb.register_session(session: "s3", project: "g/r", type: "team", launcher: "fullclaude", by: "op")
+    kb.register_session(session: "s3", project: "g/r", type: "team", launcher: "fullclaude", by: "op",
+                        lead_id: kb.open_session("s1")[:id])
     e = assert_raises(AgentsKanban::Denied) { kb.launch_check!(type: "team", project: "o/other", live: %w[s1 s2 s3].to_set, grace: 60) }
     assert_match(
-      %r{2/2 team sessions are running — this type's cap \(agent_types\[team\].max\): s2 \(team, p\), s3 \(team, g/r\)},
+      %r{2/2 team sessions are running — this type's cap \(agent_types\[team\].max\): s2 \(team, g/r\), s3 \(team, g/r\)},
       e.message,
     )
     %w[s4 s5 s6].each do |x|

@@ -5,6 +5,7 @@ require_relative "errors"
 require_relative "store"
 require_relative "attachments"
 require_relative "backlog_md"
+require_relative "team"
 
 module AgentsKanban
   # The MCP kanban_* tools: their definitions (worded from the host config and the TEMPLATE board, so every description
@@ -14,7 +15,8 @@ module AgentsKanban
   #
   # Ports: store (Store), attachments (Attachments), projects (->(slug) { {slug:, path:, …} | nil } — the host's
   # boards), sessions (-> [live session names]; raises Delivery::Unavailable / Refused when it cannot tell), backlog
-  # (->(project, board) { BacklogMd.read result | nil } — optional; nil = the board JSON carries backlog_md: null).
+  # (->(project, board) { BacklogMd.read result | nil } — optional; nil = the board JSON carries backlog_md: null),
+  # launcher (the host's LAUNCH port, Api's — required on a host with a lead type: kanban_spawn starts through it).
   class Tools
     AUTHOR = { type: "string", description: "who is acting: your agent name or tmux session name" }.freeze
     DUE = {
@@ -49,7 +51,7 @@ module AgentsKanban
                kanban_checklist_add kanban_checklist_rename kanban_checklist_delete kanban_checklist_item_add
                kanban_checklist_item_edit
                kanban_checklist_toggle kanban_checklist_item_delete kanban_attach kanban_attachments kanban_attachment_get
-               kanban_checklist_item_convert kanban_session_board].freeze
+               kanban_checklist_item_convert kanban_session_board kanban_spawn].freeze
 
     def self.handles?(name) = NAMES.include?(name)
 
@@ -58,8 +60,9 @@ module AgentsKanban
     # grace: seconds a registered session counts as running before it shows in `sessions` (a launch starting).
     # card_url: ->(slug, id) { the absolute URL that opens that card on the host's board } — every card a tool returns
     # carries it as `url`, so an agent links a card from data (instructions: Links).
-    def initialize(store:, attachments:, projects:, sessions:, card_url:, backlog: nil, grace: 60)
+    def initialize(store:, attachments:, projects:, sessions:, card_url:, backlog: nil, grace: 60, launcher: nil)
       @store = store
+      @launcher = launcher
       @card_url = card_url
       @config = store.config
       @attachments = attachments
@@ -102,6 +105,12 @@ module AgentsKanban
                "Never ask it only in chat: a question in the terminal reaches nobody and the board shows nothing " \
                "waiting. A question about no card: create the card, then ask on it. Waiting for CI, an API or " \
                "somebody outside the board: kanban_block(id, reason, url), kanban_unblock when it clears."
+      lt = @config.lead_types.first
+      if lt
+        parts << "Lead-first boards: a board's #{lt.key} session starts its team — kanban_spawn(id, type, tmux_session) " \
+                 "gives a card its own session under it; nothing else starts one, and with no #{lt.key} running an " \
+                 "ownerless card waits for the operator's Launch."
+      end
       parts << "Opened a pull request for a card: kanban_pr_assign(id, pr_url, role, author) at once — the board " \
                "knows a card's PRs only from these assignments, never from branch names or PR numbers in text."
       if cfg.handoff
@@ -171,6 +180,14 @@ module AgentsKanban
                      else
                        ""
                      end
+      under = host.agent_types.select(&:under)
+      register_lead = if under.any?
+                        " Lead-first: #{under.map { |t| "#{t.key} runs under #{t.under}" }.join(', ')} — registered " \
+                          "only while the board's lead (one started from the Launch bar) runs, on its launcher. A " \
+                          "#{under.first.under} registered by hand is no such lead and cannot kanban_spawn."
+                      else
+                        ""
+                      end
       register_takes = host.agent_types
                            .map { |t| "#{t.key}: #{t.takes.empty? ? 'none' : t.takes.join(' / ')}" }
                            .join("; ")
@@ -271,7 +288,8 @@ module AgentsKanban
                        "agent name (use it as author: cards you create are then owned by your session without " \
                        "tmux_session). A session launched from the board is " \
                        "registered already — calling this again is refused. launcher: the launcher key your session " \
-                       "was started with (#{host.launcher_keys.join(', ')}) — required when the type runs several.",
+                       "was started with (#{host.launcher_keys.join(', ')}) — required when the type runs several." \
+                       "#{register_lead}",
           inputSchema: { type: "object",
                          properties: { project: { type: "string" }, type: { type: "string", enum: host.agent_type_keys },
                                        launcher: { type: "string", enum: host.launcher_keys },
@@ -451,7 +469,26 @@ module AgentsKanban
                     inputSchema: { type: "object", properties: { id: INT, note: { type: "string" }, author: AUTHOR },
                                    required: %w[id author], }, })
       defs << session_board_definition if host.session_boards
+      defs << spawn_definition if host.lead_types.any?
       defs
+    end
+
+    # Lead-first boards: the lead starts its team. Offered on a host with a lead type only.
+    def spawn_definition
+      host = @config
+      under = host.agent_types.select(&:under)
+      { name: "kanban_spawn",
+        description: "LEAD ONLY: start a new agent session for ONE card — the engine never starts one on its own; " \
+                     "the board's lead does, with this. type: #{under.map { |t| "#{t.key} (under #{t.under})" }.join(', ')}. " \
+                     "tmux_session: YOUR (the lead's) tmux session — the host checks it is the board's lead it " \
+                     "started from the Launch bar (you handle no key); any other session is refused. The " \
+                     "card must be ownerless or owned by you; the new session owns it from the start (its prompt " \
+                     "names it), runs your launcher, and is registered under you. Refused beyond the caps (with who " \
+                     "runs). → {session, agent, launcher, card}.",
+        inputSchema: { type: "object",
+                       properties: { id: INT, type: { type: "string", enum: under.map(&:key) },
+                                     tmux_session: SESSION_ARG, author: AUTHOR, },
+                       required: %w[id type tmux_session author], }, }
     end
 
     def session_board_definition
@@ -523,9 +560,16 @@ module AgentsKanban
         session = live_session!(a)
         @store.not_registered!(session)
         live = live_sessions!
-        @store.launch_check!(type: str!(a, "type"), project: p[:slug], live: live, grace: @grace)
-        reg = @store.register_session(session: session, project: p[:slug], type: a["type"], launcher: a["launcher"],
-                                      by: str!(a, "author"))
+        t = @config.agent_type(str!(a, "type"))
+        @store.launch_check!(type: t.key, project: p[:slug], live: live, grace: @grace)
+        lead = nil
+        if t.under # lead-first: only under the board's RUNNING lead, which hands its key to the session
+          lead = @store.running_lead!(type: t.key, project: p[:slug], live: live, grace: @grace)
+          host_lead!(lead[:session])
+        end
+        lk = @store.launcher_for!(type: t.key, asked: a["launcher"], lead: lead)
+        reg = @store.register_session(session: session, project: p[:slug], type: t.key, launcher: lk,
+                                      by: str!(a, "author"), lead_id: lead&.dig(:id))
         dump(reg.merge(adopted: reg[:adopted].map { |cid| row(@store.card(cid)).slice(:id, :title, :column, :column_label) },
                        concurrency: @store.concurrency(live, grace: @grace).slice(:max_sessions, :running, :free)))
       when "kanban_move"
@@ -567,11 +611,57 @@ module AgentsKanban
         id = @store.card!(int!(a, "id"))[:id]
         session = live_session!(a)
         dump(row(@store.claim(id, assignee: who, session: session)))
+      when "kanban_spawn" then spawn(a)
       when "kanban_attach" then attach(a)
       when "kanban_attachments" then dump(@attachments.list_json(@store.card!(int!(a, "id"))[:id]))
       when "kanban_attachment_get" then dump(@attachments.read_for_agent(int!(a, "attachment_id")))
       else labels_and_checklists(name, a)
       end
+    end
+
+    # kanban_spawn: the named tmux_session is the board's lead (a live session whose open registration's key digest
+    # matches; a guard against cooperative agents, not authentication — SPEC § 8 residual), the card is on its board
+    # and ownerless or the lead's own, the type is under the lead's type → Team#start takes the card from the lead
+    # (compare-and-set) for the new session.
+    def spawn(a)
+      raise ArgumentError, "Tools needs a launcher: port for kanban_spawn" unless @launcher
+
+      session = live_session!(a)
+      lead = host_lead!(session)
+      c = @store.card!(int!(a, "id"))
+      raise Denied, "card ##{c[:id]} is on #{c[:project_slug]}, not on #{lead[:project_slug]} (your board)" \
+        unless c[:project_slug] == lead[:project_slug]
+      t = @config.agent_type(str!(a, "type"))
+      raise Invalid, "agent type #{t.key} is not under #{lead[:type_key]}" unless t.under == lead[:type_key]
+      unless c[:owner_session].nil? || c[:owner_session] == session
+        raise Denied, "card ##{c[:id]} is owned by #{c[:owner_session]} — a lead spawns only for its own or ownerless cards"
+      end
+      p = @projects.call(c[:project_slug]) || raise(Invalid, "no project #{c[:project_slug]}")
+      out = Team.new(store: @store, launcher: @launcher, sessions: @sessions, grace: @grace)
+                .start(project: p, type: t.key, by: str!(a, "author"), lead: lead, for_cards: [c[:id]],
+                       from_owner: c[:owner_session])
+      reg = out[:reg]
+      dump(session: reg[:session], agent: reg[:agent], launcher: reg[:launcher], lead: reg[:lead],
+           card: row(@store.card(c[:id])).slice(:id, :title, :column, :column_label, :url))
+    rescue Delivery::Unavailable, Delivery::Refused => e
+      raise Invalid, "the host could not start the session: #{e.message}"
+    end
+
+    # The lead registration `session` is, as the host vouches (a guard, not authentication): the launcher's port gives
+    # back the key it keeps for a lead it started (never the agent: it handles no key) and the Store compares its
+    # digest. Not a lead the host started, a stale or another session's key → Denied. Residual (SPEC § 8): tmux_session
+    # names the caller — one MCP bearer, so a session that names the lead's tmux session is not told apart from the lead.
+    def host_lead!(session)
+      raise ArgumentError, "Tools needs a launcher: port to verify a lead" unless @launcher
+
+      key = begin
+        @launcher.lead_key(session: session)
+      rescue Delivery::Refused => e
+        raise Denied, "#{session} is not a lead this host started: #{e.message}"
+      rescue Delivery::Unavailable => e
+        raise Invalid, "cannot verify the lead: #{e.message} — try again when the launcher is up"
+      end
+      @store.lead_by_key!(session: session, key: key)
     end
 
     # {card (+ the attachment list), activity} for an agent (markdown only: see markdown_only).

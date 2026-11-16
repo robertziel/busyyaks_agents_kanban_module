@@ -3,7 +3,7 @@
 // and gives focus back on close.
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LaunchFailureAlert, unseenFailures, type LaunchFailure } from "../src";
+import { LaunchFailureAlert, unseenFailures, type LaunchFailure, type LeadEnd } from "../src";
 
 const f = (id: number, session: string): LaunchFailure => ({
   id,
@@ -55,6 +55,30 @@ describe("LaunchFailureAlert", () => {
     fireEvent(screen.getByRole("alertdialog"), new Event("cancel", { cancelable: true })); // Esc on a modal dialog
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(window.localStorage.getItem("ak-launch-failure-seen")).toBe("[3,2]");
+  });
+
+  // a board whose lead ended on its own (nothing relaunches it) alerts too, until dismissed
+  it("shows a board that lost its lead beside the failed starts, and dismisses both", () => {
+    const lead: LeadEnd = {
+      id: 9,
+      session: "g_r_teamlead",
+      project: "g/r",
+      type: "lead",
+      launcher: "fullclaude",
+      ended: "2026-11-15T03:09:34Z",
+      reason: "gone from the host's session list",
+    };
+    const { rerender } = render(<LaunchFailureAlert failures={[f(2, "g_r_worker")]} leadEnds={[lead]} />);
+    expect(screen.getByText("A session did not start · A board lost its lead")).toBeTruthy();
+    expect(
+      screen.getByText(/gone from the host's session list — no lead runs: press Launch on the board/),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByText("Dismiss"));
+    expect(window.localStorage.getItem("ak-launch-failure-seen")).toBe("[2,9]");
+    rerender(<LaunchFailureAlert failures={[]} leadEnds={[lead]} />);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    rerender(<LaunchFailureAlert failures={[]} leadEnds={[{ ...lead, id: 10 }]} />);
+    expect(screen.getByText("A board lost its lead")).toBeTruthy();
   });
 
   it("links each row to the host's project page and gives focus back on Dismiss", () => {

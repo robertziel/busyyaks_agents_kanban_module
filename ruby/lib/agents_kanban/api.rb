@@ -7,6 +7,7 @@ require_relative "attachments"
 require_relative "rev"
 require_relative "backlog_md"
 require_relative "launch"
+require_relative "team"
 
 module AgentsKanban
   # The OPERATOR's JSON API, framework-neutral: every method takes already-parsed input (a string-keyed Hash body, ids
@@ -156,7 +157,8 @@ module AgentsKanban
             .sort_by { |g| [-g[:count], g[:slug]] }
         end
         [200, { waiting_columns: boards[Board::TEMPLATE].waiting, total: by_slug.values.sum(&:size), projects: sorted,
-                held: aside.call(w.held), external: aside.call(w.external), launch_failures: @store.launch_failures(slugs), },]
+                held: aside.call(w.held), external: aside.call(w.external), launch_failures: @store.launch_failures(slugs),
+                lead_ends: @store.lead_ends(slugs), },]
       end
     end
 
@@ -177,6 +179,7 @@ module AgentsKanban
                          waiting: w.waiting[p[:slug]], held: w.held[p[:slug]], external: w.external[p[:slug]],
                          flagged: flagged,
                          priorities: @config.priorities, label_colors: @config.label_colors,
+                         lead: lead_json(p[:slug]),
                          **@board_extras.call(p)),]
       end
     end
@@ -234,16 +237,7 @@ module AgentsKanban
       c = card!(id) or return not_found("no card #{id}")
       refusing do
         moved = @store.move(c[:id], column: b["column"], transition: b["transition"], position: b["position"], by: by)
-        spawn_error = nil
-        if moved[:column] != c[:column] && @store.board_of(moved[:project_slug]).spawner_for(moved[:column])
-          begin
-            spawn_error = "spawned: #{@store.card(c[:id])[:owner_session]}" if spawn_pass(only: c[:id], by: by).any?
-          rescue Delivery::Unavailable, Delivery::Refused => e
-            spawn_error = "spawn deferred to the notifier pass: #{e.message}"
-          end
-          moved = @store.card(c[:id])
-        end
-        delivered = moved[:column] == c[:column] ? nil : (spawn_error || @store.delivery(c, by))
+        delivered = moved[:column] == c[:column] ? nil : @store.delivery(c, by)
         counts = @store.counts(moved[:project_slug])[moved[:project_slug]]
         [200, { card: @store.card_json(moved, description: true), counts: counts, delivered: delivered }]
       end
@@ -325,21 +319,24 @@ module AgentsKanban
           { key: l.key, label: l.label, model: t.model_for(k) }
         end
         here = conc && slug ? conc[:sessions].select { |x| x[:type] == t.key && x[:project] == slug } : nil
-        follows = live && slug ? @store.followed_launcher(type: t.key, project: slug, live: live, grace: @grace) : nil
+        lead = live && slug && t.under ? @store.running_lead(t.under, slug, live: live, grace: @grace) : nil
+        # a type under a lead: the running lead it would run under (its launcher is the only one), or nil = no lead
+        # runs and the bar greys the type ("launch the lead first") — the server refuses it either way
+        follows = lead && { type: lead[:type_key], session: lead[:session], launcher: lead[:launcher_key] }
         { key: t.key, label: t.label, launchers: launchers, model: t.model,
           takes: t.takes, max: t.max, max_per_project: t.max_per_project, prompt: !t.prompt.nil?,
           running: conc && conc[:types][t.key][:running], running_here: here&.size,
           sessions_here: here&.map { |x| x[:session] },
-          launcher_follows: t.launcher_follows, follows: follows, }
+          under: t.under, follows: follows, }
       end
       [200, { types: types, concurrency: conc, sessions_error: err }]
     end
 
-    # POST {type, launcher?}: the cap is checked on a fresh live list (422 with who runs), a free session name is taken
-    # from the host, the session is REGISTERED (adopting the project's ownerless cards of the type's `takes` columns),
-    # the host starts it with the plan (argv, prompt template + values — the host renders {dir}); a start that fails
-    # ends the registration and releases what it adopted. 201 {session, type, launcher, agent, adopted, result (the
-    # host's), concurrency} · 422 refused · 503 the launcher / sessions port unreachable.
+    # POST {type, launcher?}: Team#start — the caps on a fresh live list (422 with who runs); a type under a lead only
+    # while the board's lead runs (422 "launch the lead first"), on the lead's launcher; registered (adopting the
+    # project's ownerless cards of the type's `takes` columns) before the host starts it; a start that fails ends the
+    # registration and releases what it adopted. 201 {session, type, launcher, agent, lead, adopted, result (the
+    # host's), concurrency} — never a lead key · 422 refused · 503 the launcher / sessions port unreachable.
     def launch(slug, b, by:)
       raise ArgumentError, "Api needs sessions: and launcher: ports to launch" unless @sessions && @launcher
 
@@ -347,22 +344,11 @@ module AgentsKanban
       refusing do
         only!(b, %w[type launcher])
         t = @config.agent_type(b["type"])
-        live = @sessions.call
-        @store.launch_check!(type: t.key, project: p[:slug], live: live, grace: @grace)
-        lk = @store.launcher_for!(type: t.key, project: p[:slug], asked: b["launcher"], live: live, grace: @grace)
-        session = @launcher.name(project: p, base: @config.session_name(t, slug: p[:slug])).to_s
-        reg = @store.register_session(session: session, project: p[:slug], type: t.key, launcher: lk, by: by)
-        plan = Launch.plan(@config, type: t.key, launcher: lk, session: session, slug: p[:slug], cards: reg[:adopted])
-        result = begin
-          start_session(session, p, t, lk, plan)
-        rescue Delivery::Unavailable, Delivery::Refused => e
-          @store.end_session(session, reason: "#{Store::START_FAILED}#{e.message}", by: by)
-          @store.release_session_cards(session, reason: "its launch failed: #{e.message}", by: by)
-          raise
-        end
+        out = team.start(project: p, type: t.key, by: by, asked_launcher: b["launcher"])
+        reg = out[:reg]
         adopted = reg[:adopted].map { |id| @store.card_json(@store.card(id)) }
-        [201, { session: session, type: t.key, launcher: lk, agent: reg[:agent], adopted: adopted,
-                result: result, concurrency: @store.concurrency(@sessions.call, grace: @grace), },]
+        [201, { session: reg[:session], type: t.key, launcher: reg[:launcher], agent: reg[:agent], lead: reg[:lead],
+                adopted: adopted, result: out[:result], concurrency: @store.concurrency(@sessions.call, grace: @grace), },]
       end
     rescue Delivery::Refused => e
       [422, { error: e.message }]
@@ -370,68 +356,7 @@ module AgentsKanban
       [503, { error: e.message }]
     end
 
-    # THE SPAWN RULE (global): an ownerless card in a column some agent type `spawns_for` gets ONE NEW session of that
-    # type, started for it alone — registered with the card as its only card (owner + assignee set before the start),
-    # the card id in the prompt ({cards}). Run at once on an operator move into the column and on every notifier pass
-    # (so at the host's start, and for a card whose dead worker the watchdog released). Never handed to another
-    # session instead:
-    #   a cap is full     → the card waits, its note says which cap and who runs; spawned FIFO when a slot frees;
-    #   no launcher       → the type runs several, none is followed and no spawn_launcher is set: the card waits, its
-    #                       note says so (retried every pass — a lead starting gives it one to follow);
-    #   the start fails   → registration ended, card released, note "spawn failed: <why>", retried after SPAWN_RETRY_S.
-    # The sessions / launcher ports down raise (Delivery::*): the caller says so, nothing is assigned.
-    # → the card ids a session was started for.
-    def spawn_pass(only: nil, by: nil)
-      return [] if @config.spawn_types.empty?
-      raise ArgumentError, "Api needs sessions: and launcher: ports to spawn" unless @sessions && @launcher
-
-      by ||= @config.system_author
-      queue = @store.spawn_queue(only: only)
-      return [] if queue.empty?
-
-      live = @sessions.call
-      started = []
-      queue.each do |c|
-        next if @store.spawn_backoff?(c[:id])
-
-        t = @store.board_of(c[:project_slug]).spawner_for(c[:column])
-        p = @projects.call(c[:project_slug])
-        unless p
-          @store.spawn_note(c[:id], "spawn failed: no project #{c[:project_slug]} on this host", by)
-          next
-        end
-        begin
-          @store.launch_check!(type: t.key, project: p[:slug], live: live, grace: @grace)
-        rescue Denied => e
-          @store.spawn_note(c[:id], "waiting for a free #{t.key} session — #{e.message}", by)
-          next
-        end
-        begin
-          lk = @store.launcher_for!(type: t.key, project: p[:slug], asked: nil, live: live, grace: @grace)
-        rescue Invalid => e # several launchers, no session to follow, no spawn_launcher: the card waits, says why
-          @store.spawn_note(c[:id], "spawn refused: #{e.message}", by)
-          next
-        end
-        session = @launcher.name(project: p, base: @config.session_name(t, slug: p[:slug])).to_s
-        reg = @store.register_session(session: session, project: p[:slug], type: t.key, launcher: lk, by: by,
-                                      for_cards: [c[:id]])
-        if reg[:adopted].empty? # taken by somebody between the queue read and the registration
-          @store.end_session(session, reason: "card ##{c[:id]} was taken before its spawn", by: by)
-          next
-        end
-        plan = Launch.plan(@config, type: t.key, launcher: lk, session: session, slug: p[:slug], cards: reg[:adopted])
-        begin
-          start_session(session, p, t, lk, plan)
-        rescue Delivery::Unavailable, Delivery::Refused => e
-          @store.end_session(session, reason: "#{Store::START_FAILED}#{e.message}", by: by)
-          @store.release_session_cards(session, reason: "its spawn failed: #{e.message}", by: by)
-          @store.spawn_note(c[:id], "spawn failed: #{e.message}", by)
-          next
-        end
-        started << c[:id]
-      end
-      started
-    end
+    def team = Team.new(store: @store, launcher: @launcher, sessions: @sessions, grace: @grace)
 
     # The registered sessions: running (against the live list) and the last `ended` ended ones.
     def sessions(ended: 20)
@@ -688,6 +613,18 @@ module AgentsKanban
 
     def labels_json(slug) = @store.labels(slug).map { |l| @store.label_json(l) }
 
+    # The board's lead (Store#lead_state) for the "no lead: press Launch" line: nil on a host with no lead type or an
+    # Api with no sessions port (it launches nothing, so it has no lead to show); the port down → {…, session: nil,
+    # error} (unknown, never "no lead").
+    def lead_json(slug)
+      return nil if @config.lead_types.empty? || @sessions.nil?
+
+      live, err = live_sessions
+      return { type: @config.lead_types.first.key, label: @config.lead_types.first.label, session: nil, error: err } if err
+
+      @store.lead_state(slug, live: live, grace: @grace)
+    end
+
     # [live session names, nil] or [nil, the reason the port could not say]
     def live_sessions
       [@sessions.call, nil]
@@ -742,12 +679,6 @@ module AgentsKanban
         # what the agent says to check, in a gate
         handoff_first_line: b.gate?(c[:column]) && c[:handoff_at] ? first_line(c[:qa_notes]) : nil,
         gate_hold: c[:gate_hold], }
-    end
-
-    # Starts the planned session through the launcher (the launcher's start op with the plan's argv, prompt and vars).
-    def start_session(session, project, type, launcher, plan)
-      @launcher.start(session: session, project: project, type: type.key, launcher: launcher,
-                      argv: plan[:argv], prompt_template: plan[:prompt_template], vars: plan[:vars])
     end
 
     # The question's first non-blank line as plain text (markdown emphasis / code / heading marks dropped), ≤ 160 chars.

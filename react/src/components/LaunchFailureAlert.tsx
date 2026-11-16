@@ -1,8 +1,9 @@
 // The failed-start alert: a modal over the whole page the moment a session the board started (a launch from the bar,
-// a spawn for a card) never came up — claude refused to start, so the host killed it and the engine released its
-// cards. The rows are the engine's (Api#waiting `launch_failures`, the host polls it everywhere); this only remembers,
-// per viewer, the ids dismissed (pruned to the rows the engine still lists), so the next failure opens it again —
-// a spawn retried after its backoff that fails again is a new failure and alerts again.
+// a lead's kanban_spawn) never came up — claude refused to start, so the host killed it and the engine released its
+// cards — or a board's LEAD ended on its own (killed, crashed, closed: nothing relaunches it, the operator presses
+// Launch; lead-first boards). The rows are the engine's (Api#waiting `launch_failures` + `lead_ends`, the host
+// polls it everywhere); this only remembers, per viewer, the ids dismissed (pruned to the rows the engine still lists),
+// so the next failure opens it again.
 // A native <dialog> opened with showModal(): the top layer, above any other modal (the card dialog is one too) and every
 // host overlay — a modal opened AFTER it (a card dialog from the URL) would stack above it, so it re-raises itself
 // (close + showModal = the top of the top layer) whenever another <dialog> opens; the page beneath is inert, so focus stays inside; Esc = the dialog's cancel = Dismiss; on close the
@@ -13,10 +14,11 @@ import { useEffect, useRef, useState } from "react";
 import { isoAt } from "../lib/format";
 import { unseenFailures } from "../lib/launch";
 import { akTokens } from "../lib/theme";
-import type { LaunchFailure } from "../types";
+import type { LaunchFailure, LeadEnd } from "../types";
 
 export type LaunchFailureAlertProps = {
   failures: LaunchFailure[];
+  leadEnds?: LeadEnd[]; // the boards whose lead ended on its own (Api#waiting `lead_ends`)
   storageKey?: string; // localStorage key of the dismissed ids (a JSON array)
   projectHref?: (slug: string) => string; // the host's URL of the project's board: each row links there
 };
@@ -32,17 +34,19 @@ function readSeen(k: string): Set<number> {
 
 export function LaunchFailureAlert({
   failures,
+  leadEnds = [],
   storageKey = "ak-launch-failure-seen",
   projectHref,
 }: LaunchFailureAlertProps) {
   const [seen, setSeen] = useState<Set<number>>(() => readSeen(storageKey));
   const shown = unseenFailures(failures, seen);
+  const leads = leadEnds.filter((l) => !seen.has(l.id)); // registration ids: a lead end is never a failed start
   const ok = useRef<HTMLButtonElement>(null);
   const ref = useRef<HTMLDialogElement>(null);
-  const open = shown.length > 0;
+  const open = shown.length + leads.length > 0;
   const dismiss = () => {
-    // the ids the engine still lists, so the set stays as small as its list (≤ LAUNCH_FAILURES_SHOWN)
-    const next = new Set(failures.map((f) => f.id));
+    // the ids the engine still lists, so the set stays as small as its lists (≤ LAUNCH_FAILURES_SHOWN each)
+    const next = new Set([...failures.map((f) => f.id), ...leadEnds.map((l) => l.id)]);
     try {
       window.localStorage.setItem(storageKey, JSON.stringify([...next]));
     } catch {
@@ -82,9 +86,36 @@ export function LaunchFailureAlert({
   return (
     <dialog ref={ref} className="ak-root ak-alert" role="alertdialog" aria-labelledby="ak-alert-title">
       <h2 id="ak-alert-title">
-        {shown.length === 1 ? "A session did not start" : `${shown.length} sessions did not start`}
+        {[
+          shown.length === 1
+            ? "A session did not start"
+            : shown.length > 1
+              ? `${shown.length} sessions did not start`
+              : null,
+          leads.length === 1
+            ? "A board lost its lead"
+            : leads.length > 1
+              ? `${leads.length} boards lost their lead`
+              : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
       </h2>
       <ul>
+        {leads.map((l) => (
+          <li key={`lead-${l.id}`} data-lead-end={l.id}>
+            <div className="ak-alert-head">
+              <code>{l.session}</code>
+              <span className="muted">
+                {projectHref ? <a href={projectHref(l.project)}>{l.project}</a> : l.project} · {l.type}
+                {l.launcher ? ` · ${l.launcher}` : ""} · ended {isoAt(l.ended)}
+              </span>
+            </div>
+            <pre className="ak-alert-reason">
+              {l.reason} — no {l.type} runs: press Launch on the board (nothing relaunches it)
+            </pre>
+          </li>
+        ))}
         {shown.map((f) => (
           <li key={f.id} data-failure={f.id}>
             <div className="ak-alert-head">

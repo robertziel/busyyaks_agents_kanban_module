@@ -10,8 +10,8 @@ module AgentsKanban
   #
   #   parked     nobody listens; agents may create here; the owner watchdog still releases a card whose owner session
   #              is gone, in place (Backlog)
-  #   queued     work waiting for a session: listened; the watchdog returns a released work card here; an agent type
-  #              may `spawns_for` it (one new session per ownerless card) (To do)
+  #   queued     work waiting for a session: listened; the watchdog returns a released work card here; the board's lead
+  #              takes its ownerless cards and starts a worker per card with kanban_spawn (To do)
   #   working    a work column (several per board: In progress, Author response): listened; the FIRST one in board
   #              order is THE work column — the watchdog releases from it → the queued column, the idle watch looks
   #              there; a released card in any other working column stays where it is
@@ -54,8 +54,8 @@ module AgentsKanban
       ),
       Type.new(
         key: "queued", label: "Queued", hide_after_hours: 72,
-        summary: "work waiting for a session: listened; released work cards return here; a spawner type starts one " \
-                 "session per card",
+        summary: "work waiting for a session: listened; released work cards return here; the board's lead starts " \
+                 "one session per card",
         waiting: false, listened: true, operator_only: false, agent_no_create: false, finishes: false, terminal: false,
         singleton: true
       ),

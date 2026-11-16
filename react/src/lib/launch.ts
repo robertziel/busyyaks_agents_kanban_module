@@ -6,6 +6,7 @@ import type { Concurrency, LaunchFailure, LaunchType } from "../types";
 export function launchBlocked(t: LaunchType, conc: Concurrency | null, sessionsError: string | null): string | null {
   if (sessionsError) return `sessions unknown: ${sessionsError}`;
   if (!conc) return "sessions unknown";
+  if (t.under && !t.follows) return `no ${t.under} runs for this board — launch the ${t.under} first`;
   if (conc.max_sessions !== null && conc.running >= conc.max_sessions)
     return `${conc.running}/${conc.max_sessions} sessions running — the host's cap`;
   if (t.max !== null && (t.running ?? 0) >= t.max)
@@ -15,9 +16,9 @@ export function launchBlocked(t: LaunchType, conc: Concurrency | null, sessionsE
   return null;
 }
 
-// Why the launcher menu is locked: "follows the lead session g_r_teamlead (localclaude)" · null = free to pick.
+// Why the launcher menu is locked: "runs under the lead session g_r_teamlead (localclaude)" · null = free to pick.
 export function launcherLock(t: LaunchType): string | null {
-  return t.follows ? `follows the ${t.follows.type} session ${t.follows.session} (${t.follows.launcher})` : null;
+  return t.follows ? `runs under the ${t.follows.type} session ${t.follows.session} (${t.follows.launcher})` : null;
 }
 
 // "2 / 6 running" · "sessions unknown: launcher down"
@@ -32,7 +33,7 @@ export function capLine(
   return { text: `${conc.running} / ${conc.max_sessions} running`, tone: full ? "warn" : "ok" };
 }
 
-// The launcher to start a type with: the followed session's while one runs (the engine refuses any other), else the
+// The launcher to start a type with: its lead's while one runs (the engine refuses any other), else the
 // viewer's remembered choice when the type still offers it, else the type's first.
 export function pickLauncher(t: LaunchType, remembered: string | null): string {
   if (t.follows) return t.follows.launcher;

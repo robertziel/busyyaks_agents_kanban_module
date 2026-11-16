@@ -41,11 +41,8 @@ launchers:
   - { key: claude, label: claude, kind: claude_code, command: claude, args: [], via_shell: false }
 # AGENT TYPES — what a session launched for a board IS. The library ships none; a launch (the UI's button, the API's
 # POST launch {type, launcher}, an agent's kanban_register) names one. Per type:
-#   launchers        the launcher keys it may run (the UI's pill menu). A start the engine performs and that names
-#                    none (a spawn with no session to follow, POST launch without `launcher`) runs spawn_launcher, or
-#                    the type's ONLY launcher — several and no spawn_launcher → refused with the keys. kanban_register
-#                    (a session started by hand) names its launcher, or the type has only one — never spawn_launcher
-#   spawn_launcher   (optional) the launcher an engine start that names none runs; must be one of `launchers`
+#   launchers        the launcher keys it may run (the UI's pill menu). A start names one (the UI always does), or
+#                    the type has only one — several and none named → refused with the keys; nothing picks one
 #   model            appended as `--model <value>`; null = whatever the launcher starts (Claude Code's own choice); or
 #                    a map launcher key → value naming every launcher of the type (e.g. {claude: <model id>,
 #                    gateway: null}: a gateway launcher picks its own model, and a --model would override it — Claude
@@ -64,12 +61,18 @@ launchers:
 #                    OWNERLESS cards the session adopts (owner + assignee, by rule) the moment it is registered — on
 #                    every board, its columns of those types; a lead takes the project's orphaned work after a reboot
 #                    or a watchdog release; a reviewer or a plain session takes nothing ([])
-#   spawns_for       (optional) column TYPES whose ownerless cards each get ONE NEW session of this type (Api#spawn_pass);
-#                    one spawner type per column type
-#   launcher_follows (optional) another agent type: while a session of it RUNS for the board, a session of this type
-#                    (launched or spawned) runs ITS launcher — a lead started on `gateway` → its sub teams and
-#                    workers run `gateway`; another launcher asked for is refused (422), never swapped. No such
-#                    session running → this type's own launchers. Must list every launcher of the followed type; one level
+#   under            (optional) LEAD-FIRST BOARDS: the lead type a session of this type runs under. Such a
+#                    session exists only while the board's lead RUNS — started by the lead (kanban_spawn; the host
+#                    checks the named session is the lead it started; a guard against cooperative agents, not
+#                    authentication: one MCP bearer can name any tmux session) or by the operator's Launch
+#                    bar —, runs the lead's launcher (another one asked for → 422, never swapped) and is registered
+#                    with the lead's id (CHECK needs_lead = 0 OR lead_id IS NOT NULL refuses it without). No lead →
+#                    refused, from the operator too. The lead type needs max_per_project: 1 and every launcher it runs
+#                    must be in this type's `launchers`; one level. The engine starts NOTHING on its own: an ownerless
+#                    card is the lead's (its `takes`), and with no lead it waits — the board says "no lead".
+#   standalone       (optional) true = a PLAIN session that runs without a lead: prompt null and takes [] (anything told
+#                    what to do or adopting cards runs `under` the lead). Every type is a lead (some type is under it),
+#                    `under` one, or standalone — refused otherwise, so no type runs leaderless by omission
 #   max              sessions of this type at once over every project (null = only the global cap)
 #   max_per_project  sessions of this type at once for ONE project (null = no limit): 1 = never two leads on a board
 agent_types:
@@ -81,18 +84,19 @@ agent_types:
       Lead session for {slug} ({dir}). Your tmux session is {session}; on the board you are {agent} ({type}).
       Your session is registered and owns these cards: {cards}. Owning is not starting: do no work on them until a ping or the operator asks.
       Every card you create is owned by your session (author {agent}).
+      You start your team: kanban_spawn(card, type, tmux_session {session}) gives a card its own session under you.
       Whenever you need the operator's answer about a card: kanban_ask on that card, then end your turn — never only in this chat.
       Never poll the board (no sleep / re-read loops): pings arrive in this session. Reply with one line: the cards you own.
     agent_name: "claude-{session}"
     session_name: "{slug}_teamlead"
-    takes: [working, review, gate]
+    takes: [queued, working, review, gate]
     max: null
     max_per_project: 1
   - key: team
     label: Sub team
     launchers: [claude]
     model: null
-    launcher_follows: lead
+    under: lead
     prompt: |
       Sub team for {slug} ({dir}), session {session}, board name {agent}. Review this repo read-only with parallel subagents and record the result as a note. Do not modify, commit or push anything unless asked in this session. Need the operator's answer about a card: kanban_ask on it, then end your turn.
     agent_name: "team-{session}"
@@ -110,6 +114,7 @@ agent_types:
     takes: []
     max: null
     max_per_project: null
+    standalone: true   # a plain session: runs without a lead (prompt null, takes [] — required for standalone)
 # how many registered agent sessions may run at once on the host — every type and every project together. A launch
 # (or kanban_register) beyond it is refused with who runs; never queued, never exceeded. Running = registered, not
 # ended, in the host's live session list (or registered within the watchdog grace — starting).

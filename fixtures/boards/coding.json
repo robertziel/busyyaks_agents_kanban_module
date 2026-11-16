@@ -48,7 +48,7 @@
       "takes": [],
       "max": 2,
       "max_per_project": null,
-      "launcher_follows": "lead"
+      "under": "lead"
     },
     {
       "key": "plain",
@@ -60,7 +60,8 @@
       "session_name": "{slug}",
       "takes": [],
       "max": null,
-      "max_per_project": null
+      "max_per_project": null,
+      "standalone": true
     }
   ],
   "concurrency": {
