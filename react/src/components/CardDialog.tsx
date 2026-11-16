@@ -222,11 +222,20 @@ function CardDetail({
   // what the card's agent sessions do now (the host's optional sessionsLive port): the owner's line above the newest
   // comment, a dot on each running session's newest comment
   const sessionsLive = api.sessionsLive;
-  const live = useLivePoll(sessionsLive ? () => sessionsLive(id) : null);
+  const live = useLivePoll(
+    sessionsLive
+      ? () =>
+          sessionsLive(id).then((l) => {
+            // an answer without the present list is a failed read, said as one — never "nobody is here"
+            if (!Array.isArray(l.present)) throw new Error("the answer has no present list");
+            return l;
+          })
+      : null,
+  );
   // the agents at work on the card now: the host's `present` (owner first), only from a poll that answered — a failed
   // poll shows nobody here (its error says why), never the last answer; ownership alone is never presence. One small
   // label each (AgentsAtWork); one that left stays through its exit animation.
-  const present: PresentAgent[] = live.error ? [] : (live.value?.present ?? []);
+  const present: PresentAgent[] = live.error || !live.value ? [] : live.value.present;
   const [details, setDetails] = useState(true);
   const [uploads, setUploads] = useState<{ key: number; name: string; pct: number; error?: string }[]>([]);
   const [dragging, setDragging] = useState(false);

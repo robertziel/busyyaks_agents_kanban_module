@@ -1378,7 +1378,10 @@ module AgentsKanban
           out[cid] << who.merge(why: "activity") unless cid == tool_card
         end
       end
-      out.transform_values { |ws| ws.uniq { |w| w[:session] }.sort_by { |w| %w[blocked tool activity].index(w[:why]) } }
+      # blocked, then tool, then activity; the session name breaks ties, so the order holds between polls
+      out.transform_values do |ws|
+        ws.uniq { |w| w[:session] }.sort_by { |w| [%w[blocked tool activity].index(w[:why]), w[:session]] }
+      end
     end
 
     # Reconcile the registry with the host's LIVE session names: a registered session not in the list is ended as gone
