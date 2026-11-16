@@ -364,7 +364,7 @@ describe("faces in the card dialog", () => {
     await waitFor(() => expect(sessionsHere(dialog, "li.kb-agent-live")).toEqual(["s1", "w2 (leaving)"]));
     expect(label.querySelector("[aria-live]")).toBeNull(); // one live region, the row's
     expect(dialog.querySelectorAll(".kb-agents-live [aria-live]")).toHaveLength(1);
-    expect(dialog.querySelector(".kb-agents-live > [aria-live]")).toHaveTextContent(/^w2 left$/);
+    await waitFor(() => expect(dialog.querySelector(".kb-agents-live > [aria-live]")).toHaveTextContent(/^w2 left$/));
     expect(label).toHaveAttribute("aria-hidden", "true");
     expect(label.querySelector("button")).toBeDisabled();
     expect(dialog.querySelector(".kb-work-details")).toBeNull(); // its details left with it
@@ -385,12 +385,15 @@ describe("faces in the card dialog", () => {
     show(
       {
         cards: [card({ id: 3, owner_session: "s1", assignee: "lead-s1" })],
+        activity: [comment(10, "lead-s1")],
         sessions: () => ({ sessions: { s1: live({ phase: "thinking" }) }, present: [] }),
       },
       3,
     );
     const dialog = (await screen.findByLabelText("Comment")).closest<HTMLElement>("[data-card]")!;
-    await act(() => new Promise((r) => setTimeout(r, 50)));
+    // the answer has landed: the owner's comment wears its live mood (no time window — the DOM says so)
+    const own = (await screen.findByText("c10")).closest("li")!;
+    await waitFor(() => expect(own.querySelector("svg.ak-face")).toHaveClass("m-thinking"));
     expect(dialog.querySelector("li.kb-agent-live")).toBeNull();
     expect(dialog.querySelector(".kb-agents-live")).toHaveClass("empty");
     expect(dialog.querySelector(".kb-agents-live [aria-live]")).toBeEmptyDOMElement();
@@ -474,8 +477,11 @@ describe("faces in the card dialog", () => {
       "plain",
     ]);
     expect(row.querySelectorAll("[aria-live]")).toHaveLength(1);
-    expect(row.querySelector("[aria-live]")).toHaveTextContent(
-      /^teamlead is working, worker_2 is working, plain is idle$/,
+    // the announcement is written by an effect after the labels render: wait for the DOM, never a time window
+    await waitFor(() =>
+      expect(row.querySelector("[aria-live]")).toHaveTextContent(
+        /^teamlead is working, worker_2 is working, plain is idle$/,
+      ),
     );
   });
 
@@ -500,7 +506,9 @@ describe("faces in the card dialog", () => {
     expect(button.title.split("\n")).toContain("state: blocked");
     const row = label.closest<HTMLElement>(".kb-agents-live")!;
     expect(sessionsHere(row, "li.kb-agent-live")).toEqual(["w3", "s1"]); // the host's order: blocked first
-    expect(row.querySelector("[aria-live]")).toHaveTextContent(/^w3 is waiting for you, s1 is working$/);
+    await waitFor(() =>
+      expect(row.querySelector("[aria-live]")).toHaveTextContent(/^w3 is waiting for you, s1 is working$/),
+    );
   });
 
   it("a phase change cross-fades: the old phase stays, fading out, until its exit ends", async () => {

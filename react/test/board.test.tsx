@@ -438,7 +438,10 @@ describe("Board", () => {
     expect(line.closest(".kb-agent-live")).toHaveTextContent("s1");
     expect(line.closest(".kb-agent-live")!.querySelector(".kb-work-meta")).toHaveTextContent("42s");
     expect(line.closest(".kb-agent-live")).not.toHaveAttribute("aria-live"); // the timer is never announced
-    expect(document.querySelector(".kb-agents-live > [aria-live]")).toHaveTextContent(/^s1 is working$/);
+    // the announcement is written by an effect after the label renders: wait for the DOM
+    await waitFor(() =>
+      expect(document.querySelector(".kb-agents-live > [aria-live]")).toHaveTextContent(/^s1 is working$/),
+    );
     expect(document.querySelector(".kb-agent-live [aria-live]")).toBeNull();
     expect(screen.getByRole("button", { name: "s1: thinking…, show details" })).toHaveAttribute(
       "title",
