@@ -24,6 +24,8 @@ module AgentsKanban
   #       fresh answer and Approve never waits for a CI read; a card the port cannot answer is logged;
   #       The same pass is the gate watch (card #248): a gate card whose CI turned red pings its owner once; one whose
   #       hold cleared logs "ready for your approval" once;
+  #   3d. the PR watch (the ci: port's optional closed_prs): every PR assigned to a live card stays watched; one closed
+  #       without merging is told ONCE — a comment on the card and a ping to its owner (Store#pr_watch_pass);
   #   4. owner sessions the collector snapshot shows waiting get their screen read: a dialog becomes ONE ask-gate question
   #      once it has stayed on the screen session_dialogs.settle_seconds (first seen → still there that much later);
   #      a host with no collector (agents Refused) or an unreachable one turns off only this step ("dialog scan off");
@@ -46,6 +48,7 @@ module AgentsKanban
       @dialog_scan_off = nil # why the host does not answer the collector snapshot (nil = it does): logged on change
       @dialog_read_failed = {} # session => why its screen could not be read in the last dialog scan: logged on change
       @prefetch_failed = {} # card id => why the approval prefetch could not ask its checks: logged on change
+      @pr_watch_failed = {} # card id => why the PR watch could not read its PRs: logged on change
       @log = log
       # the idle watch's port (errors.rb, CiChecks): a board with idle_watch configured and no port is a wiring error
       @ci = ci
@@ -105,6 +108,7 @@ module AgentsKanban
       @log.puts("session boards archived (inactive): #{shelved.join(', ')}") if shelved.any?
       idle_watch(live)
       approval_prefetch
+      pr_watch
       watch_dialogs
       released
     rescue Delivery::Unavailable, Delivery::Refused => e
@@ -139,6 +143,21 @@ ready: "ready for approval", }
         @log.puts("gate watch: card #{id} #{said.fetch(event)}") if event
       end
       @prefetch_failed = failed
+    end
+
+    # The PRs assigned to live cards (Store#pr_watch_pass): a PR closed without merging is told once on its card and to
+    # its owner. A card whose PRs the port could not read is said once per change of reason, and once when it answers.
+    def pr_watch
+      pass = @store.pr_watch_pass
+      # a card may say several (one per PR it could not read): one line per card, every reason in it
+      failed = pass.select { |_, what| what.is_a?(String) && what.start_with?(UNAVAILABLE) }
+                   .group_by(&:first).transform_values { |w| w.map { |_, x| x.delete_prefix(UNAVAILABLE) }.join("; ") }
+      failed.each { |id, why| @log.puts("pr watch: card #{id}: #{why}") unless @pr_watch_failed[id] == why }
+      (@pr_watch_failed.keys - failed.keys).each { |id| @log.puts("pr watch: card #{id} answered again") }
+      said = { closed: "PR closed without merging, owner pinged",
+               closed_nobody: "PR closed without merging, no owner session to ping", }
+      pass.each { |id, what| @log.puts("pr watch: card #{id} #{said.fetch(what)}") if what.is_a?(Symbol) }
+      @pr_watch_failed = failed
     end
 
     # Owner sessions the collector snapshot shows waiting get their screen read. A stale snapshot skips only this step
