@@ -419,6 +419,18 @@ describe("faces in the card dialog", () => {
     expect(document.querySelector(".kb-agents-live")).toBeNull();
   });
 
+  it('an answer with no `present` list is a failed read, said as one — never "nobody is here"', async () => {
+    show(
+      {
+        cards: [card({ id: 3, owner_session: "s1" })],
+        sessions: () => ({ sessions: {} }) as unknown as SessionsLive,
+      },
+      3,
+    );
+    expect(await screen.findByText(/live status: .*the answer has no present list/)).toBeInTheDocument();
+    expect(document.querySelector(".kb-agents-live")).toBeNull();
+  });
+
   it("only a state change is announced: the counter ticks in the label, never in the live region", async () => {
     let l: Partial<SessionLive> = { phase: "thinking", elapsed_s: 42 };
     show(

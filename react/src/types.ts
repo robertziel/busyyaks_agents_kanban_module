@@ -343,7 +343,6 @@ export type PresentAgent = {
   // (Store#presence; the host lists them in that order)
   why: "blocked" | "tool" | "activity";
 };
-// present: the card's agents at work right now, owner first (absent = the host does not compute presence)
 // present: the agents at work on the card now, as the host reads them (SPEC § 9) — required: the engine never derives it
 export type SessionsLive = { sessions: Record<string, SessionLive>; present: PresentAgent[] };
 export type BoardPresence = { cards: Record<string, PresentAgent[]> }; // card id → the agents at work on it now

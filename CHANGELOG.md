@@ -8,6 +8,15 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Added
 
+- **Agent faces**: `AgentFace` draws every agent identity as two eyes on a disc in its type's colour
+  (`--ak-face-type-<type|role>`), its mood from the live state shown by the eyes alone (CSS only; a still pose under
+  reduced motion). `Avatar`: an agent wears its face; a person shows their picture from `avatar_url`, else the initials.
+  The card and board JSON carry `agents` (agent name → registered type; the newest registration wins); `owned_cards`
+  adds `agent` and `type`.
+- **Presence**: `Store#presence(slug, live:)` = the registered sessions at work on each card now (`why`: `blocked` on a
+  dialog there · `tool` its running tool names the card · `activity` it wrote on the card this turn; ownership alone is
+  not presence). The card dialog shows one small label per present agent (`AgentsAtWork`); the optional
+  `KanbanApi.boardPresence(slug)` port puts their faces on the card faces. SPEC § 9.
 - **A `stuck` CI answer**: the approval gate's `approval_checks` may answer `state: "stuck"` (a check
   pending longer than the host allows). It holds the gate and is red like `failure`: the gate watch pings the owner once
   per `finished_at`; refusals say "CI is stuck". A handoff asks the port with `handoff_ci_url` (its `ci_url`, not written
@@ -32,6 +41,12 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Changed (breaking for hosts)
 
+- **`face_roles` and `avatar_url` are required host-config keys** (null allowed; a bad value fails at load):
+  `face_roles` = null or `{role: [name globs]}` (a subagent whose name matches wears that role's colour);
+  `avatar_url` = null or an https template with `{sha256}` (the SHA-256 of the trimmed, lower-cased email, e.g.
+  Gravatar with `d=404`). Add both before upgrading.
+- **`SessionsLive.present` is required**: a `sessionsLive` answer without the `present` list is a failed read (the
+  dialog says so), never "nobody is here".
 - **The workflow graph runs top to bottom, as a flowchart**: `BoardEditor` draws each column as a
   card (type icon tile, label, mono type line, a status pill from `typeBadge`) on a dotted canvas; dagre lays it out
   top to bottom along the board order (branches side by side), every route orthogonal with its label as a pill on the
