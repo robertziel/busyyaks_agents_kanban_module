@@ -6,6 +6,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type { KanbanApi } from "./api";
 import type { DictationApi } from "./lib/dictation";
+import { faceType } from "./lib/face";
 import type { BoardShapeData, CardFull, HostConfig } from "./types";
 
 export type KanbanHostValue = {
@@ -36,6 +37,14 @@ export function useKanbanHost(): KanbanHostValue {
 // the whole page): null there — no client-side navigation is offered, links are ordinary links.
 export function useKanbanHostIfAny(): KanbanHostValue | null {
   return useContext(Ctx);
+}
+
+// The type a face is coloured by, for the names of one board / card: `agents` = its session registry (name → agent type),
+// the roles = the host config's `face_roles`. Outside a Board (the CardPeek a host mounts for the whole page) no host
+// config is at hand: only registered agents are coloured there.
+export function useFaceType(agents: Record<string, string> | null | undefined): (name: string) => string | null {
+  const roles = useContext(Ctx)?.config.face_roles;
+  return (name) => faceType(name, agents, roles);
 }
 
 // A column's label on this board — a key the board no longer has (an old card's history) shows as the key itself.

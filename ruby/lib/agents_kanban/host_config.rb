@@ -57,7 +57,7 @@ module AgentsKanban
   class HostConfig
     KEYS = %w[priorities label_colors system_author attachment_url_prefix launchers agent_types concurrency owner_sessions
               table_prefix theme idle_watch handoff approval dependencies session_dialogs flags review_loop
-              session_boards].freeze
+              session_boards face_roles avatar_url].freeze
     OWNER_SESSION_GLOB = /\A[A-Za-z0-9._*?-]{1,100}\z/
     TABLE_PREFIX = /\A[a-z][a-z0-9_]{0,30}_\z|\A\z/
     THEME_VAR = /\A--ak-[a-z0-9-]{1,40}\z/
@@ -141,10 +141,21 @@ module AgentsKanban
     SESSION_BOARD_KEYS = %w[slug_prefix idle_hours board].freeze
     SESSION_BOARD_PREFIX = /\A[a-z][a-z0-9_-]{0,30}:\z/
     SessionBoards = Struct.new(:slug_prefix, :idle_hours, :board, keyword_init: true)
+    # face_roles: the colour of a face whose name no session registered (a subagent writes under its own name, e.g.
+    # "reviewer-<agent>"): {role => [name globs]} — a name matching a role's glob wears that role's colour
+    # (--ak-face-type-<role>), as a registered agent wears its type's; first role in order wins; no match = no colour of
+    # its own. null = off. Config, never a name the code knows (SPEC § 9)
+    FACE_ROLE = /\A[a-z][a-z0-9_-]{0,30}\z/
+    FACE_GLOB = /\A[A-Za-z0-9._*?-]{1,100}\z/
+    # avatar_url: where a PERSON's picture comes from (an identity that is an email address): an https URL template with
+    # {sha256} = the hex SHA-256 of the trimmed, lower-cased address (Gravatar's scheme, or any service keyed the same
+    # way); the image the URL answers is shown, an answer with no image shows the initials (no picture on record —
+    # the person's own marker, never another source). null = initials only, nothing leaves the page
+    AVATAR_URL = %r{\Ahttps://[A-Za-z0-9.-]+(?::\d+)?/[A-Za-z0-9._~/%&=?+-]*\{sha256\}[A-Za-z0-9._~/%&=?+-]*\z}
 
     attr_reader :priorities, :label_colors, :system_author, :attachment_url_prefix, :launchers, :agent_types, :concurrency,
                 :owner_sessions, :table_prefix, :theme, :idle_watch, :handoff, :approval, :dependencies, :session_dialogs,
-                :flags, :review_loop, :session_boards, :raw
+                :flags, :review_loop, :session_boards, :face_roles, :avatar_url, :raw
 
     def self.load(path)
       raise ConfigError, "host config not found: #{path}" unless File.file?(path)
@@ -197,6 +208,12 @@ module AgentsKanban
       @flags = parse_flags(hash["flags"])
       @review_loop = hash["review_loop"] && parse_review_loop(hash["review_loop"])
       @session_boards = hash["session_boards"] && parse_session_boards(hash["session_boards"])
+      @face_roles = hash["face_roles"] && parse_face_roles(hash["face_roles"])
+      @avatar_url = hash["avatar_url"]
+      unless @avatar_url.nil? || (@avatar_url.is_a?(String) && @avatar_url.match?(AVATAR_URL))
+        raise ConfigError, "avatar_url must be null or an https URL template with {sha256} " \
+                           "(e.g. https://gravatar.com/avatar/{sha256}?s=80&d=404)"
+      end
       freeze
     end
 
@@ -344,6 +361,17 @@ module AgentsKanban
 
       ReviewLoop.new(max_rounds: n, unresolved_label: name.strip, unresolved_color: color,
                      columns: cols.map(&:strip).freeze).freeze
+    end
+
+    def parse_face_roles(v)
+      raise ConfigError, "face_roles must be null or an object {role: [name globs]}" unless v.is_a?(Hash) && v.any?
+
+      v.each do |role, globs|
+        raise ConfigError, "face_roles: role #{role.inspect} must be [a-z][a-z0-9_-]*" unless role.match?(FACE_ROLE)
+        ok = globs.is_a?(Array) && globs.any? && globs.all? { |g| g.is_a?(String) && g.match?(FACE_GLOB) }
+        raise ConfigError, "face_roles.#{role} must be a non-empty list of name globs ([A-Za-z0-9._*?-])" unless ok
+      end
+      v.transform_values(&:freeze).freeze
     end
 
     def parse_session_boards(v)

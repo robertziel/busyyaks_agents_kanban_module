@@ -416,30 +416,42 @@ describe("Board", () => {
     });
     api.card = (id) => base(id).then((d) => ({ ...d, activity: [comment(10, "lead-s1"), comment(11, "lead-s1")] }));
     let phase: "thinking" | "tool" = "thinking";
-    api.sessionsLive = (id) =>
-      Promise.resolve({
-        sessions: {
-          s1: {
-            state: "working",
-            state_by: "screen: live_turn_working",
-            phase,
-            elapsed_s: 42,
-            tokens: null,
-            tool: phase === "tool" ? "busyyaks · kanban_comment" : null,
-            card: phase === "tool" ? id : null,
-            subagents: null,
-          },
-        },
+    api.sessionsLive = (id) => {
+      const s1 = {
+        state: "working",
+        state_by: "screen: live_turn_working",
+        phase,
+        elapsed_s: 42,
+        tokens: null,
+        tool: phase === "tool" ? "busyyaks · kanban_comment" : null,
+        card: phase === "tool" ? id : null,
+        subagents: null,
+      };
+      // the host says who is at work on the card (its `present`); the engine never derives it from the owner
+      return Promise.resolve({
+        sessions: { s1 },
+        present: [{ session: "s1", agent: "lead-s1", type: null, live: s1, why: "activity" as const }],
       });
+    };
     render(<Host api={api} view={{ card: 3, panel: null, archived: false }} />);
-    const line = await screen.findByText("thinking… · 42s");
+    const line = await screen.findByText("thinking");
     expect(line.closest(".kb-agent-live")).toHaveTextContent("s1");
+    expect(line.closest(".kb-agent-live")!.querySelector(".kb-work-meta")).toHaveTextContent("42s");
     expect(line.closest(".kb-agent-live")).not.toHaveAttribute("aria-live"); // the timer is never announced
-    expect(document.querySelector(".kb-agent-live [aria-live]")).toHaveTextContent(/^s1 is working$/);
+    expect(document.querySelector(".kb-agents-live > [aria-live]")).toHaveTextContent(/^s1 is working$/);
+    expect(document.querySelector(".kb-agent-live [aria-live]")).toBeNull();
+    expect(screen.getByRole("button", { name: "s1: thinking…, show details" })).toHaveAttribute(
+      "title",
+      expect.stringContaining("read from: screen: live_turn_working"),
+    );
     expect(screen.getAllByLabelText("s1 is thinking… · 42s")).toHaveLength(1); // the newest comment only
     expect(screen.getByLabelText("s1 is thinking… · 42s").closest("li")).toHaveAttribute("data-comment", "11");
     phase = "tool";
-    expect(await screen.findByText("writing a comment on this card · 42s", {}, { timeout: 5000 })).toBeInTheDocument();
+    // the label says the tool's own name; the full wording is its accessible name
+    expect(await screen.findByText("kanban_comment", {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "s1: writing a comment on this card, show details" }),
+    ).toBeInTheDocument();
   });
 
   it("a host without sessionsLive shows no live line", async () => {
@@ -448,6 +460,7 @@ describe("Board", () => {
     render(<Host api={api} view={{ card: 4, panel: null, archived: false }} />);
     await screen.findByLabelText("Comment");
     expect(document.querySelector(".kb-agent-live")).toBeNull();
+    expect(document.querySelector(".kb-agents-live")).toBeNull();
   });
 
   it("a card on a workflow board moves by TRANSITION: the list holds the operator's transitions and sends the name", async () => {

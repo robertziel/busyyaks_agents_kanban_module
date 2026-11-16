@@ -323,10 +323,11 @@ module AgentsKanban
     # when it became this owner's (its creation, or its last `owner` activity) at or after the registration's
     # launched_at, on the registration's socket. A session with no open registration is absent: its cards are unknown.
     # Light rows (the agents sidebar reads them every poll). → {[session, socket] => {project_slug:, since:, cards:
-    # [{id, project_slug, title, column, column_label, column_type, finishes, updated_at}]}}, cards in board order.
+    # [{id, project_slug, title, column, column_label, column_type, finishes, updated_at}], agent:, type:}} (the
+    # registration's agent name and type: its face), cards in board order.
     def owned_cards(slugs)
       regs = sessions_t.where(ended_at: nil, project_slug: slugs.to_a)
-        .select(:session, :socket, :project_slug, :launched_at)
+        .select(:session, :socket, :project_slug, :launched_at, :agent_name, :type_key)
         .all
       return {} if regs.empty?
 
@@ -349,7 +350,8 @@ module AgentsKanban
             column_label: t ? b.label(c[:column]) : c[:column],
             column_type: t&.key, finishes: t ? t.finishes : nil, updated_at: c[:updated_at], }
         end
-        [[r[:session], r[:socket]], { project_slug: r[:project_slug], since: r[:launched_at], cards: list }]
+        reg = { project_slug: r[:project_slug], since: r[:launched_at], agent: r[:agent_name], type: r[:type_key] }
+        [[r[:session], r[:socket]], reg.merge(cards: list)]
       end
     end
 
@@ -421,7 +423,15 @@ module AgentsKanban
     # (Attachments#json) over :attachments and whatever else it knows (links, pings, sessions).
     def card_body(c)
       { card: card_json(c, description: true, checklists: checklists(c[:id])),
-        activity: activity(c[:id]).map { |e| activity_json(e) }, }
+        activity: activity(c[:id]).map { |e| activity_json(e) }, agents: agent_types(c[:project_slug]), }
+    end
+
+    # Which agent type each agent name of a project registered as ({agent name => type key}; the newest registration
+    # wins) — what a face's colour is drawn from. A name no session registered under (a subagent's own name, a person)
+    # is absent: its type is unknown, never guessed from the name.
+    def agent_types(slug)
+      sessions_t.where(project_slug: slug.to_s).order(:launched_at, :id).select(:agent_name, :type_key).all
+                .to_h { |r| [r[:agent_name], r[:type_key]] }
     end
 
     # A change made elsewhere (attachments) recorded like every other: the card is touched, the activity says who. → activity id
@@ -1328,6 +1338,47 @@ module AgentsKanban
       return nil if a.empty?
 
       sessions_t.where(ended_at: nil).where(Sequel.|({ agent_name: a }, { session: a })).order(Sequel.desc(:id)).first
+    end
+
+    # Who is at work on a project's cards RIGHT NOW, from the host's live reading of its sessions.
+    # live: {session name => {state:, elapsed_s:, card:, …}} (the host's SessionLive; string or symbol keys). Only an OPEN
+    # registration of this project whose live state is working or blocked counts, on a card of this project when:
+    #   tool     — the tool it runs now names the card (live `card`);
+    #   activity — its agent name wrote on the card (a comment, a move, an edit…) since its current turn began (now −
+    #              elapsed_s; no elapsed reading → this rule says nothing, never a guessed window);
+    #   blocked  — stopped on a dialog / question (state blocked): the card it last wrote on since it registered — the
+    #              one it waits on (the agent the operator most needs to see).
+    # → {card id => [{session, agent, type, why}]} (tool before activity); a session that stops working, or ends, is gone
+    # from the next answer. Ownership alone is not presence: the host shows the assignee's face anyway.
+    def presence(slug, live:)
+      now = @clock.call
+      regs = sessions_t.where(ended_at: nil, project_slug: slug.to_s).order(:launched_at, :id).all
+      at_work = regs.filter_map do |r|
+        l = live[r[:session]] or next
+        l = l.transform_keys(&:to_sym)
+        %w[working blocked].include?(l[:state].to_s) ? [r, l] : nil
+      end
+      return {} if at_work.empty?
+
+      ids = Set.new(cards.where(project_slug: slug.to_s, archived_at: nil).select_map(:id))
+      out = Hash.new { |h, k| h[k] = [] }
+      at_work.each do |r, l|
+        who = { session: r[:session], agent: r[:agent_name], type: r[:type_key] }
+        tool_card = l[:card].is_a?(Integer) && ids.include?(l[:card]) ? l[:card] : nil
+        out[tool_card] << who.merge(why: "tool") if tool_card
+        if l[:state].to_s == "blocked"
+          last = activity_t.where(author: r[:agent_name], card_id: ids.to_a).where { created_at >= r[:launched_at] }
+                           .reverse(:created_at, :id).get(:card_id)
+          out[last] << who.merge(why: "blocked") if last && last != tool_card
+        end
+        next unless l[:elapsed_s].is_a?(Integer)
+
+        activity_t.where(author: r[:agent_name], card_id: ids.to_a).where { created_at >= now - l[:elapsed_s] }
+                  .distinct.select_map(:card_id).each do |cid|
+          out[cid] << who.merge(why: "activity") unless cid == tool_card
+        end
+      end
+      out.transform_values { |ws| ws.uniq { |w| w[:session] }.sort_by { |w| %w[blocked tool activity].index(w[:why]) } }
     end
 
     # Reconcile the registry with the host's LIVE session names: a registered session not in the list is ended as gone

@@ -13,6 +13,7 @@ import type {
   LaunchResult,
   MoveResult,
   SessionsLive,
+  BoardPresence,
 } from "./types";
 
 export type CardPatch = {
@@ -35,6 +36,8 @@ export interface KanbanApi {
   cardRev(id: number): Promise<string>;
   // optional: what the card's agent sessions do now (the card dialog's live line; absent = the host offers none)
   sessionsLive?: (id: number) => Promise<SessionsLive>;
+  // optional: the agents at work on each of the board's cards right now (the card faces; absent = none shown)
+  boardPresence?: (slug: string) => Promise<BoardPresence>;
   createCard(slug: string, body: { title: string; column: string; description?: string }): Promise<CardData>;
   move(id: number, body: { column?: string; transition?: string; position?: number }): Promise<MoveResult>;
   update(id: number, patch: CardPatch): Promise<CardData>;

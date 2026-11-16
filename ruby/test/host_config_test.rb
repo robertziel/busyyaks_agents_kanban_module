@@ -90,6 +90,33 @@ class HostConfigTest < Minitest::Test
     assert_match(/not found/, assert_raises(E) { C.load("/nonexistent.json") }.message)
   end
 
+  # a face whose name no session registered (a subagent's) wears the colour of the role its name matches
+  def test_face_roles_are_role_name_globs_or_null
+    assert_equal({ "reviewer" => ["reviewer-*"], "qa" => ["qa-*"] }, coding.face_roles)
+    assert_nil content.face_roles
+    assert_equal coding.face_roles, coding.to_h["face_roles"], "the client reads them from the host config"
+    bad = ->(v) { r = raw; r["face_roles"] = v; assert_raises(E) { C.new(r) }.message }
+    assert_match(/missing keys face_roles/, assert_raises(E) { C.new(raw.except("face_roles")) }.message)
+    assert_match(/face_roles must be null or an object/, bad.({}))
+    assert_match(/face_roles must be null or an object/, bad.(["reviewer-*"]))
+    assert_match(/role "Reviewer" must be/, bad.({ "Reviewer" => ["r-*"] }))
+    assert_match(/face_roles.qa must be a non-empty list of name globs/, bad.({ "qa" => [] }))
+    assert_match(/face_roles.qa must be a non-empty list of name globs/, bad.({ "qa" => ["qa *"] }))
+    assert_match(/face_roles.qa must be a non-empty list of name globs/, bad.({ "qa" => "qa-*" }))
+  end
+
+  # a person's picture from a service keyed by the email's SHA-256 (Gravatar's scheme), or none
+  def test_avatar_url_is_an_https_template_with_sha256_or_null
+    assert_equal "https://gravatar.com/avatar/{sha256}?s=80&d=404", coding.avatar_url
+    assert_nil content.avatar_url
+    bad = ->(v) { r = raw; r["avatar_url"] = v; assert_raises(E) { C.new(r) }.message }
+    assert_match(/missing keys avatar_url/, assert_raises(E) { C.new(raw.except("avatar_url")) }.message)
+    ["http://gravatar.com/avatar/{sha256}", "https://gravatar.com/avatar/{md5}", "https://x/{sha256}\"onerror=x",
+     "javascript:{sha256}", "", 7, "https://gravatar.com/avatar/",].each do |v|
+      assert_match(/avatar_url must be null or an https URL template with \{sha256\}/, bad.(v), v.inspect)
+    end
+  end
+
   def test_yaml_loads_like_json_and_the_example_is_complete
     Dir.mktmpdir do |d|
       File.write(File.join(d, "b.yml"), YAML.dump(raw))

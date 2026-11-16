@@ -39,6 +39,13 @@ export type HostConfig = {
   flags: { reminder_hours: number };
   // the agent review loop: entries into one review column before it must end at a gate; the label a handoff then carries
   review_loop: { max_rounds: number; unresolved_label: string; unresolved_color: string; columns: string[] } | null;
+  // the colour of a face no session registered (a subagent writing under its own name): {role: [name globs]} — a name
+  // matching a role's glob wears that role's colour, as a registered agent wears its type's (lib/face.ts faceType);
+  // null = off
+  face_roles: Record<string, string[]> | null;
+  // a PERSON's picture: an https URL template with {sha256} of the trimmed, lower-cased email (lib/avatar.ts);
+  // null = initials only, no request leaves the page
+  avatar_url: string | null;
   table_prefix: string;
   theme: Record<string, string>;
 };
@@ -325,7 +332,21 @@ export type SessionLive = {
   card: number | null;
   subagents: number | null;
 };
-export type SessionsLive = { sessions: Record<string, SessionLive> };
+// An agent at work on a card right now (the host computes it): the card's owner, one whose tool call names the card,
+// or one that just acted on it
+export type PresentAgent = {
+  session: string;
+  agent: string;
+  type: string | null;
+  live: SessionLive;
+  // it is stopped on a dialog / question on the card · its running tool names the card · it wrote on the card this turn
+  // (Store#presence; the host lists them in that order)
+  why: "blocked" | "tool" | "activity";
+};
+// present: the card's agents at work right now, owner first (absent = the host does not compute presence)
+// present: the agents at work on the card now, as the host reads them (SPEC § 9) — required: the engine never derives it
+export type SessionsLive = { sessions: Record<string, SessionLive>; present: PresentAgent[] };
+export type BoardPresence = { cards: Record<string, PresentAgent[]> }; // card id → the agents at work on it now
 export type Ping = {
   at: string;
   done_at: string | null;
@@ -355,6 +376,7 @@ export type CardFull = Omit<Card, "attachments"> & { attachments: Attachment[] }
 export type CardData = {
   card: CardFull;
   activity: Activity[];
+  agents?: Record<string, string>; // agent name → agent type key (the session registry; a name absent = type unknown)
   pings?: Ping[];
   links?: CardLink[];
   live_sessions?: string[] | null;
@@ -385,6 +407,7 @@ export type BacklogTask = {
 // Api#board + the host's board_extras (assignees, launcher_error, live sessions)
 export type BoardData = {
   project: string;
+  agents?: Record<string, string>; // agent name → agent type key (the session registry; a name absent = type unknown)
   labels: BoardLabel[];
   label_colors: string[];
   columns: BoardColumn[];

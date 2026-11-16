@@ -665,7 +665,8 @@ module AgentsKanban
       cols = cols.slice(col) if col
       out = { project: p[:slug], labels: labels_json(p[:slug]),
               columns: cols.map { |k, cs| column_json(b, k, cs) },
-              config: @config.to_h, board: @store.board_json(p[:slug], board: b), }
+              config: @config.to_h, board: @store.board_json(p[:slug], board: b),
+              agents: @store.agent_types(p[:slug]), }
       out[:archived] = @store.archived(p[:slug]).map { |c| @store.card_json(c) } if archived
       out[:backlog_md] = BacklogMd.json(@backlog&.call(p, b), column: col)
       out

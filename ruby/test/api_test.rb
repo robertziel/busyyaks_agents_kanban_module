@@ -30,6 +30,13 @@ class ApiTest < Minitest::Test
     super
   end
 
+  def test_board_and_card_name_each_registered_agents_type
+    id = kb.create(slug: "g/r", title: "x", by: "op")
+    kb.register_session(session: "tl_g_r", project: "g/r", type: "lead", launcher: "fullclaude", by: "op")
+    assert_equal({ "claude-tl_g_r" => "lead" }, @api.board("g/r")[1][:agents])
+    assert_equal({ "claude-tl_g_r" => "lead" }, @api.card(id)[1][:agents])
+  end
+
   def test_board_lifecycle
     s, j = @api.board("g/r")
     assert_equal 200, s
@@ -44,6 +51,7 @@ class ApiTest < Minitest::Test
                  [j[:board][:columns], j[:board][:transitions], j[:board][:rules][:waiting]]
     assert_equal %w[parked queued working review gate gate done], j[:columns].map { |c| c[:type] }
     assert_nil j[:backlog_md]
+    assert_equal({}, j[:agents], "no session registered: no agent's type known")
     assert_equal [404, { error: "no project nope" }], @api.board("nope")
     assert_equal 422, @api.board("g/r", column: "x")[0]
 

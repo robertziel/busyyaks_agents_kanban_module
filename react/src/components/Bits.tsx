@@ -10,10 +10,35 @@ import {
   type ReactNode,
 } from "react";
 import { useKanbanHostIfAny } from "../host";
+import { usePersonAvatar } from "../lib/avatar";
+import { wearsFace, type Mood } from "../lib/face";
 import { hue, initials } from "../lib/format";
 import type { Card, SessionLinks } from "../types";
+import { AgentFace } from "./AgentFace";
 
-export function Avatar({ name, email }: { name: string; email: string }) {
+// Who it is, at a glance: a person (an identity that is an email address) keeps the initials; an agent wears its
+// face (AgentFace: two eyes) — the disc its agent type's colour (type: the board's `agents[name]`; unknown = neutral), moving with its
+// mood when the caller reads one off a live session.
+export function Avatar({
+  name,
+  email,
+  type,
+  mood,
+}: {
+  name: string;
+  email: string;
+  type?: string | null;
+  mood?: Mood | null;
+}) {
+  // the operator keeps the initials whatever form its name takes (a host with no sign-in names it e.g. "operator")
+  const host = useKanbanHostIfAny();
+  const me = host?.me;
+  const agent = wearsFace(email) && email !== me;
+  // a person's picture from the host's avatar_url (by the email's SHA-256); none on record → the initials
+  const [src, failed] = usePersonAvatar(agent ? null : host?.config.avatar_url, email);
+  if (agent) return <AgentFace name={email} type={type} mood={mood} />;
+  if (src)
+    return <img className="avatar avatar-img" src={src} alt={name} title={`${name} <${email}>`} onError={failed} />;
   return (
     <span className="avatar" style={{ "--h": hue(email) } as CSSProperties} title={`${name} <${email}>`}>
       {initials(name)}

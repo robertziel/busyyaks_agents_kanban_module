@@ -236,7 +236,7 @@ class StoreTest < Minitest::Test
     owned = kb.owned_cards(@boards)
     assert_equal [%w[s1 default]], owned.keys, "a session with no open registration is absent (unknown), not empty"
     r = owned[%w[s1 default]]
-    assert_equal ["p", 2_000], r.values_at(:project_slug, :since)
+    assert_equal ["p", 2_000, "claude-s1", "lead"], r.values_at(:project_slug, :since, :agent, :type)
     assert_equal [[a, "doing", "In progress", "working", false], [b, "merged", "Merged", "done", true]],
                  r[:cards].map { |c| c.values_at(:id, :column, :column_label, :column_type, :finishes) }
     assert_empty kb.owned_cards([])
@@ -1125,6 +1125,51 @@ class StoreTest < Minitest::Test
     id = kb.create(slug: "g/r", title: "D", by: "claude-tl_g_r", owner_session: "tl_g_r")
     assert_equal %w[claude-tl_g_r tl_g_r], kb.card(id).values_at(:assignee, :owner_session)
     assert_equal "created in Backlog · owner session: tl_g_r (claude-tl_g_r)", kb.activity(id).first[:body]
+  end
+
+  # a face's colour: each agent name's registered type on the project, the newest registration winning; a name nobody
+  # registered (a subagent, a person) is absent, never guessed
+  def test_agent_types_are_the_projects_registrations_newest_wins
+    assert_equal({}, kb.agent_types("g/r"))
+    kb.register_session(session: "tl_g_r", project: "g/r", type: "lead", launcher: "fullclaude", by: "op")
+    kb.register_session(session: "w_1", project: "g/r", type: "team", launcher: "fullclaude", by: "op")
+    kb.register_session(session: "on_p", project: "p", type: "lead", launcher: "fullclaude", by: "op")
+    assert_equal({ "claude-tl_g_r" => "lead", "team-w_1" => "team" }, kb.agent_types("g/r"))
+    kb.end_session("tl_g_r", reason: "done", by: "op")
+    kb.register_session(session: "tl_g_r", project: "g/r", type: "plain", launcher: "localclaude", by: "op")
+    types = kb.agent_types("g/r")
+    assert_equal "plain", types["claude-tl_g_r"], "the newest registration of a name wins"
+    refute types.key?("claude-on_p"), "another board's sessions are not this board's"
+    id = kb.create(slug: "g/r", title: "x", by: "op")
+    assert_equal types, kb.card_body(kb.card(id))[:agents]
+  end
+
+  # presence: who works on a card right now — the card its running tool names, or a card its agent wrote on
+  # since its turn began; idle / ended / another board's sessions are not there, ownership alone is not presence
+  def test_presence_is_the_running_tool_card_or_this_turns_activity
+    a = kb.create(slug: "g/r", title: "A", by: "op", column: "todo")
+    b = kb.create(slug: "g/r", title: "B", by: "op", column: "todo")
+    c = kb.create(slug: "g/r", title: "C", by: "op", column: "todo")
+    kb.register_session(session: "tl_g_r", project: "g/r", type: "lead", launcher: "fullclaude", by: "op")
+    kb.register_session(session: "on_p", project: "p", type: "lead", launcher: "fullclaude", by: "op")
+    kb.set_owner(c, session: "tl_g_r", by: "op")
+    @now += 600
+    kb.comment(b, body: "old note", author: "claude-tl_g_r")       # 10 min before the turn below began
+    @now += 100
+    kb.comment(b, body: "checked", author: "claude-tl_g_r")        # in this turn
+    lead = { session: "tl_g_r", agent: "claude-tl_g_r", type: "lead" }
+    working = { "tl_g_r" => { "state" => "working", "elapsed_s" => 30, "card" => a },
+                "on_p" => { "state" => "working", "card" => a }, }
+    assert_equal({ a => [lead.merge(why: "tool")], b => [lead.merge(why: "activity")] }, kb.presence("g/r", live: working))
+    assert_equal({ a => [lead.merge(why: "tool")], b => [lead.merge(why: "blocked")] },
+                 kb.presence("g/r", live: { "tl_g_r" => { state: "blocked", card: a } }),
+                 "blocked: on the card it last wrote on (b), the activity rule needs an elapsed reading")
+    assert_equal({ b => [lead.merge(why: "blocked")] }, kb.presence("g/r", live: { "tl_g_r" => { state: "blocked" } }),
+                 "stopped on a dialog: present on the card it waits on")
+    assert_equal({}, kb.presence("g/r", live: { "tl_g_r" => { "state" => "idle", "elapsed_s" => 30, "card" => a } }))
+    assert_equal({}, kb.presence("g/r", live: {}), "a session the host does not see is gone")
+    kb.end_session("tl_g_r", reason: "done", by: "op")
+    assert_equal({}, kb.presence("g/r", live: working), "an ended registration is not at work")
   end
 
   # a session registered for g/r creating a card on p's board does not own it, and cannot claim it

@@ -40,5 +40,7 @@
   "session_boards": null,
   "session_dialogs": { "settle_seconds": 0, "context_minutes": 10 },
   "flags": { "reminder_hours": 24 },
-  "review_loop": null
+  "review_loop": null,
+  "face_roles": null,
+  "avatar_url": null
 }

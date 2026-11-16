@@ -206,3 +206,15 @@ flags: { reminder_hours: 24 }
 # null = no round limit, no label.
 review_loop: { max_rounds: 3, unresolved_label: unresolved, unresolved_color: red,
                columns: [local_agent_review, public_agent_review] }
+
+# the colour of a face whose name no session registered — a subagent writes under its own name ("reviewer-<agent>",
+# "qa-<agent>"): {role: [name globs]}; a name matching a role's glob wears that role's colour (--ak-face-type-<role> in
+# `theme`, else a hue hashed from the role), the way a registered agent wears its type's. First role in order wins; no
+# match = no colour of its own (--ak-face-unknown). null = off: only registered agents are coloured.
+face_roles: { reviewer: ["reviewer-*"], qa: ["qa-*"] }
+
+# a PERSON's picture (an identity that is an email address): an https URL template with {sha256} = the hex SHA-256 of
+# the trimmed, lower-cased address — Gravatar's scheme (d=404: no picture on record answers 404, and the initials show).
+# The browser asks that host for every person on the board, so its domain must be allowed by the host page's CSP
+# (img-src). null = initials only, no request leaves the page.
+avatar_url: null

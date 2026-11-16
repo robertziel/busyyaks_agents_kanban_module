@@ -4324,23 +4324,9 @@
   overflow: hidden;
 }
 
-/* The card dialog's live agent line + the dot on a running session's newest comment (SPEC § 9): the dot pulses while
-   the turn runs (working: accent; blocked on the operator: warn); still under prefers-reduced-motion. */
-.ak-root .kb-activity > li.kb-agent-live {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding: 6px 10px;
-  border-radius: var(--ak-radius-ctl);
-  background: var(--ak-mat-fill-2);
-  font-size: 12.5px;
-  color: var(--ak-ink-faint);
-}
-.ak-root .kb-agent-live-text {
-  color: var(--ak-ink);
-  font-variant-numeric: tabular-nums;
-}
+/* The dot on a running session's newest comment (SPEC § 9; the agents at work themselves: "The agents-at-work labels"
+   below): it pulses while the turn runs (working: accent; blocked on the operator: warn); still
+   under prefers-reduced-motion. */
 .ak-root .kb-live-dot {
   display: inline-block;
   flex: none;
@@ -4390,4 +4376,582 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* Agent faces (components/AgentFace.tsx): two eyes on a disc coloured by the agent TYPE; the mood is the eyes alone.
+   NOT scoped under .ak-root — a host draws the same faces in its own agent lists — so every token has a default here.
+   A host theme sets:
+     --ak-face-type-<type key>  the disc of every agent of that type (default: a hue hashed from the key)
+     --ak-face-unknown          the disc of an identity with no known type
+     --ak-face-eye              the eyes' colour (default near-black)
+     --ak-face-size             a face's size where its context sets none (24px)
+   Two layers move: .yf-look (where the pair of eyes looks) and .yf-eye (each eye's lid: blink, squint, wide). Each has
+   a POSE — its mood's --yf-x / --yf-y / --yf-sx / --yf-sy — and a MOTION around it — the mood's `transform` animation
+   (blinks, saccades with holds, a reading sweep). Under prefers-reduced-motion the motion stops and the pose stays:
+   every mood keeps its own still face. CSS only (no timer per face); --yf-d (a per-face
+   offset, AgentFace) keeps a row of faces from blinking together. */
+.ak-face {
+  --yf-bg: var(--ak-face-unknown, var(--ak-ink-faint, #8e8e93));
+  --yf-ink: var(--ak-face-eye, #16181d);
+  --yf-x: 0px;
+  --yf-y: 0px;
+  --yf-sx: 1;
+  --yf-sy: 1;
+  display: inline-block;
+  flex: none;
+  width: var(--ak-face-size, 24px);
+  height: var(--ak-face-size, 24px);
+  vertical-align: middle;
+}
+.ak-face .yf-bg {
+  fill: var(--yf-bg);
+  transition: fill 0.4s ease;
+}
+.ak-face .yf-eye {
+  fill: var(--yf-ink);
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(var(--yf-sx), var(--yf-sy));
+  transition: transform 0.35s cubic-bezier(0.3, 0, 0.2, 1);
+}
+.ak-face .yf-shut {
+  fill: none;
+  stroke: var(--yf-ink);
+  stroke-width: 4;
+  stroke-linecap: round;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+.ak-face .yf-open {
+  transition: opacity 0.35s ease;
+}
+.ak-face .yf-look {
+  transform: translate(var(--yf-x), var(--yf-y));
+  transition: transform 0.45s cubic-bezier(0.3, 0, 0.2, 1);
+}
+
+/* the poses: one per mood, still — where the eyes look (--yf-x / --yf-y, in the face's 64 units) and how open each is
+   (--yf-sx / --yf-sy). Every motion below is written around them, so a pose holds while its animation runs. */
+.ak-face.m-idle {
+  --yf-sy: 0.68; /* half lids: relaxed */
+}
+.ak-face.m-working {
+  --yf-sy: 1.12; /* alert */
+}
+.ak-face.m-thinking {
+  --yf-y: -9px; /* looking up */
+}
+.ak-face.m-tool {
+  --yf-sy: 0.36; /* a focused squint */
+}
+.ak-face.m-writing {
+  --yf-y: 8px; /* looking down at the line */
+  --yf-sy: 0.8;
+}
+.ak-face.m-subagents {
+  --yf-x: -10px; /* looking aside, at them */
+}
+.ak-face.m-blocked {
+  --yf-sx: 1.32; /* wide open, at you */
+  --yf-sy: 1.32;
+}
+.ak-face.m-sleeping {
+  --yf-y: 2px;
+}
+.ak-face.m-sleeping .yf-open {
+  opacity: 0;
+}
+.ak-face.m-sleeping .yf-shut {
+  opacity: 1;
+}
+
+/* the motion. Awake (any mood but sleeping): a blink on the face's own beat — one, later a quick double */
+.ak-face[data-mood] .yf-eye {
+  animation: yf-blink 6.4s var(--yf-d, 0s) infinite;
+}
+/* sleeping: a slow breath */
+.ak-face.m-sleeping .yf-look {
+  animation: yf-breathe 4.6s var(--yf-d, 0s) ease-in-out infinite;
+}
+/* idle: now and then the eyes wander off and come back */
+.ak-face.m-idle .yf-eye {
+  animation-duration: 7.6s;
+}
+.ak-face.m-idle .yf-look {
+  animation: yf-wander 11s calc(var(--yf-d, 0s) * 2) infinite;
+}
+/* working: blinking faster, quick glances around */
+.ak-face.m-working .yf-eye {
+  animation-duration: 4.2s;
+}
+.ak-face.m-working .yf-look {
+  animation: yf-glance 5.2s var(--yf-d, 0s) infinite;
+}
+/* thinking: up there, drifting from one side to the other, slow blinks */
+.ak-face.m-thinking .yf-eye {
+  animation-duration: 8.2s;
+}
+.ak-face.m-thinking .yf-look {
+  animation: yf-ponder 5.6s var(--yf-d, 0s) ease-in-out infinite;
+}
+/* running a tool: scanning in steps, left · centre · right */
+.ak-face.m-tool .yf-eye {
+  animation-duration: 5s;
+}
+.ak-face.m-tool .yf-look {
+  animation: yf-scan 2.2s var(--yf-d, 0s) infinite;
+}
+/* writing: reading along the line, then a quick sweep back to its start */
+.ak-face.m-writing .yf-look {
+  animation: yf-read 2.6s var(--yf-d, 0s) infinite;
+}
+/* waiting for its subagents: looking from one to the other */
+.ak-face.m-subagents .yf-look {
+  animation: yf-watch 3.6s var(--yf-d, 0s) infinite;
+}
+/* waiting for you: a small double hop, the wide eyes swelling a little */
+.ak-face.m-blocked .yf-eye {
+  animation: yf-wide 2.4s ease-in-out infinite;
+}
+.ak-face.m-blocked .yf-look {
+  animation: yf-hop 2.4s infinite;
+}
+/* the lid comes down fast and lifts a little slower; the second pair is the double blink */
+@keyframes yf-blink {
+  0%,
+  22%,
+  27%,
+  64%,
+  68.4%,
+  73%,
+  100% {
+    transform: scale(var(--yf-sx), var(--yf-sy));
+    animation-timing-function: ease-in;
+  }
+  24%,
+  66%,
+  70.4% {
+    transform: scale(var(--yf-sx), calc(var(--yf-sy) * 0.08));
+    animation-timing-function: ease-out;
+  }
+}
+@keyframes yf-wide {
+  0%,
+  100% {
+    transform: scale(var(--yf-sx), var(--yf-sy));
+  }
+  50% {
+    transform: scale(calc(var(--yf-sx) * 1.07), calc(var(--yf-sy) * 1.07));
+  }
+}
+@keyframes yf-breathe {
+  0%,
+  100% {
+    transform: translate(var(--yf-x), calc(var(--yf-y) + -1px));
+  }
+  50% {
+    transform: translate(var(--yf-x), calc(var(--yf-y) + 1.5px));
+  }
+}
+/* saccades: a quick move (two close keyframes), then a hold */
+@keyframes yf-wander {
+  0%,
+  52%,
+  78%,
+  100% {
+    transform: translate(var(--yf-x), var(--yf-y));
+    animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  56%,
+  74% {
+    transform: translate(calc(var(--yf-x) + 5px), calc(var(--yf-y) + -2px));
+    animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+@keyframes yf-glance {
+  0%,
+  28%,
+  84%,
+  100% {
+    transform: translate(var(--yf-x), var(--yf-y));
+    animation-timing-function: cubic-bezier(0.5, 0, 0.2, 1);
+  }
+  32%,
+  50% {
+    transform: translate(calc(var(--yf-x) + -5px), var(--yf-y));
+    animation-timing-function: cubic-bezier(0.5, 0, 0.2, 1);
+  }
+  55%,
+  78% {
+    transform: translate(calc(var(--yf-x) + 5px), calc(var(--yf-y) + -1px));
+    animation-timing-function: cubic-bezier(0.5, 0, 0.2, 1);
+  }
+}
+@keyframes yf-ponder {
+  0%,
+  100% {
+    transform: translate(calc(var(--yf-x) + -4px), var(--yf-y));
+  }
+  25% {
+    transform: translate(calc(var(--yf-x) + -1px), calc(var(--yf-y) + -1.5px));
+  }
+  50%,
+  62% {
+    transform: translate(calc(var(--yf-x) + 5px), var(--yf-y));
+  }
+  80% {
+    transform: translate(calc(var(--yf-x) + 1px), calc(var(--yf-y) + -1.5px));
+  }
+}
+@keyframes yf-scan {
+  0%,
+  22%,
+  100% {
+    transform: translate(calc(var(--yf-x) + -5px), var(--yf-y));
+    animation-timing-function: cubic-bezier(0.5, 0, 0.2, 1);
+  }
+  30%,
+  52% {
+    transform: translate(var(--yf-x), var(--yf-y));
+    animation-timing-function: cubic-bezier(0.5, 0, 0.2, 1);
+  }
+  60%,
+  88% {
+    transform: translate(calc(var(--yf-x) + 5px), var(--yf-y));
+    animation-timing-function: cubic-bezier(0.5, 0, 0.2, 1);
+  }
+}
+@keyframes yf-read {
+  0% {
+    transform: translate(calc(var(--yf-x) + -6px), var(--yf-y));
+    animation-timing-function: linear;
+  }
+  80%,
+  86% {
+    transform: translate(calc(var(--yf-x) + 6px), var(--yf-y));
+    animation-timing-function: cubic-bezier(0.6, 0, 0.2, 1);
+  }
+  94%,
+  100% {
+    transform: translate(calc(var(--yf-x) + -6px), var(--yf-y));
+  }
+}
+/* from the pose (looking left) across to the right and back, a hold on each side */
+@keyframes yf-watch {
+  0%,
+  38%,
+  100% {
+    transform: translate(var(--yf-x), var(--yf-y));
+    animation-timing-function: cubic-bezier(0.5, 0, 0.2, 1);
+  }
+  46%,
+  88% {
+    transform: translate(calc(var(--yf-x) + 20px), var(--yf-y));
+    animation-timing-function: cubic-bezier(0.5, 0, 0.2, 1);
+  }
+}
+@keyframes yf-hop {
+  0%,
+  40%,
+  100% {
+    transform: translate(var(--yf-x), var(--yf-y));
+    animation-timing-function: ease-out;
+  }
+  10% {
+    transform: translate(var(--yf-x), calc(var(--yf-y) + -4.5px));
+    animation-timing-function: ease-in;
+  }
+  20% {
+    transform: translate(var(--yf-x), var(--yf-y));
+    animation-timing-function: ease-out;
+  }
+  28% {
+    transform: translate(var(--yf-x), calc(var(--yf-y) + -2px));
+    animation-timing-function: ease-in;
+  }
+}
+
+/* a person's picture (lib/avatar.ts, the host's avatar_url) in an initials avatar's place: the same round box */
+.ak-root img.avatar {
+  display: inline-block;
+  object-fit: cover;
+  background: var(--ak-mat-fill);
+}
+
+/* a face in the places an initials avatar stands */
+.ak-root .kb-who .ak-face,
+.ak-root .kb-badges .ak-face {
+  width: 20px;
+  height: 20px;
+}
+.ak-root .kb-activity > li.ev .ak-face {
+  width: 18px;
+  height: 18px;
+}
+
+/* The agents at work on a card right now (components/Faces.tsx): a stack of faces beside the assignee's on a card
+   face (the card dialog shows them as labels: "The agents-at-work labels" below). A face pops in when its agent arrives and shrinks away when it leaves
+   (the element stays through its exit); instant under prefers-reduced-motion. */
+.ak-root .kb-here {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.ak-root .kb-here > .kb-here-face {
+  display: inline-grid;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px var(--ak-panel);
+  animation: kb-here-in 0.36s cubic-bezier(0.3, 1.5, 0.5, 1) both;
+}
+.ak-root .kb-here > .kb-here-face + .kb-here-face {
+  margin-left: -5px;
+}
+.ak-root .kb-here > .kb-here-face.leaving {
+  animation: kb-here-out 0.3s ease-in both;
+}
+.ak-root .kb-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+@keyframes kb-here-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px) scale(0.3);
+  }
+}
+@keyframes kb-here-out {
+  to {
+    opacity: 0;
+    transform: scale(0.2);
+    width: 0;
+    margin-left: 0;
+  }
+}
+
+/* The agents-at-work labels (the card dialog, above the newest comment; SPEC § 9): one small pill per present agent —
+   its face wearing its mood, the session, the phase in words, the elapsed time — side by side, wrapping. A click opens
+   that agent's details under the row; the tooltip carries the same facts. */
+.ak-root .kb-activity > li.kb-live-err {
+  display: block;
+  font-size: 12px;
+}
+/* the row opens and closes with its first / last agent (a grid row 0fr ↔ 1fr), so the comments under it glide instead
+   of jumping; empty, it takes no room — not the list's 10px gap either */
+.ak-root .kb-activity > li.kb-agents-live {
+  position: relative;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 1fr;
+  gap: 0;
+  font-size: 12px;
+  transition:
+    grid-template-rows 0.28s ease,
+    margin-bottom 0.28s ease;
+}
+.ak-root .kb-activity > li.kb-agents-live.empty {
+  grid-template-rows: 0fr;
+  margin-bottom: -10px;
+}
+/* 3px of room around the labels (a focus ring, the pop-in) inside the clip */
+.ak-root .kb-agents-live-in {
+  min-height: 0;
+  overflow: hidden;
+  padding: 3px;
+  margin: -3px;
+}
+.ak-root .kb-work-labels {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 6px;
+  min-width: 0;
+}
+.ak-root .kb-agent-live {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  position: relative;
+  animation: kb-work-in 0.3s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+}
+.ak-root .kb-agent-live.leaving {
+  animation: kb-work-out 0.28s ease-in both;
+  pointer-events: none;
+}
+.ak-root .kb-work-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 9px 0 3px;
+  border: 0;
+  border-radius: var(--ak-radius-pill);
+  background: var(--ak-mat-fill-2);
+  box-shadow: inset 0 0 0 1px var(--ak-line);
+  color: var(--ak-ink-dim);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ak-root .t-working > .kb-work-label {
+  background: rgba(var(--ak-accent-rgb), 0.08);
+  box-shadow: inset 0 0 0 1px rgba(var(--ak-accent-rgb), 0.3);
+}
+.ak-root .t-blocked > .kb-work-label {
+  background: rgba(var(--ak-warn-rgb), 0.13);
+  box-shadow: inset 0 0 0 1px rgba(var(--ak-warn-rgb), 0.5);
+}
+.ak-root .kb-work-label:hover,
+.ak-root .open > .kb-work-label {
+  box-shadow: inset 0 0 0 1px var(--ak-line-strong);
+  color: var(--ak-ink);
+}
+.ak-root .kb-work-label:focus-visible {
+  outline: 2px solid var(--ak-accent);
+  outline-offset: 1px;
+}
+/* the face is part of the label: the label's own tooltip answers a hover on it */
+.ak-root .kb-work-label > .ak-face {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+.ak-root .kb-work-who {
+  flex: 0 1 auto;
+  min-width: 3ch;
+  max-width: 15ch;
+  color: var(--ak-ink);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ak-root .kb-work-phases {
+  flex: 0 1 auto;
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  max-width: 14ch;
+}
+.ak-root .kb-work-phase {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  animation: kb-phase-in 0.25s ease both;
+}
+/* the phase that was: over the new one, taking no room, fading out */
+.ak-root .kb-work-phase.out {
+  position: absolute;
+  inset: 0 auto 0 0;
+  animation: kb-phase-out 0.2s ease both;
+  pointer-events: none;
+}
+.ak-root .kb-agent-live-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ak-root .kb-work-phases::before,
+.ak-root .kb-work-meta::before {
+  content: "·";
+  flex: none;
+  margin-right: 6px;
+  color: var(--ak-ink-faint);
+}
+.ak-root .kb-work-meta {
+  flex: none;
+  color: var(--ak-ink-faint);
+  font-family: var(--ak-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.ak-root .kb-work-details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 10px;
+  margin: 6px 0 0;
+  padding: 7px 10px;
+  border-radius: var(--ak-radius-band);
+  background: var(--ak-mat-fill-2);
+  box-shadow: inset 0 0 0 1px var(--ak-line);
+  animation: kb-phase-in 0.2s ease both;
+}
+.ak-root .kb-work-details > div {
+  display: contents;
+}
+.ak-root .kb-work-details dt {
+  color: var(--ak-ink-faint);
+}
+.ak-root .kb-work-details dd {
+  margin: 0;
+  color: var(--ak-ink);
+  font-family: var(--ak-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+@keyframes kb-work-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+/* the label shrinks out of the row: its room closes with it (the row's 6px gap too) */
+@keyframes kb-work-out {
+  from {
+    max-width: 320px;
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.6);
+    max-width: 0;
+    margin-right: -6px;
+  }
+}
+@keyframes kb-phase-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes kb-phase-out {
+  to {
+    opacity: 0;
+  }
+}
+@media (max-width: 600px) {
+  /* phone: the face (its eyes say the phase, the pill's colour who waits for you) and the short name — the phase in
+     words and the time are in the tooltip and the details */
+  .ak-root .kb-work-label {
+    gap: 5px;
+    padding-right: 8px;
+  }
+  .ak-root .kb-work-who {
+    max-width: 10ch;
+  }
+  .ak-root .kb-work-phases,
+  .ak-root .kb-work-meta {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ak-face *,
+  .ak-root .kb-here > .kb-here-face,
+  .ak-root li.kb-agent-live,
+  .ak-root li.kb-agents-live,
+  .ak-root .kb-work-phase,
+  .ak-root .kb-work-details {
+    /* !important: every mood rule (.ak-face.m-<mood> .yf-…, .ak-face[data-mood] .yf-eye) is more specific than these */
+    animation: none !important;
+    transition: none !important;
+  }
+  /* each mood keeps its pose (the --yf-* of "Agent faces"), standing still */
+  /* what would have animated away is gone at once */
+  .ak-root .kb-work-phase.out,
+  .ak-root .kb-here > .kb-here-face.leaving,
+  .ak-root li.kb-agent-live.leaving {
+    display: none;
+  }
 }
