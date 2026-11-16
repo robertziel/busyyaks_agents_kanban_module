@@ -209,6 +209,31 @@ describe("Board", () => {
     expect(screen.getByText("⏳ PR #7: CI is still running")).toBeInTheDocument();
   });
 
+  // lead-first boards: no lead runs → the board says so (the operator presses Launch); unknown ≠ no lead
+  it("says 'no lead: press Launch' while the board's lead does not run, and says unknown when it cannot tell", async () => {
+    const cards = [card({ id: 1, column: "todo", title: "Waits" })];
+    const ended = { session: "g_r_teamlead", reason: "gone from the host's session list", at: "2026-11-15T03:09:34Z" };
+    const none = { ...boardData(coding, cards), lead: { type: "lead", label: "Launch", session: null, ended } };
+    const { unmount } = render(<Host api={fakeApi(none, cards)} />);
+    await screen.findByText("Waits");
+    const flash = document.querySelector("[data-no-lead]")!;
+    expect(flash.textContent).toMatch(/^no lead: press Launch — ownerless cards wait for it · g_r_teamlead ended /);
+    expect(flash.textContent).toMatch(/\(gone from the host's session list\)$/);
+    unmount();
+    const running = { ...boardData(coding, cards), lead: { type: "lead", label: "Launch", session: "g_r_teamlead" } };
+    const r2 = render(<Host api={fakeApi(running, cards)} />);
+    await screen.findByText("Waits");
+    expect(document.querySelector("[data-no-lead]")).toBeNull();
+    r2.unmount();
+    const unknown = {
+      ...boardData(coding, cards),
+      lead: { type: "lead", label: "Launch", session: null, error: "launcher down" },
+    };
+    render(<Host api={fakeApi(unknown, cards)} />);
+    await screen.findByText("Waits");
+    expect(document.querySelector("[data-no-lead]")!.textContent).toBe("Launch session unknown: launcher down");
+  });
+
   // a card blocked on the world (another card, CI, a third party) is not waiting for the operator
   it("a blocked_external card is counted as blocked externally, not as waiting for you", async () => {
     const blocked = { reason: "waits for card #3", url: "https://ci/1", by: "lead", at: "2026-11-11T00:00:00Z" };

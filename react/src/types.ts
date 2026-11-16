@@ -111,7 +111,6 @@ export type BoardRules = {
   idle_column: ColumnKey | null;
   // the review columns: review rounds are counted per column (Card.review_round)
   review_columns: ColumnKey[];
-  spawn_columns: ColumnKey[];
   hide_after_hours: Record<ColumnKey, number>;
 };
 // Api#board_shape / Store#board_json: the shape + its rules + the type set + who saved it (the graph editor's data)
@@ -134,9 +133,8 @@ export type AgentTypeConfig = {
   takes: ColumnTypeKey[]; // column TYPES whose ownerless cards a session of this type adopts
   max: number | null;
   max_per_project: number | null;
-  spawns_for?: ColumnTypeKey[];
-  launcher_follows?: string | null; // runs the launcher of the board's running session of this type
-  spawn_launcher?: string | null; // the launcher a start that names none runs (absent + several launchers = refused)
+  under?: string | null; // lead-first: the lead type a session of this type runs under (only while it runs, on its launcher)
+  standalone?: boolean; // a plain session that runs without a lead (prompt null, takes [])
 };
 // Api#launches: the Launch bar's data — the types with their launchers and who runs now against the cap
 export type LaunchType = {
@@ -151,8 +149,9 @@ export type LaunchType = {
   running: number | null;
   running_here: number | null;
   sessions_here?: string[] | null;
-  launcher_follows?: string | null;
-  // the board's running session this type follows (Store#followed_launcher): its launcher is the only one a launch may use
+  under: string | null; // the lead type it runs under (null = runs on its own)
+  // the board's running lead a session of this type runs under (Store#running_lead): its launcher is the only one a
+  // launch may use; null with `under` set = no lead runs, the engine refuses the launch ("launch the lead first")
   follows?: { type: string; session: string; launcher: string } | null;
 };
 export type RegisteredSession = {
@@ -168,6 +167,7 @@ export type RegisteredSession = {
   last_seen: string | null;
   ended: string | null;
   end_reason: string | null;
+  lead_id: number | null; // the lead registration it runs under (null = a lead, or a type under none)
   live: boolean | null;
   cards: number;
 };
@@ -191,12 +191,33 @@ export type LaunchFailure = {
   ended: string;
   reason: string;
 };
+// Api#waiting `lead_ends`: the boards whose lead ENDED on its own (gone from the host's session list — never the operator's
+// stop) in the last day, with no lead since: nothing relaunches it, the operator presses Launch
+export type LeadEnd = {
+  id: number;
+  session: string;
+  project: string;
+  type: string;
+  launcher: string | null;
+  ended: string;
+  reason: string;
+};
+// Api#board `lead`: the board's lead now — session null = none runs (the board says "no lead: press Launch"); error = the
+// sessions port could not say (unknown, never "no lead"); absent/null = the host has no lead type
+export type BoardLead = {
+  type: string;
+  label: string;
+  session: string | null;
+  ended?: { session: string; reason: string | null; at: string } | null;
+  error?: string | null;
+};
 // Api#launch 201: the registration + what the host's start answered (`result`, the host's own shape)
 export type LaunchResult = {
   session: string;
   type: string;
   launcher: string;
   agent: string;
+  lead: string | null; // the lead session it runs under
   adopted: Card[];
   result: Record<string, unknown>;
   concurrency: Concurrency;
@@ -429,6 +450,7 @@ export type BoardData = {
   external: number;
   flagged: number;
   priorities: string[];
+  lead?: BoardLead | null;
   assignees?: string[];
   launcher_error?: string | null;
   live_sessions?: string[] | null;

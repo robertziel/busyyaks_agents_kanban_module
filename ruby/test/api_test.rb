@@ -311,10 +311,9 @@ class ApiTest < Minitest::Test
     assert_equal [6, 0, 6], j[:concurrency].values_at(:max_sessions, :running, :free)
     assert_nil j[:sessions_error]
     # a launch: registered + adopted BEFORE the host starts it, so the prompt names the cards
-    # no launcher named and the lead lists two (no spawn_launcher): refused, nothing registered — never the first one
+    # no launcher named and the lead lists two: refused, nothing registered — never the first one
     s, j = api.launch("g/r", { "type" => "lead" }, by: "op")
-    refused = "agent type lead runs fullclaude, localclaude and none was named — name the launcher, or set " \
-              "agent_types[lead].spawn_launcher"
+    refused = "agent type lead runs fullclaude, localclaude — name the launcher this session was started with"
     assert_equal [422, refused], [s, j[:error]]
     assert_empty l.started
     s, j = api.launch("g/r", { "type" => "lead", "launcher" => "fullclaude" }, by: "op")
@@ -334,10 +333,9 @@ class ApiTest < Minitest::Test
     assert_equal 422, s
     assert_match(%r{1/1 lead session already runs for g/r}, j[:error])
     assert_equal 1, l.started.size
-    # a sub team follows the board's running lead (launcher_follows): another launcher asked for is refused, never
-    # swapped
-    error = "team sessions of g/r run fullclaude while the lead session g_r_teamlead_1 does " \
-            "(agent_types[team].launcher_follows) — localclaude refused"
+    # a sub team runs under the board's running lead (under): another launcher asked for is refused, never swapped
+    error = "team sessions of g/r run fullclaude, the launcher of their lead session g_r_teamlead_1 " \
+            "(agent_types[team].under) — localclaude refused"
     assert_equal [422, { error: error }], api.launch("g/r", { "type" => "team", "launcher" => "localclaude" }, by: "op")
     assert_equal 1, l.started.size
     assert_match(/no agent type "x"/, api.launch("g/r", { "type" => "x" }, by: "op")[1][:error])

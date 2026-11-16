@@ -16,6 +16,7 @@ const type = (o: Partial<LaunchType> = {}): LaunchType => ({
   prompt: true,
   running: 0,
   running_here: 0,
+  under: null,
   ...o,
 });
 const conc = (running: number, max = 6): Concurrency => ({
@@ -72,12 +73,20 @@ describe("pickLauncher", () => {
   });
 });
 
-describe("launcher_follows", () => {
+describe("under a lead (lead-first boards)", () => {
   const follows = { type: "lead", session: "g_r_teamlead", launcher: "b" };
-  it("the followed session's launcher wins over a remembered one", () =>
-    expect(pickLauncher(type({ follows }), "a")).toBe("b"));
-  it("locks the menu with who is followed", () => {
-    expect(launcherLock(type({ follows }))).toBe("follows the lead session g_r_teamlead (b)");
+  it("the lead's launcher wins over a remembered one", () =>
+    expect(pickLauncher(type({ key: "team", under: "lead", follows }), "a")).toBe("b"));
+  it("locks the menu with the lead it runs under", () => {
+    expect(launcherLock(type({ follows }))).toBe("runs under the lead session g_r_teamlead (b)");
     expect(launcherLock(type())).toBeNull();
   });
+  it("greys a type under a lead while no lead runs, and frees it once one does", () => {
+    expect(launchBlocked(type({ key: "team", under: "lead", follows: null }), conc(0), null)).toBe(
+      "no lead runs for this board — launch the lead first",
+    );
+    expect(launchBlocked(type({ key: "team", under: "lead", follows }), conc(1), null)).toBeNull();
+  });
+  it("sessions unknown beats the lead rule (never a guess)", () =>
+    expect(launchBlocked(type({ under: "lead" }), null, null)).toBe("sessions unknown"));
 });

@@ -60,7 +60,7 @@ module AgentsKanban
 
     attr_reader :columns, :workflow, :handoff, :approvals, :watchdog, :dependencies
 
-    # host: HostConfig (handoff parameters, dependencies on/off, the agent types' takes / spawns_for by type).
+    # host: HostConfig (handoff parameters, dependencies on/off, the agent types' takes by type).
     def initialize(hash, host:)
       raise Invalid, "a board must be an object {columns, transitions}" unless hash.is_a?(Hash)
 
@@ -134,9 +134,6 @@ module AgentsKanban
     def idle_column = one_of_type("working")
     # The agent type whose sessions ADOPT ownerless cards here (its `takes` names column types) → the column keys.
     def takes_columns(agent_type) = of_type(agent_type.takes)
-    # One new session per ownerless card: the columns some agent type `spawns_for` (by type), and the type for a column.
-    def spawn_columns = of_type(@host.agent_types.flat_map(&:spawns_for))
-    def spawner_for(column) = @host.agent_types.find { |t| t.spawns_for.include?(type_of(column).key) }
     # The columns an agent may move a card to from `column` by a named edge (fan-outs excluded).
     def agent_targets(column) = @workflow.from(column, actor: :agent).reject(&:fan_out).map(&:to).uniq
     # The gate columns an agent in `column` may hand a card to: the named agent edges out of it into a gate.
@@ -157,7 +154,7 @@ module AgentsKanban
         gates: { handoff: @handoff&.to_h, approvals: @approvals.map(&:to_h), watchdog: @watchdog&.to_h },
         dependencies: @dependencies && { done: @dependencies.done, blocked: @dependencies.blocked,
                                          promote: @dependencies.promote&.to_h, },
-        idle_column: idle_column, review_columns: review_columns, spawn_columns: spawn_columns,
+        idle_column: idle_column, review_columns: review_columns,
         hide_after_hours: hide_after_hours, }
     end
 

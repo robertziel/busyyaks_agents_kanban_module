@@ -25,11 +25,16 @@ module AgentsKanban
   #                             (Launch); kind = the CLI family the command is (Launch::KINDS: claude_code, hermes), which
   #                             decides how the model, the prompt and the session name reach it
   #   agent_types               [{key, label, launchers, model, prompt, agent_name, session_name, takes, max, max_per_project,
-  #                             spawns_for?, launcher_follows?, spawn_launcher?}]: WHAT is launched. A start that names no
-  #                             launcher (a spawn with no session to follow, kanban_register without one) runs the type's
-  #                             `spawn_launcher`, or its only launcher; a type with several and none configured refuses.
-  #                             `takes` / `spawns_for` name column TYPES (ColumnTypes):
-  #                             a board's columns of those types are the ones the session adopts / gets a session per card
+  #                             under?}]: WHAT is launched. A start that names no launcher runs the type's only launcher;
+  #                             a type with several refuses (nothing picks one). `takes` names column TYPES (ColumnTypes):
+  #                             a board's columns of those types are the ones the session adopts. `under: <lead type>`
+  #                             (lead-first): a session of this type exists only under a LIVE session of the
+  #                             lead type on the same board — started by that lead (kanban_spawn, with its lead key) or
+  #                             by the operator while the lead runs —, runs the lead's launcher, and carries the lead's
+  #                             registration id (agent_sessions.lead_id; the CHECK needs_lead = 0 OR lead_id IS NOT
+  #                             NULL). No lead → refused, never started. Every type is a LEAD (some type is under
+  #                             it), `under` one, or `standalone: true` — a plain session (takes nothing, no prompt):
+  #                             no type runs without a lead by omission.
   #   concurrency               {max_sessions}: registered agent sessions running at once on the host (0 = no cap)
   #   owner_sessions            null (the host's rule) or session-name globs a card may be owned by
   #   table_prefix              namespaces the engine's tables ("" = the unprefixed names busyyaks started with)
@@ -58,6 +63,15 @@ module AgentsKanban
     KEYS = %w[priorities label_colors system_author attachment_url_prefix launchers agent_types concurrency owner_sessions
               table_prefix theme idle_watch handoff approval dependencies session_dialogs flags review_loop
               session_boards face_roles avatar_url].freeze
+    # Keys a host config had before lead-first boards: refused with what replaced them, never read.
+    REMOVED_AGENT_TYPE_KEYS = {
+      "spawns_for" => "the engine spawns nobody (lead-first boards) — the lead takes ownerless work " \
+                      "(its `takes`) and starts workers with kanban_spawn",
+      "spawn_launcher" => "nothing picks a launcher (lead-first boards) — a session under a lead runs the " \
+                          "lead's launcher, any other start names one",
+      "launcher_follows" => "replaced by `under: <lead type>` (lead-first boards): the session exists only " \
+                            "under a live lead and runs its launcher",
+    }.freeze
     OWNER_SESSION_GLOB = /\A[A-Za-z0-9._*?-]{1,100}\z/
     TABLE_PREFIX = /\A[a-z][a-z0-9_]{0,30}_\z|\A\z/
     THEME_VAR = /\A--ak-[a-z0-9-]{1,40}\z/
@@ -70,24 +84,14 @@ module AgentsKanban
     LAUNCHER_COMMAND = /\A[A-Za-z0-9_][A-Za-z0-9_.\/-]{0,200}\z/
     Launcher = Struct.new(:key, :label, :kind, :command, :args, :via_shell, keyword_init: true)
     AGENT_TYPE_KEYS = %w[key label launchers model prompt agent_name session_name takes max max_per_project].freeze
-    OPTIONAL_AGENT_TYPE_KEYS = %w[spawns_for launcher_follows spawn_launcher].freeze
+    OPTIONAL_AGENT_TYPE_KEYS = %w[under standalone].freeze
     AgentType = Struct.new(:key, :label, :launchers, :model, :prompt, :agent_name, :session_name, :takes, :max,
-                           :max_per_project, :spawns_for, :launcher_follows, :spawn_launcher, keyword_init: true) do
-      # The launcher key a start the ENGINE performs (Api#launch, Api#spawn_pass, Launch.argv / plan) runs: the one
-      # named (refused unless the type lists it); none named → the operator's `spawn_launcher`, or the type's ONLY
-      # launcher. Several and no spawn_launcher → refused with the list: the code never picks one of them.
-      def launcher!(key)
-        return registered_launcher!(key) unless key.nil? || key.to_s.empty?
-        return spawn_launcher if spawn_launcher
-        return launchers.first if launchers.size == 1
+                           :max_per_project, :under, :standalone, keyword_init: true) do
+      # The launcher key a start runs: the one named (refused unless the type lists it), or the type's ONLY launcher.
+      # Several and none named → refused with the list: the code never picks one of them.
+      def launcher!(key) = registered_launcher!(key)
 
-        raise Invalid, "agent type #{self.key} runs #{launchers.join(', ')} and none was named — name the launcher, " \
-                       "or set agent_types[#{self.key}].spawn_launcher"
-      end
-
-      # The launcher a session started ELSEWHERE runs (kanban_register / Store#register_session with no launcher): the one
-      # named, or the type's only launcher. Never spawn_launcher — the engine did not start that session, so it cannot
-      # know which launcher runs it, and a recorded guess would be followed by its workers (launcher_follows).
+      # The launcher a session runs: the one named (refused unless the type lists it), or the type's only launcher.
       def registered_launcher!(key)
         if key.nil? || key.to_s.empty?
           return launchers.first if launchers.size == 1
@@ -235,8 +239,10 @@ module AgentsKanban
       @agent_types.find { |t| t.key == k } || raise(Invalid, "no agent type #{key.inspect} (#{agent_type_keys.join(', ')})")
     end
     def agent_type_keys = @agent_types.map(&:key)
-    # The column TYPES some agent type spawns for (one spawner type per column type).
-    def spawn_types = @agent_types.flat_map(&:spawns_for).uniq
+    # The lead types: the agent types some type is `under` (lead-first boards). A lead's registration mints a
+    # lead key; a session of an `under` type is registered only with a live registration of its lead type.
+    def lead_types = @agent_types.filter_map(&:under).uniq.map { |k| agent_type(k) }
+    def lead_type?(type) = @agent_types.any? { |t| t.under == type.key }
     # The author name a session of `type` acts as on the board ("claude-{session}" → "claude-tl_g_r").
     def agent_name(type, session:, slug:) = Launch.render(type.agent_name, session: session, slug: slug, type: type.key)
     # The tmux session name a launch of this type asks the host for (slug's "/" → "_"); the host only makes it unique.
@@ -454,33 +460,43 @@ module AgentsKanban
       list = v.map { |t| parse_agent_type(t) }
       dup = list.map(&:key).tally.select { |_, n| n > 1 }.keys
       raise ConfigError, "agent_types: duplicate key #{dup.first}" if dup.any?
-      twice = list.flat_map(&:spawns_for).tally.select { |_, n| n > 1 }.keys
-      if twice.any?
-        raise ConfigError, "agent_types: column type #{twice.first} is in more than one type's spawns_for " \
-                           "(one spawner per column type)"
-      end
       list.each do |t|
-        f = t.launcher_follows
+        f = t.under
         next unless f
 
-        where = "agent_types[#{t.key}].launcher_follows"
+        where = "agent_types[#{t.key}].under"
         src = list.find { |x| x.key == f } or
           raise ConfigError, "#{where}: no agent type #{f.inspect} (#{list.map(&:key).join(', ')})"
         raise ConfigError, "#{where} must name another type" if src.key == t.key
-        raise ConfigError, "#{where}: #{f} itself follows #{src.launcher_follows} (one level only)" if src.launcher_follows
+        raise ConfigError, "#{where}: #{f} is itself under #{src.under} (one lead level only)" if src.under
+        raise ConfigError, "#{where}: #{f} is standalone — a lead runs nobody under it otherwise" if src.standalone
+        unless src.max_per_project == 1
+          raise ConfigError, "#{where}: the lead type #{f} must have max_per_project: 1 (one lead per board — its " \
+                             "sessions run under THE board's lead)"
+        end
         missing = src.launchers - t.launchers
         if missing.any?
           raise ConfigError, "#{where}: #{f} runs #{missing.join(', ')}, which #{t.key}.launchers lacks — " \
-                             "it could never follow it"
+                             "a session under it could never run its launcher"
         end
       end
 
+      leads = list.filter_map(&:under).uniq
+      list.each do |t|
+        next if t.under || t.standalone || leads.include?(t.key)
+
+        raise ConfigError, "agent_types[#{t.key}] runs without a lead: give it `under: <lead type>`" \
+                           "#{leads.any? ? " (#{leads.join(', ')})" : ''}, or `standalone: true` for a plain session " \
+                           "(takes nothing, no prompt) — lead-first boards"
+      end
       list.freeze
     end
 
     def parse_agent_type(v)
-      # `spawns_for` / `launcher_follows` / `spawn_launcher` are optional (a host without per-card sessions / a lead / a
-      # type with one launcher omits them); every other key is required
+      # `under` is optional (a type that runs on its own omits it); every other key is required. The keys lead-first
+      # boards removed are refused with what replaced them.
+      gone = v.is_a?(Hash) ? (v.keys & REMOVED_AGENT_TYPE_KEYS.keys).first : nil
+      raise ConfigError, "agent_types[#{v['key']}].#{gone} is removed: #{REMOVED_AGENT_TYPE_KEYS.fetch(gone)}" if gone
       shape!(v.is_a?(Hash) ? v.reject { |k, _| OPTIONAL_AGENT_TYPE_KEYS.include?(k) } : v, AGENT_TYPE_KEYS, "agent_types[]")
       raise ConfigError, "agent_types[].key must match #{LAUNCHER_KEY.source}" \
         unless v["key"].is_a?(String) && v["key"].match?(LAUNCHER_KEY)
@@ -502,12 +518,19 @@ module AgentsKanban
       else
         raise ConfigError, "#{where}.model must be null, match #{MODEL.source}, or map each launcher to one" unless one.(model)
       end
-      follows = v["launcher_follows"]
-      raise ConfigError, "#{where}.launcher_follows must be an agent type key or null" \
-        unless follows.nil? || (follows.is_a?(String) && follows.match?(LAUNCHER_KEY))
-      spawn = v["spawn_launcher"]
-      raise ConfigError, "#{where}.spawn_launcher must be one of #{where}.launchers (#{ls.join(', ')}) or null" \
-        unless spawn.nil? || ls.include?(spawn)
+      under = v["under"]
+      raise ConfigError, "#{where}.under must be an agent type key or null" \
+        unless under.nil? || (under.is_a?(String) && under.match?(LAUNCHER_KEY))
+      standalone = v.fetch("standalone", false)
+      raise ConfigError, "#{where}.standalone must be true or false" unless [true, false].include?(standalone)
+      if standalone
+        raise ConfigError, "#{where}: standalone and under exclude each other" if under
+        # a standalone session is a PLAIN one: nothing typed, nothing adopted — never a worker or a team by another name
+        unless v["prompt"].nil? && v["takes"] == []
+          raise ConfigError, "#{where}: a standalone type is a plain session — prompt null and takes [] (a type that " \
+                             "is told what to do or adopts cards runs `under` the board's lead)"
+        end
+      end
       raise ConfigError, "#{where}.prompt must be a string or null" unless v["prompt"].nil? || v["prompt"].is_a?(String)
       # the prompt is ONE argv word: one starting with "-" would be read as an option (a `--settings` with hooks)
       raise ConfigError, "#{where}.prompt must not start with \"-\": #{Launch::PROMPT_DASH}" if v["prompt"]&.start_with?("-")
@@ -526,9 +549,8 @@ module AgentsKanban
       AgentType.new(
         key: v["key"], label: str!(v["label"], "#{where}.label"), launchers: ls.dup.freeze, model: model, prompt: v["prompt"],
         agent_name: name, session_name: sname, takes: types!(v["takes"], "#{where}.takes"),
-        max: v["max"]&.nonzero?, max_per_project: v["max_per_project"]&.nonzero?,
-        spawns_for: types!(v.fetch("spawns_for", []), "#{where}.spawns_for"), launcher_follows: follows,
-        spawn_launcher: spawn
+        max: v["max"]&.nonzero?, max_per_project: v["max_per_project"]&.nonzero?, under: under,
+        standalone: standalone
       ).freeze
     end
 

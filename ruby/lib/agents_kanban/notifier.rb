@@ -35,14 +35,13 @@ module AgentsKanban
   #
   # client: the DELIVERY port (see Delivery in errors.rb). log: anything with puts.
   class Notifier
-    def initialize(store, client:, clock: -> { Time.now.to_i }, give_up: 30 * 60, grace: 60, spawner: nil, ci: nil,
+    def initialize(store, client:, clock: -> { Time.now.to_i }, give_up: 30 * 60, grace: 60, ci: nil,
                    log: $stdout)
       @store = store
       @client = client
       @clock = clock
       @give_up = give_up
       @grace = grace
-      @spawner = spawner # -> { Api#spawn_pass }: one new session per ownerless card in a spawns_for column
       @settle = store.config.session_dialogs.settle_seconds
       @first_seen = {} # session => [dialog hash, first read at]: a dialog is asked only once it has settled
       @dialog_scan_off = nil # why the host does not answer the collector snapshot (nil = it does): logged on change
@@ -98,10 +97,6 @@ module AgentsKanban
       # every taken card gets an ALIVE owner and an assignee — on the first pass after the host starts too
       taken = @store.adopt_ownerless(live: live, grace: @grace)
       @log.puts("intake assigned cards #{taken.join(', ')}") if taken.any?
-      if @spawner
-        spawned = @spawner.call
-        @log.puts("spawned a session for cards #{spawned.join(', ')}") if spawned.any?
-      end
       @log.puts("watchdog released cards #{released.join(', ')}") if released.any?
       reminded = @store.flag_reminders
       @log.puts("flag reminders on cards #{reminded.join(', ')}") if reminded.any?

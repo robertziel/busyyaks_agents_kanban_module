@@ -3,6 +3,9 @@
 require "json"
 require "date"
 require "time"
+require "digest"
+require "securerandom"
+require "openssl"
 require_relative "errors"
 require_relative "host_config"
 require_relative "board_repo"
@@ -1143,9 +1146,19 @@ module AgentsKanban
     # type that takes it, by rule, not by a prompt. The operator's comments that reached nobody on those cards are
     # relayed (set_owner's rule). Refused: an unknown type / launcher, a session name the board does not own, a session
     # already registered and not ended. → {id, session, socket, type, launcher, agent, project, adopted: [card ids]}
-    # for_cards: a SPAWN registration (Api#spawn_pass) owns exactly these cards (compare-and-set on an empty owner: a card
-    # somebody took meanwhile is not taken) instead of adopting the type's `takes` columns.
-    def register_session(session:, project:, type:, by:, launcher: nil, socket: "default", for_cards: nil)
+    # for_cards: a SPAWN registration (kanban_spawn: the lead starts a worker for a card) owns exactly these cards
+    # (compare-and-set on the owner being `from_owner` — the lead that spawns it, or nobody: a card somebody else took
+    # meanwhile is not taken) instead of adopting the type's `takes` columns.
+    #
+    # LEAD-FIRST: a session of a type `under` a lead type is registered only with `lead_id` = the OPEN
+    # registration of that lead type on the same board (the caller checked it is live) — else Denied, nothing written;
+    # the row carries needs_lead = 1 and the DB refuses it without a lead_id (Schema v12's CHECK). A LEAD registration
+    # becomes the lead of the board's open `under` sessions a lead before it left behind; with `key_to:` (Team#start,
+    # the host's launch path only) it mints a random lead key, stores only its SHA-256 and hands the key to that
+    # callable — never in the returned Hash, so no JSON answer, dump or log of a registration can carry it. A lead
+    # registered without key_to (kanban_register: a session started by hand) has no key and cannot kanban_spawn.
+    def register_session(session:, project:, type:, by:, launcher: nil, socket: "default", for_cards: nil, lead_id: nil,
+                         from_owner: nil, key_to: nil)
       board!(project)
       t = @config.agent_type(type)
       l = t.registered_launcher!(launcher) # a launch / spawn passes the launcher it resolved; by hand: named or the only one
@@ -1153,18 +1166,27 @@ module AgentsKanban
       owner_session!(s, socket)
       by = who!(by)
       not_registered!(s)
+      lead = lead_row!(t, project, lead_id)
       agent = @config.agent_name(t, session: s, slug: project)
       now = @clock.call
       adopted = []
+      key = key_to && @config.lead_type?(t) ? SecureRandom.hex(32) : nil
       @db.transaction do
         id = sessions_t.insert(session: s, socket: socket.to_s, project_slug: project, type_key: t.key, launcher_key: l,
-                               agent_name: agent, launched_by: by, launched_at: now, last_seen_at: nil)
+                               agent_name: agent, launched_by: by, launched_at: now, last_seen_at: nil,
+                               lead_id: lead&.dig(:id), needs_lead: t.under ? 1 : 0,
+                               lead_key_digest: key && Digest::SHA256.hexdigest(key))
+        if key
+          orphans = sessions_t.where(project_slug: project, ended_at: nil, needs_lead: 1).exclude(id: id)
+          orphans.update(lead_id: id)
+        end
         if for_cards
           Array(for_cards).each do |cid|
-            n = cards_t_cas(cid, project, s, socket, agent, now)
+            n = cards_t_cas(cid, project, s, socket, agent, now, from: from_owner)
             next if n.zero?
 
-            log(cid, "owner", "spawned for this card: #{agent} — session #{s} (#{t.key}) started for #{project}", by)
+            via = lead ? " by the lead #{lead[:agent_name]}" : ""
+            log(cid, "owner", "spawned for this card#{via}: #{agent} — session #{s} (#{t.key}) started for #{project}", by)
             relay_undelivered(cid)
             adopted << cid
           end
@@ -1177,7 +1199,95 @@ module AgentsKanban
             adopted << c[:id]
           end
         end
-        { id: id, session: s, socket: socket.to_s, type: t.key, launcher: l, agent: agent, project: project, adopted: adopted }
+        { id: id, session: s, socket: socket.to_s, type: t.key, launcher: l, agent: agent, project: project,
+          adopted: adopted, lead: lead && lead[:session], }.compact
+      end.tap { key_to&.call(key) }
+    end
+
+    # The lead registration a session of type `t` is registered under: nil for a type that is under none (a lead_id
+    # given then is refused); else the OPEN registration `lead_id` of t.under on the same board — none named or not that
+    # → Denied (no lead, no session).
+    def lead_row!(t, project, lead_id)
+      unless t.under
+        raise Invalid, "agent type #{t.key} runs under no lead — no lead_id" unless lead_id.nil?
+
+        return nil
+      end
+      r = lead_id && sessions_t.where(id: lead_id, ended_at: nil).first
+      return r if r && r[:project_slug] == project.to_s && r[:type_key] == t.under
+
+      raise Denied, "no #{t.under} session runs for #{project}: a #{t.key} session runs only under the board's " \
+                    "#{t.under} — launch the #{t.under} first (lead-first boards)"
+    end
+
+    # The board's RUNNING session of a lead type (`type` is under it): {row}, or Denied with what to do — the only
+    # lead a session of `type` may run under (Api#launch, kanban_spawn, kanban_register).
+    def running_lead!(type:, project:, live:, grace:)
+      t = @config.agent_type(type)
+      raise Invalid, "agent type #{t.key} runs under no lead" unless t.under
+
+      running_lead(t.under, project, live: live, grace: grace) ||
+        raise(Denied, "no #{t.under} session runs for #{project}: a #{t.key} session runs only under the board's " \
+                      "#{t.under} — launch the #{t.under} first (lead-first boards)")
+    end
+
+    def running_lead(lead_type, project, live:, grace:)
+      running_sessions(live, grace: grace).reverse.find do |r|
+        r[:type_key] == lead_type && r[:project_slug] == project.to_s
+      end
+    end
+
+    # The lead whose key this is: the OPEN registration of `session`, of a lead type, whose stored digest matches —
+    # else Denied (a worker, a stale key, another session's key). The compare is on digests, in constant time.
+    def lead_by_key!(session:, key:)
+      r = open_session(session)
+      ok = r && !r[:lead_key_digest].nil? && key.is_a?(String) && !key.empty? &&
+           OpenSSL.fixed_length_secure_compare(r[:lead_key_digest], Digest::SHA256.hexdigest(key))
+      return r if ok
+
+      raise Denied, "#{session} is not a lead this host started: only the board's lead, started from the Launch bar, " \
+                    "starts its team (its key, held by the host's launcher, does not match)"
+    end
+
+    # A registration of the same type for the same board after this one (a lead launched again since).
+    def registered_since?(r)
+      sessions_t.where(project_slug: r[:project_slug], type_key: r[:type_key]).where(Sequel[:id] > r[:id]).any?
+    end
+
+    # The board's lead now (lead-first boards): nil on a host with no lead type; else {type, label, session (running, or
+    # nil), ended: {session, reason, at} (the newest lead registration when none runs, or nil)} — the board says
+    # "no lead: press Launch" from it.
+    def lead_state(project, live:, grace:)
+      lt = @config.lead_types.first or return nil
+
+      r = running_lead(lt.key, project, live: live, grace: grace)
+      last = !r && sessions_t.where(project_slug: project.to_s, type_key: lt.key).exclude(ended_at: nil)
+                             .order(Sequel.desc(:ended_at), Sequel.desc(:id)).first
+      { type: lt.key, label: lt.label, session: r && r[:session],
+        ended: last ? { session: last[:session], reason: last[:end_reason], at: iso(last[:ended_at]) } : nil, }
+    end
+
+    # The boards whose lead ENDED for any reason but the operator's stop (OPERATOR_STOP) — gone from the host's session
+    # list, ended by the watchdog, ended by the agent or a host — within LAUNCH_FAILURE_WINDOW_S and no lead of that type
+    # registered since: the operator must press Launch (nothing relaunches it). A start that failed is a launch
+    # failure (#launch_failures), not listed twice. → [{id, session, project, type, launcher, ended, reason}], newest
+    # first.
+    def lead_ends(slugs)
+      return [] if @config.lead_types.empty?
+
+      since = @clock.call - LAUNCH_FAILURE_WINDOW_S
+      types = @config.lead_types.map(&:key)
+      sessions_t.where(project_slug: slugs.to_a, type_key: types).exclude(ended_at: nil)
+                .exclude(end_reason: OPERATOR_STOP).exclude(Sequel.like(:end_reason, "#{START_FAILED}%"))
+                .where { ended_at >= since }
+                .order(Sequel.desc(:ended_at), Sequel.desc(:id))
+                .all
+                .uniq { |r| [r[:project_slug], r[:type_key]] }
+                .reject { |r| registered_since?(r) }
+                .first(LAUNCH_FAILURES_SHOWN)
+                .map do |r|
+        { id: r[:id], session: r[:session], project: r[:project_slug], type: r[:type_key], launcher: r[:launcher_key],
+          ended: iso(r[:ended_at]), reason: r[:end_reason], }
       end
     end
 
@@ -1204,8 +1314,7 @@ module AgentsKanban
         takers = rows.select { |r| alive.(r[:session]) }
           .map { |r| [r, @config.agent_type(r[:type_key])] }
           .reject { |_, t| b.takes_columns(t).empty? }
-        # spawn columns are Api#spawn_pass's — a gate only for its APPROVED cards (an unapproved gate card is the taker's)
-        taken = takers.flat_map { |_, t| b.takes_columns(t) }.uniq - (b.spawn_columns - b.gate_columns)
+        taken = takers.flat_map { |_, t| b.takes_columns(t) }.uniq
         # a missing assignee is filled from its alive registered owner in every watched column, with or without a
         # taker running (a worker-owned In progress card would otherwise keep no assignee while no lead runs)
         pool = live(slug).where(column: (taken + b.watched_columns).uniq)
@@ -1222,7 +1331,6 @@ module AgentsKanban
             next # an alive owner the board never registered: the operator's choice, left alone
           else
             next unless taken.include?(c[:column])
-            next if c[:approved_at] && b.gate?(c[:column]) && b.spawn_columns.include?(c[:column])
 
             by_load = ->(x) { [cards.where(project_slug: slug, owner_session: x[:session], archived_at: nil).count, x[:id]] }
             r, t = takers.select { |_, ty| b.takes_columns(ty).include?(c[:column]) }.min_by { |x, _| by_load.(x) } || next
@@ -1245,40 +1353,8 @@ module AgentsKanban
       changed
     end
 
-    # ── the spawn queue (Api#spawn_pass) ──────────────────────────────────────────────────────────
-    SPAWN_RETRY_S = 300
-
-    # Ownerless live cards in spawn columns, FIFO (longest waiting first); a FLAGGED card waits for the operator (or
-    # the world) — nobody is started for it until the flag clears. only: one card.
-    def spawn_queue(only: nil)
-      return [] if @config.spawn_types.empty?
-
-      q = project_cards.where(archived_at: nil, owner_session: nil, asked_at: nil, blocked_at: nil)
-      q = q.where(id: only) if only
-      rows = q.order(:updated_at, :id).all
-      boards = boards_for(rows.map { |c| c[:project_slug] }.uniq)
-      # a gate card waits for the operator: only an APPROVED one (Awaiting merge, Ready to merge) gets a worker to carry on
-      rows.select do |c|
-        b = boards[c[:project_slug]]
-        b.spawn_columns.include?(c[:column]) && (!b.gate?(c[:column]) || c[:approved_at])
-      end
-    end
-
-    # A spawn that failed for this card less than SPAWN_RETRY_S ago: the card waits (visibly, its note says why) instead
-    # of starting a new failing session every pass.
-    def spawn_backoff?(card_id)
-      at = activity_t.where(card_id: card_id, kind: "owner").where(Sequel.like(:body, "spawn failed%")).max(:created_at)
-      !at.nil? && @clock.call - at < SPAWN_RETRY_S
-    end
-
-    # The card's spawn state, logged only when it CHANGES (a card waiting for a slot does not grow a line per pass).
-    def spawn_note(card_id, body, by)
-      last = activity_t.where(card_id: card_id, kind: "owner").order(Sequel.desc(:id)).get(:body)
-      log(card_id, "owner", body, who!(by)) unless last == body
-    end
-
-    def cards_t_cas(cid, project, session, socket, agent, now)
-      cards.where(id: cid, project_slug: project, owner_session: nil, archived_at: nil)
+    def cards_t_cas(cid, project, session, socket, agent, now, from: nil)
+      cards.where(id: cid, project_slug: project, owner_session: from, archived_at: nil)
            .update(owner_session: session, owner_socket: socket.to_s, owner_missing_since: nil, assignee: agent,
                    updated_at: now)
     end
@@ -1291,7 +1367,7 @@ module AgentsKanban
       open[:id]
     end
 
-    # A launch or a spawn whose start failed ends its registration with this reason prefix (Api#launch, Api#spawn_pass).
+    # A launch or a spawn whose start failed ends its registration with this reason prefix (Team#start).
     START_FAILED = "start failed: "
     LAUNCH_FAILURE_WINDOW_S = 86_400 # the waiting list shows the failed starts of the last day …
     LAUNCH_FAILURES_SHOWN = 10 # … the newest this many
@@ -1410,6 +1486,9 @@ module AgentsKanban
     # Reconcile the registry with the host's LIVE session names: a registered session not in the list is ended as gone
     # — unless it was registered less than `grace` seconds ago (a launch takes a moment to appear). Live ones get
     # last_seen_at. → the ended rows' sessions.
+    GONE = "gone from the host's session list" # the session ended on its own (killed, crashed, closed) — Store#lead_ends
+    # The end reason of the operator's Stop (the host passes it to #end_session): the one lead end that is not an alert.
+    OPERATOR_STOP = "stopped by the operator"
     def sessions_sync(live, grace:)
       now = @clock.call
       gone = []
@@ -1417,7 +1496,7 @@ module AgentsKanban
         if live.include?(r[:session])
           sessions_t.where(id: r[:id]).update(last_seen_at: now)
         elsif now - r[:launched_at] >= grace
-          sessions_t.where(id: r[:id]).update(ended_at: now, end_reason: "gone from the host's session list")
+          sessions_t.where(id: r[:id]).update(ended_at: now, end_reason: GONE)
           gone << r[:session]
         end
       end
@@ -1451,39 +1530,23 @@ module AgentsKanban
       { id: r[:id], session: r[:session], socket: r[:socket], project: r[:project_slug], type: r[:type_key],
         launcher: r[:launcher_key], agent: r[:agent_name],
         launched_by: r[:launched_by], launched: iso(r[:launched_at]), last_seen: iso(r[:last_seen_at]),
-        ended: iso(r[:ended_at]), end_reason: r[:end_reason],
+        ended: iso(r[:ended_at]), end_reason: r[:end_reason], lead_id: r[:lead_id],
         live: live.nil? ? nil : live.include?(r[:session]),
         cards: cards.where(owner_session: r[:session], archived_at: nil).count, }
     end
 
-    # THE FOLLOW RULE: a type with `launcher_follows: <type>` runs the launcher of the project's RUNNING session of that
-    # type (a lead started on localclaude → the workers spawned and the sub teams launched for its board run
-    # localclaude too). → {type, session, launcher} of the newest such session, or nil (the type follows none, or
-    # none runs — then the type's own launchers apply).
-    def followed_launcher(type:, project:, live:, grace:)
+    # The launcher a session of `type` starts with: under a lead → the lead's (another one asked for explicitly is
+    # refused with who leads, never silently swapped); else the asked one, or the type's only launcher.
+    def launcher_for!(type:, asked:, lead: nil)
       t = @config.agent_type(type)
-      return nil unless t.launcher_follows
-
-      r = running_sessions(live, grace: grace).reverse.find do |x|
-        x[:type_key] == t.launcher_follows && x[:project_slug] == project.to_s
-      end
-      r && { type: r[:type_key], session: r[:session], launcher: r[:launcher_key] }
-    end
-
-    # The launcher a session of `type` starts with for `project`: the followed session's while one runs — another one
-    # asked for explicitly is refused (Denied, with who is followed), never silently swapped —, else the asked one, else
-    # the type's spawn_launcher or only launcher (AgentType#launcher!: several and none configured → Invalid).
-    def launcher_for!(type:, project:, asked:, live:, grace:)
-      t = @config.agent_type(type)
-      f = followed_launcher(type: t.key, project: project, live: live, grace: grace)
-      return t.launcher!(asked) unless f
+      return t.launcher!(asked) unless lead
 
       a = asked.to_s
-      unless a.empty? || a == f[:launcher]
-        raise Denied, "#{t.key} sessions of #{project} run #{f[:launcher]} while the #{f[:type]} session #{f[:session]} does " \
-                      "(agent_types[#{t.key}].launcher_follows) — #{a} refused"
+      unless a.empty? || a == lead[:launcher_key]
+        raise Denied, "#{t.key} sessions of #{lead[:project_slug]} run #{lead[:launcher_key]}, the launcher of their " \
+                      "#{lead[:type_key]} session #{lead[:session]} (agent_types[#{t.key}].under) — #{a} refused"
       end
-      t.launcher!(f[:launcher])
+      t.launcher!(lead[:launcher_key])
     end
 
     # May one more session of `type` start for `project` now? Raises Denied with the reason (who runs, which cap) —

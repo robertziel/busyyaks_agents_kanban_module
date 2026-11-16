@@ -339,22 +339,18 @@ tmux_session: "s_two")["columns"].first["cards"].first["id"])
   end
 
   # review round 1 (minor): each pass checked against a project card it DOES act on, so no assertion is vacuous
-  def test_spawn_intake_idle_watch_and_dialogs_skip_session_cards
+  def test_intake_idle_watch_and_dialogs_skip_session_cards
     raw = JSON.parse(File.read(File.join(KanbanTest::ROOT, "fixtures/boards/coding.json")))
               .merge("table_prefix" => KanbanTest::PREFIX)
-    plain = raw["agent_types"].find { |t| t["key"] == "plain" }
-    plain["spawns_for"] = ["queued"]
-    plain["takes"] = ["working"]
     st = store(AgentsKanban::HostConfig.new(raw))
     st.session_board!("s_one", by: "s_one")
     sess = st.create(slug: "session:s_one", title: "mine", by: "s_one", owner_session: "s_one", agent: true)
     proj = st.create(slug: "g/r", title: "project", by: "op", column: "todo")
     db[:"#{KanbanTest::PREFIX}cards"].where(id: sess).update(owner_session: nil, assignee: nil)
-    assert_equal [proj], st.spawn_queue.map { |c| c[:id] }
 
-    # intake: a plain session takes working cards — the project's, never the session board's
+    # intake: the lead takes working cards — the project's, never the session board's
     db[:"#{KanbanTest::PREFIX}cards"].where(id: [sess, proj]).update(column: "doing")
-    st.register_session(session: "s_two", project: "g/r", type: "plain", by: "op", launcher: "fullclaude")
+    st.register_session(session: "s_two", project: "g/r", type: "lead", by: "op", launcher: "fullclaude")
     st.adopt_ownerless(live: Set["s_two"])
     assert_equal ["s_two", nil], [st.card!(proj)[:owner_session], st.card!(sess)[:owner_session]]
 

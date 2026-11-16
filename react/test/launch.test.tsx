@@ -28,6 +28,7 @@ const data = (running = 1, runningHere = 0): LaunchesData => ({
       prompt: true,
       running: runningHere,
       running_here: runningHere,
+      under: null,
     },
     {
       key: "plain",
@@ -40,6 +41,7 @@ const data = (running = 1, runningHere = 0): LaunchesData => ({
       prompt: false,
       running: 0,
       running_here: 0,
+      under: null,
     },
   ],
   concurrency: conc(running),
@@ -58,6 +60,7 @@ function fakeApi(d: LaunchesData, refuse?: string): LaunchApi & { calls: unknown
         session: "g_r_1",
         type: body.type,
         launcher: body.launcher,
+        lead: null,
         agent: "claude-g_r_1",
         adopted: [],
         result: { remote_control: "on" },
@@ -117,7 +120,29 @@ describe("LaunchBar", () => {
     expect(await screen.findByText("sessions unknown: launcher not reachable")).toBeInTheDocument();
   });
 
-  it("a type following the board's lead launches with the lead's launcher, its menu locked with who is followed", async () => {
+  it("a type under a lead is greyed while no lead runs: launch the lead first", async () => {
+    const d = data();
+    d.types.push({
+      key: "team",
+      label: "Sub team",
+      launchers: [{ key: "fullclaude", label: "fullclaude" }],
+      model: null,
+      takes: [],
+      max: null,
+      max_per_project: null,
+      prompt: true,
+      running: 0,
+      running_here: 0,
+      under: "lead",
+      follows: null,
+    });
+    render(<LaunchBar api={fakeApi(d)} slug="g/r" refreshEvery={0} />);
+    const btn = await screen.findByRole("button", { name: "Sub team" });
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute("title", "no lead runs for this board — launch the lead first");
+  });
+
+  it("a type under the board's lead launches with the lead's launcher, its menu locked with the lead", async () => {
     const d = data();
     d.types.push({
       key: "team",
@@ -133,7 +158,7 @@ describe("LaunchBar", () => {
       prompt: true,
       running: 0,
       running_here: 0,
-      launcher_follows: "lead",
+      under: "lead",
       follows: { type: "lead", session: "g_r_teamlead", launcher: "localclaude" },
     });
     const api = fakeApi(d);
@@ -142,7 +167,7 @@ describe("LaunchBar", () => {
     expect(screen.getByLabelText("Sub team launcher")).toBeDisabled();
     expect(document.querySelector('[data-type="team"] .ak-launch-menu-wrap')).toHaveAttribute(
       "title",
-      "follows the lead session g_r_teamlead (localclaude)",
+      "runs under the lead session g_r_teamlead (localclaude)",
     );
     expect(screen.getByLabelText("Sub team launcher")).toHaveTextContent("localclaude");
     fireEvent.click(document.querySelector<HTMLButtonElement>('[data-type="team"] .ak-launch-main')!);

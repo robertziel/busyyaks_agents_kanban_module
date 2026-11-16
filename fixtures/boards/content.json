@@ -24,7 +24,8 @@
       "session_name": "{slug}_worker",
       "takes": [],
       "max": null,
-      "max_per_project": null
+      "max_per_project": null,
+      "standalone": true
     }
   ],
   "concurrency": {

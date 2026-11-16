@@ -77,6 +77,9 @@ re-vendors it. It lives in **its own repo with its own history** so other projec
   edited by the operator in a graph editor.
 - **Agent sessions tied to cards** — a registry of the tmux sessions working the board, launches with concurrency caps,
   a watchdog that releases a card whose session is gone.
+- **Lead-first boards** — a board starts with its lead (the operator's Launch) and only the lead starts its team
+  (`kanban_spawn`; the host checks the named session is the lead it started — a guard against cooperative agents, not authentication: one MCP bearer can name any tmux session): a session `under` a lead exists only while that lead runs, and the
+  engine starts nothing on its own. A lead that died is on the waiting list and the board says "no lead: press Launch".
 - **Gates and flags** — an agent hands work over only through `kanban_handoff` (QA steps, PR, CI, screenshots) into a
   gate column; only the operator approves. A question for the operator (`kanban_ask`) or an external blocker
   (`kanban_block`) is a FLAG on the card: it keeps its place, agents wait, the operator's comment answers it, a
@@ -115,7 +118,7 @@ the template's copy. Each column has a **type**, and the type decides every rule
 | Type | Example columns | Rule |
 |---|---|---|
 | `parked` | Backlog, Waiting | nobody listens; agents may create cards here |
-| `queued` | To do, Queued | work waiting for a session; a released card returns here; a worker can be spawned per card |
+| `queued` | To do, Queued | work waiting for a session; a released card returns here; the lead starts a worker per card |
 | `working` | In progress, Author response | a work column (several allowed): listened; the first one is where the watchdog releases from |
 | `review` | QA, Agent review | a further work column; review rounds are counted per column (a round limit ends the loop) |
 | `gate` | Human review, Local deploy check, Awaiting merge | waits for the operator; agents enter only through `kanban_handoff`; the operator's one forward exit approves; an agent leaves only once approved |
@@ -124,7 +127,7 @@ the template's copy. Each column has a **type**, and the type decides every rule
 
 **Host config** ([`config.example.yml`](config.example.yml)) holds what differs between hosts: the launchers (the
 commands that start a session), the **agent types** (launchers, model, prompt template, agent name, the column types it
-adopts or spawns for, its caps), the concurrency cap, the sessions that may own a card (`owner_sessions`), the handoff
+adopts, the lead it runs `under` or `standalone`, its caps), the concurrency cap, the sessions that may own a card (`owner_sessions`), the handoff
 gate's requirements, parent dependencies, idle-watch timings, the table prefix, theme tokens, the system author and the
 attachment route.
 
@@ -161,11 +164,12 @@ api = AgentsKanban::Api.new(store: store, attachments: files, markdown: md, proj
 status, body = api.move(id, { "column" => "doing" }, by: current_user)
 api.board_shape(slug)                    # also board_shape_save / board_shape_reset
 api.launches(slug)                       # the agent types vs the cap
-api.launch(slug, { "type" => "lead" }, by: me)  # cap check, register + adopt, start
+api.launch(slug, { "type" => "lead", "launcher" => "claude" }, by: me)  # cap check, register + adopt, start
 
 # MCP
 tools = AgentsKanban::Tools.new(store: store, attachments: files, projects: …, sessions: -> { live_tmux_names },
-                                card_url: ->(slug, id) { "https://board.example/…" })   # every card's `url`
+                                card_url: ->(slug, id) { "https://board.example/…" },   # every card's `url`
+                                launcher: my_launch_port)   # kanban_spawn (a lead starting its team) starts through it
 tools.definitions / tools.instructions   # tools/list and the MCP instructions, worded for THIS board
 tools.call("kanban_register", args)      # a JSON string; refusals raise Invalid / Denied
 

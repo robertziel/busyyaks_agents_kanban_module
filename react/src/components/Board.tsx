@@ -751,6 +751,18 @@ export function Board({
             <span>{err}</span>
           </div>
         )}
+        {data.lead && !data.lead.session && (
+          <div className={`flash ${data.lead.error ? "bad" : "warn"}`} data-no-lead="">
+            <i className={`dot ${data.lead.error ? "bad" : "warn"}`} />
+            <span>
+              {data.lead.error
+                ? `${data.lead.label} session unknown: ${data.lead.error}`
+                : `no lead: press ${data.lead.label} — ownerless cards wait for it`}
+              {data.lead.ended &&
+                ` · ${data.lead.ended.session} ended ${isoAt(data.lead.ended.at)}${data.lead.ended.reason ? ` (${data.lead.ended.reason})` : ""}`}
+            </span>
+          </div>
+        )}
         {data.launcher_error && (
           <div className="flash bad">
             <i className="dot bad" />

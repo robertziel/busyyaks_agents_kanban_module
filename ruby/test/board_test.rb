@@ -146,7 +146,6 @@ class BoardTest < Minitest::Test
     assert_equal %w[human_check], b.handoff_targets("doing")
     assert_match(/no column "nope"/, assert_raises(Invalid) { b.label("nope") }.message)
     assert_equal %w[todo doing qa human_check ready], b.takes_columns(config.agent_type("lead")) # board order
-    assert_equal [], b.spawn_columns
     assert b.frozen?
   end
 
@@ -234,7 +233,7 @@ host: config)
 
   # ── the host config: settings only ────────────────────────────────────────────────────────────
 
-  def test_host_config_has_no_board_keys_and_takes_and_spawns_for_name_types
+  def test_host_config_has_no_board_keys_and_takes_name_types
     assert_equal %w[priorities label_colors system_author attachment_url_prefix launchers agent_types concurrency
                     owner_sessions table_prefix theme idle_watch handoff approval dependencies session_dialogs flags
                     review_loop session_boards face_roles avatar_url],

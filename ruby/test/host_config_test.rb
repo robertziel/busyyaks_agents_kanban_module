@@ -3,7 +3,7 @@
 require "test_helper"
 require "shellwords"
 
-# The HOST config (SPEC § 2): settings only — launchers, agent types (whose takes / spawns_for name column TYPES), the
+# The HOST config (SPEC § 2): settings only — launchers, agent types (whose takes name column TYPES; `under` = lead-first), the
 # caps, the enums, the handoff requirements, the idle-watch timings. The boards (columns + workflow) are in the
 # database: board_test.rb.
 class HostConfigTest < Minitest::Test
@@ -131,7 +131,7 @@ class HostConfigTest < Minitest::Test
     assert_equal [["claude", "claude_code", "claude", [], false]],
                  ex.launchers.map { |l| [l.key, l.kind, l.command, l.args, l.via_shell] }
     assert_equal %w[lead team plain], ex.agent_type_keys
-    assert(ex.agent_types.all? { |t| t.launchers == ["claude"] && t.model.nil? && t.spawn_launcher.nil? })
+    assert(ex.agent_types.all? { |t| t.launchers == ["claude"] && t.model.nil? })
     assert_equal %w[claude claude claude], ex.agent_types.map { |t| t.launcher!(nil) }, "one launcher = unambiguous"
     assert_nil ex.concurrency.max_sessions
     text = File.read(File.join(KanbanTest::ROOT, "config.example.yml"))
@@ -226,30 +226,26 @@ class HostConfigTest < Minitest::Test
     assert_nil(raw.tap { |r| r["concurrency"]["max_sessions"] = 0 }.then { |r| C.new(r).concurrency.max_sessions },
                "0 = no host cap")
     assert_match(/max_sessions must be an integer >= 0/, bad.(->(r) { r["concurrency"] = { "max_sessions" => nil } }))
-    zero = raw.tap { |r| r["agent_types"][0].merge!("max" => 0, "max_per_project" => 0) }
-    assert_equal [nil, nil], C.new(zero).agent_type("lead").then { |a| [a.max, a.max_per_project] }, "0 = no type cap"
+    zero = raw.tap { |r| r["agent_types"][2].merge!("max" => 0, "max_per_project" => 0) } # plain; a lead keeps its 1
+    assert_equal [nil, nil], C.new(zero).agent_type("plain").then { |a| [a.max, a.max_per_project] }, "0 = no type cap"
     lead = coding.agent_type("lead")
     takes = %w[queued working review gate]
     assert_equal [%w[fullclaude localclaude], nil, "claude-{session}", takes, nil, 1],
                  [lead.launchers, lead.model, lead.agent_name, lead.takes, lead.max, lead.max_per_project]
     assert_equal "localclaude", lead.launcher!("localclaude")
-    # none named: several launchers and no spawn_launcher → refused with the list, never the first one
+    # none named: several launchers → refused with the list, never the first one
     %w[lead team plain].each do |k|
-      assert_match(/agent type #{k} runs fullclaude, localclaude and none was named — name the launcher, or set /,
+      assert_match(/agent type #{k} runs fullclaude, localclaude — name the launcher/,
                    assert_raises(AgentsKanban::Invalid) { coding.agent_type(k).launcher!(nil) }.message)
     end
     assert_raises(AgentsKanban::Invalid) { lead.launcher!("") }
     # one launcher: unambiguous
     assert_equal "localclaude", content.agent_type("worker").launcher!(nil)
-    # spawn_launcher: the operator's explicit choice, used only when none is named; must be one of the type's launchers
-    picked = C.new(raw.tap { |r| t.(r)["spawn_launcher"] = "localclaude" }).agent_type("lead")
-    assert_equal %w[localclaude fullclaude localclaude],
-                 [picked.launcher!(nil), picked.launcher!("fullclaude"), picked.spawn_launcher]
-    assert_match(/agent_types\[lead\].spawn_launcher must be one of agent_types\[lead\].launchers \(fullclaude, localclaude\)/,
-                 bad.(->(r) { t.(r)["spawn_launcher"] = "nope" }))
-    assert_match(/spawn_launcher must be one of/, bad.(->(r) { t.(r)["spawn_launcher"] = 3 }))
-    assert_nil lead.spawn_launcher, "optional: absent = none"
-    # a session started elsewhere (kanban_register): named, or the only launcher — never spawn_launcher
+    # spawn_launcher is gone: refused with what replaced it
+    assert_match(/agent_types\[lead\].spawn_launcher is removed: nothing picks a launcher/,
+                 bad.(->(r) { t.(r)["spawn_launcher"] = "localclaude" }))
+    picked = lead
+    # a session started elsewhere (kanban_register): named, or the only launcher
     assert_match(/agent type lead runs fullclaude, localclaude — name the launcher this session was started with/,
                  assert_raises(AgentsKanban::Invalid) { picked.registered_launcher!(nil) }.message)
     assert_equal "fullclaude", picked.registered_launcher!("fullclaude")
@@ -278,6 +274,7 @@ class HostConfigTest < Minitest::Test
       r["agent_types"] = [{
         "key" => "t", "label" => "T", "launchers" => ["k"], "model" => model, "prompt" => nil,
         "agent_name" => "a-{session}", "session_name" => "{slug}", "takes" => [], "max" => nil, "max_per_project" => nil,
+        "standalone" => true,
       }]
       C.new(r)
     end
