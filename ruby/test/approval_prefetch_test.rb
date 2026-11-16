@@ -57,6 +57,8 @@ class ApprovalPrefetchTest < Minitest::Test
     {
       { number: 7, state: "pending", finished_at: nil } => "PR #7 of card ##{id} — CI is still running",
       { number: 7, state: "failure", finished_at: 5 } => "PR #7 of card ##{id} — CI failed",
+      { number: 7, state: "stuck", finished_at: 5 } =>
+        "PR #7 of card ##{id} — CI is stuck (pending longer than the host allows)",
       { number: nil, state: "unpolled", finished_at: nil } =>
         "its PR of card ##{id} — CI not read yet (asked now — hand off again in a minute)",
       { number: 7, state: "blocked", finished_at: nil, reason: "the local PR #7 was merged before its approval" } =>
@@ -65,8 +67,10 @@ class ApprovalPrefetchTest < Minitest::Test
       approval_ci.answer = answer
       e = assert_raises(AgentsKanban::Invalid) { @m.handoff(id, **HANDOFF, by: "claude-shop-lead") }
       assert_equal "not handed off (→ Local: Human review): #{said}; hand off once CI is green", e.message
-      assert_equal ["local_agent_review", nil], @m.card(id).values_at(:column, :handoff_at)
+      assert_equal ["local_agent_review", nil, nil], @m.card(id).values_at(:column, :handoff_at, :ci_url)
       refute(@m.activity(id).any? { |a| a[:kind] == "handoff" })
+      # asked with THIS handoff's ci_url before anything is written: a host may check it is the head's build
+      assert_equal ["local_human_review", HANDOFF[:ci_url]], approval_ci.cards.last.values_at(:column, :handoff_ci_url)
     end
     approval_ci.down = "github down"
     e = assert_raises(AgentsKanban::Invalid) { @m.handoff(id, **HANDOFF, by: "claude-shop-lead") }
@@ -83,6 +87,7 @@ class ApprovalPrefetchTest < Minitest::Test
     assert_equal [id, "local_human_review", "https://github.com/o/r/pull/1"],
                  [asked[0], *@m.card(id).values_at(:column, :pr_url)], "asked for the card as it sits in the gate"
     @m.approve(id, by: "operator@x")
+    refute approval_ci.cards.last.key?(:handoff_ci_url), "an Approve asks about the head's CI, not the handed-over build"
     assert_equal "local_merged_pr", @m.card(id)[:column]
   end
 
