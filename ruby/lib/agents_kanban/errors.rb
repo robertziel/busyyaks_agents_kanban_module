@@ -29,7 +29,10 @@ module AgentsKanban
   #   last_commit_at(card) → epoch of the newest commit on the owner's branch | nil when there is none
   # The approval gate (Store ci:, only when the host config has approval.requires_green_ci):
   #   approval_checks(card, step) → the same answer as pr_checks for the PR this approval step is about (step =
-  #                        {from:, to:, then:, name:, final:}); approved only on state "success". Any other answer
+  #                        {from:, to:, then:, name:, final:}); approved only on state "success"; "failure" and
+  #                        "stuck" (a check pending longer than the host allows) are red: the gate watch pings the
+  #                        owner once per finished_at. At a handoff (only) the card carries handoff_ci_url = that
+  #                        handoff's ci_url (not written yet), so the host may check it is the head's build. Any other answer
   #                        may carry reason: — the host's own words for the refusal (e.g. "the local PR #12 is not
   #                        merged"), shown in place of the state's. Also asked AHEAD, its answer discarded: at a
   #                        handoff into the step's gate and on every notifier watch pass for each card waiting there

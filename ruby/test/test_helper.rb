@@ -92,15 +92,17 @@ JPEG = "\xFF\xD8\xFF\xE0\x00\x10JFIF".b + ("\x00".b * 20)
 # The Store's approval-gate port: answers every approval step with `answer` (green by default); `down` raises Unavailable.
 class ApprovalCi
   attr_accessor :answer, :down
-  attr_reader :asked
+  attr_reader :asked, :cards
 
   def initialize
     @answer = { number: 7, state: "success", finished_at: 1 }
     @asked = []
+    @cards = [] # each card as it was asked about
   end
 
   def approval_checks(card, step)
     @asked << [card[:id], step]
+    @cards << card
     raise AgentsKanban::Delivery::Unavailable, @down if @down
 
     @answer

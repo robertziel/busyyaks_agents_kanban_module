@@ -26,6 +26,9 @@ module AgentsKanban
     MAX_QUESTION = 8000
     MAX_OPTIONS = 8
     MAX_OPTION = 200
+    # The answers that need the owner to act (gate watch: one ping per completion, finished_at = its time): a failed CI,
+    # and one the host calls stuck — pending longer than it allows (finished_at = when it became stuck).
+    RED = %w[failure stuck].freeze
     MAX_TITLE = 200
     MAX_LABELS = 12
     MAX_LABEL = 40
@@ -840,9 +843,13 @@ module AgentsKanban
       # A gate with an approval step is entered only on green CI (approval.requires_green_ci), BEFORE writing: the card
       # as it will sit there is asked exactly what the operator's Approve will ask — unread, pending, red or unknown →
       # refused with that state, nothing written ("hand off once CI is green"). Green → the Approve answers at once.
-      step = b.approval_from(target)
-      green = step && green_ci!(c.merge(column: target, pr_url: pr || c[:pr_url]), b, step, handoff: true)
       ci = ci_url.to_s.strip.empty? ? nil : ci_url.to_s.strip
+      step = b.approval_from(target)
+      # asked as a handoff: the card carries handoff_ci_url = THIS handoff's ci_url (not written yet; nil when none) —
+      # a host may check it is the build of the head handed over. Only a handoff carries the key: an Approve or a
+      # watch pass asks about the head's CI, never about which build was handed over (a rebuild never parks a card)
+      green = step && green_ci!(c.merge(column: target, pr_url: pr || c[:pr_url], handoff_ci_url: ci), b, step,
+                                handoff: true)
       exhausted = loop_exhausted?(b, c)
       summary = review_summary!(b, c, review_summary, exhausted)
       unresolved = summary && (summary["needs_human"] + summary["open"])
@@ -1697,6 +1704,7 @@ module AgentsKanban
       ref = pr[:number] ? "PR ##{pr[:number]}" : "its PR"
       case pr[:state]
       when "failure" then "#{ref}: CI failed"
+      when "stuck" then "#{ref}: CI is stuck (pending longer than the host allows)"
       when "pending" then "#{ref}: CI is still running"
       when "unpolled" then "#{ref}: CI not read yet"
       when "nochecks" then "#{ref}: no CI checks ran"
@@ -2364,13 +2372,13 @@ module AgentsKanban
       rescue Delivery::Unavailable => e
         return [c[:id], "unavailable: #{e.message}", gate_event(c, b, "CI state unknown — #{e.message}", red: nil)]
       end
-      red = pr&.dig(:state) == "failure" ? (pr[:finished_at] || 0) : nil
+      red = RED.include?(pr&.dig(:state)) ? (pr[:finished_at] || 0) : nil
       [c[:id], pr ? pr[:state] : "no PR", gate_event(c, b, hold_from(c, pr), red: red)]
     end
 
     # → :red (pinged the owner) | :red_nobody (no owner session to ping) | :ready | nil. red: the finish time of a
-    # "failure" answer (whatever the host's words for it — a reason: on a red merge CI too), nil when not red: ONE ping
-    # per CI completion (ci_watches kind "gate_red", ref = that time).
+    # RED answer (whatever the host's words for it — a reason: on a red merge CI too), nil when not red: ONE ping per CI
+    # completion (ci_watches kind "gate_red", ref = that time).
     def gate_event(c, b, why, red:)
       now = why || "ready"
       new_red = !red.nil? && watches_t.where(card_id: c[:id], kind: "gate_red", ref: red).empty? # a red completion not told
@@ -2429,6 +2437,7 @@ module AgentsKanban
 
       why = case pr[:state]
             when "failure" then "CI failed"
+            when "stuck" then "CI is stuck (pending longer than the host allows)"
             when "pending" then "CI is still running"
             when "unpolled" then "CI not read yet (asked now — #{again})"
             when "nochecks" then "no CI checks ran"

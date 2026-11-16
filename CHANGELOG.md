@@ -8,6 +8,11 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Added
 
+- **A `stuck` CI answer**: the approval gate's `approval_checks` may answer `state: "stuck"` (a check
+  pending longer than the host allows). It holds the gate and is red like `failure`: the gate watch pings the owner once
+  per `finished_at`; refusals say "CI is stuck". A handoff asks the port with `handoff_ci_url` (its `ci_url`, not written
+  yet) on the card — a key only a handoff carries — so a host can refuse a build URL that is not the head's at the handoff
+  and never on an Approve.
 - **`<Board cardTerminals>`**: an optional host renderer for the card dialog's **Terminals** section
   (the card's agent sessions as live terminals); absent or `null` for a card = no section. `KanbanHostValue.cardTerminals`.
   `Store#card_sessions(id)` (the open registrations working on a card) and `Store#terminal_event` (a `terminal` audit

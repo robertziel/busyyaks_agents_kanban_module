@@ -110,6 +110,20 @@ class GateHoldTest < Minitest::Test
     assert_equal ["waiting for CI: jenkins/ci for the merge is failure — pinged acme_shop"], gate_lines
   end
 
+  # a check the host calls stuck (pending longer than it allows) needs the owner as a red one does: one ping per
+  # stuck build (finished_at = when it became stuck), its hold in the host's words
+  def test_a_stuck_answer_holds_and_pings_the_owner_once
+    approval_ci.answer = { number: 7, state: "stuck", finished_at: 9 }
+    2.times { @n.watch }
+    assert_equal "PR #7: CI is stuck (pending longer than the host allows)", gate_card[:gate_hold]
+    assert_equal [0, 1, 0, 1, 0], counts
+    assert_equal 1, pings.size
+    assert_match(/PR #7: CI is stuck .* while card ##{@id} "ship" waits in Local: Human review — fix it/, pings[0][:text])
+    approval_ci.answer = { number: 7, state: "stuck", finished_at: 9, reason: "PR #7: CI stuck — jenkins/ci pending 2 h" }
+    @n.watch
+    assert_equal 1, pings.size, "the same stuck build once, whatever the words"
+  end
+
   def test_red_with_no_owner_session_is_said_so
     @m.set_owner(@id, session: "", by: "operator@x")
     approval_ci.answer = { number: 7, state: "failure", finished_at: 9 }
