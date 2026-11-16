@@ -8,6 +8,9 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Added
 
+- **Card-face picture**: decorated cards carry `media` = their newest live picture attachment (`{id, filename, url}`;
+  png / jpeg / gif / webp, newest by `created_at` then id; `null` when none). The board face shows it under the cover
+  at a fixed height, lazily loaded. SPEC § 4.
 - **Agent faces**: `AgentFace` draws every agent identity as two eyes on a disc in its type's colour
   (`--ak-face-type-<type|role>`), its mood from the live state shown by the eyes alone (CSS only; a still pose under
   reduced motion). `Avatar`: an agent wears its face; a person shows their picture from `avatar_url`, else the initials.

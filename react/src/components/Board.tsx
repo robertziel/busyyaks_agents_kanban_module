@@ -1096,6 +1096,9 @@ function CardItem({
         }}
       >
         {c.cover && <div className={`kb-cardcover lc-${c.cover}`} aria-hidden="true" />}
+        {c.media && (
+          <img className="kb-cardmedia" src={c.media.url} alt={c.media.filename} loading="lazy" draggable={false} />
+        )}
         {c.labels.length > 0 && (
           <button
             type="button"
