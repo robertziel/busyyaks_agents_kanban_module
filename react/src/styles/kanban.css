@@ -2379,6 +2379,8 @@
   margin: 0 0 6px;
   padding: 0;
   display: grid;
+  /* the rail's width, never a chip's: an auto track grows to the widest chip and scrolls the rail sideways */
+  grid-template-columns: minmax(0, 1fr);
   gap: 3px;
 }
 .ak-root .kb-links a {
@@ -2452,6 +2454,7 @@
   max-height: 46vh;
   overflow-y: auto;
   display: grid;
+  grid-template-columns: minmax(0, 1fr); /* as .kb-links: the rail's width */
   gap: 8px;
   margin: 0 0 6px;
 }
@@ -2500,8 +2503,10 @@
   outline: 2px solid rgba(var(--ak-accent-rgb), 0.6);
   outline-offset: 1px;
 }
-/* a row with the host's tags: label and chips on ONE line (the label gives way, the chips never wrap or shrink); the
-   whole row is the hover / focus target of the detail popover */
+/* a row with the host's tags: label and chips on ONE line while they fit (the label gives way); when they do not, the
+   chips go under the label, and when they are wider than the row they wrap among themselves and a chip longer than the
+   row ends in an ellipsis — never wider than the rail (the popover has the full text). The whole row is the hover /
+   focus target of the detail popover */
 .ak-root .kb-links li.kb-link-row {
   display: flex;
   flex-wrap: wrap;
@@ -2537,7 +2542,11 @@
 .ak-root .kb-link-tags {
   all: unset;
   display: inline-flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 100%;
+  min-width: 0;
   gap: 3px;
   align-items: center;
   cursor: default;
@@ -2556,6 +2565,10 @@
   padding: 0 6px;
   border-radius: var(--ak-radius-pill);
   white-space: nowrap;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--ak-ink-faint);
   background: color-mix(in srgb, currentColor 13%, transparent);
 }

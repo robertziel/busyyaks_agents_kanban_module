@@ -105,6 +105,12 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
   that keep the width, the one that fits the height best — the 15-column local board shows whole at 1920 × 1080.
   Splits too wide are skipped undrawn; the editor re-folds 120 ms after a resize settles.
 
+### Fixed
+
+- **The Links rail never grows wider than itself**: a row's chips wrap among themselves and a chip
+  wider than the row ends in an ellipsis (the popover has the full text); the rail's grid track is its own width. Many
+  chips, or a long one (`base: feature/live-agent-status`), scrolled the whole rail sideways on a phone, its labels cut.
+
 ## [1.0.0-beta.1] - 2026-11-10
 
 Everything below ships as **1.0.0-beta.1**, the first public release, together with
