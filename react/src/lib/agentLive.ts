@@ -1,6 +1,7 @@
 // The card dialog's live agent line (SPEC § 9): what a session does now, worded from the host's SessionLive. Pure, so
 // the wording is tested without a DOM. A field the host could not read is left out, never guessed.
 import type { Card, SessionLive } from "../types";
+import { moodOf, type Mood } from "./face";
 
 export type LiveLine = { text: string; tone: "working" | "blocked" | "idle" | "unknown"; running: boolean };
 
@@ -14,20 +15,62 @@ export function elapsed(s: number | null): string | null {
   return `${sec}s`;
 }
 
+// the largest unit only: what a small label has room for ("44m", "2h", "42s")
+export function elapsedShort(s: number | null): string | null {
+  if (s === null) return null;
+  if (s >= 3600) return `${Math.floor(s / 3600)}h`;
+  if (s >= 60) return `${Math.floor(s / 60)}m`;
+  return `${s}s`;
+}
+
+// A session's name as a small label shows it: the part that tells it from its neighbours. Sessions of one board start
+// with the project's name (the slug, or its last part, with every other character as "_"), so that prefix is dropped;
+// what is still longer than `max` is cut in the MIDDLE — the end (the number, the role) is what differs. The full name
+// stays in the tooltip and the details.
+export function shortSession(session: string, project: string, max = 14): string {
+  const norm = (s: string) => s.replace(/[^A-Za-z0-9_-]/g, "_");
+  let name = session;
+  for (const prefix of [norm(project), norm(project.split("/").pop()!)]) {
+    if (
+      prefix &&
+      session.length > prefix.length + 1 &&
+      session.startsWith(prefix) &&
+      /[_-]/.test(session[prefix.length]!)
+    ) {
+      name = session.slice(prefix.length + 1);
+      break;
+    }
+  }
+  if (name.length <= max) return name;
+  const tail = Math.ceil((max - 1) * 0.65);
+  return `${name.slice(0, max - 1 - tail)}…${name.slice(-tail)}`;
+}
+
 const COMMENT_TOOL = /(?:^|·\s*)kanban_(?:comment|comment_edit|ask|attach|handoff)$/;
 
-// cardId: the open card — a comment tool writing on it reads "writing a comment on this card"
-export function liveLine(l: SessionLive, cardId: number): LiveLine {
-  if (l.state === "blocked") return { text: "waiting for you (a dialog or question)", tone: "blocked", running: true };
+// The line in parts (the agent-at-work strip shows each on its own): what it does, in words, and the counters the
+// host read. cardId: the open card — a comment tool writing on it reads "writing a comment on this card".
+// `brief` = the same in a word or two, what a small label has room for: the tool's OWN name (the last part of
+// "server · tool"), never the counters.
+export type LiveParts = LiveLine & { what: string; brief: string; meta: string[] };
+
+export function liveParts(l: SessionLive, cardId: number): LiveParts {
+  if (l.state === "blocked") {
+    const what = "waiting for you (a dialog or question)";
+    return { what, brief: "needs you", meta: [], text: what, tone: "blocked", running: true };
+  }
   if (l.state !== "working") {
     const tone = l.state === "idle" || l.state === "finished" ? "idle" : "unknown";
-    return { text: l.state === "unknown" ? "state unknown" : l.state, tone, running: false };
+    const what = l.state === "unknown" ? "state unknown" : l.state;
+    return { what, brief: l.state, meta: [], text: what, tone, running: false };
   }
   let what: string;
+  let brief: string = l.phase ?? "working";
   if (l.phase === "thinking") what = "thinking…";
   else if (l.phase === "writing") what = "writing…";
   else if (l.phase === "subagents") what = "waiting for its subagents";
   else if (l.phase === "tool") {
+    brief = l.tool ? l.tool.split("·").pop()!.trim() : "tool";
     if (l.tool && COMMENT_TOOL.test(l.tool))
       what =
         l.card === cardId
@@ -37,9 +80,15 @@ export function liveLine(l: SessionLive, cardId: number): LiveLine {
             : `writing a comment on card ${l.card}`;
     else what = l.tool ? `running ${l.tool}` : "running a tool";
   } else what = "working";
-  const bits = [what, elapsed(l.elapsed_s), l.tokens ? `${l.tokens} tokens` : null];
-  if (l.subagents) bits.push(`${l.subagents} subagent${l.subagents === 1 ? "" : "s"}`);
-  return { text: bits.filter((b): b is string => !!b).join(" · "), tone: "working", running: true };
+  const meta = [elapsed(l.elapsed_s), l.tokens ? `${l.tokens} tokens` : null];
+  if (l.subagents) meta.push(`${l.subagents} subagent${l.subagents === 1 ? "" : "s"}`);
+  const shown = meta.filter((b): b is string => !!b);
+  return { what, brief, meta: shown, text: [what, ...shown].join(" · "), tone: "working", running: true };
+}
+
+export function liveLine(l: SessionLive, cardId: number): LiveLine {
+  const { text, tone, running } = liveParts(l, cardId);
+  return { text, tone, running };
 }
 
 // The session a comment's author runs in (as Bits' sessionFor: its own name, or the card's assignee → its owner session)
@@ -69,6 +118,25 @@ export function liveDots(
     seen.add(s);
     const line = liveLine(sessions[s]!, cardId);
     if (line.running) out.set(c.id, { ...line, session: s });
+  }
+  return out;
+}
+
+// comment ids (newest first) → the mood of the face on the newest comment of each session the host reads live: that
+// one face moves, the same agent's older comments stay still
+export function liveMoods(
+  comments: { id: number; author: string }[],
+  card: Pick<Card, "owner_session" | "assignee">,
+  sessions: Record<string, SessionLive> | undefined,
+): Map<number, Mood> {
+  const out = new Map<number, Mood>();
+  const seen = new Set<string>();
+  for (const c of comments) {
+    const s = liveSessionOf(c.author, card, sessions);
+    if (!s || seen.has(s) || !sessions) continue;
+    seen.add(s);
+    const mood = moodOf(sessions[s]!);
+    if (mood) out.set(c.id, mood);
   }
   return out;
 }

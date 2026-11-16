@@ -7,17 +7,28 @@
 // inserts the snippet) — each upload shows its progress and, on failure, the server's reason. Pictures open in a lightbox.
 import { useCallback, useEffect, useRef, useState, type FormEvent, type MutableRefObject, type ReactNode } from "react";
 import { errMsg } from "../api";
-import { colLabel as labelOf, useKanbanHost } from "../host";
+import { colLabel as labelOf, useFaceType, useKanbanHost } from "../host";
 import { dragHasFiles, filesOf, formatBytes } from "../lib/attachments";
 import { dueLabel, dueState, fromLocalInput, ownerSessionAllowed, toLocalInput } from "../lib/board";
 import { activityAnchor, activityAnchorId, jumpNeedsDetails, SPOKEN } from "../lib/card";
 import { useFetch } from "../lib/fetch";
 import { isoAt } from "../lib/format";
 import { pingLine } from "../lib/listen";
-import { liveAnnounce, liveDots, liveLine } from "../lib/agentLive";
+import { liveDots, liveMoods } from "../lib/agentLive";
+import { faceType, moodOf } from "../lib/face";
 import { useLivePoll, useLiveRev } from "../lib/live";
-import type { Attachment, BoardData, BoardLabel, CardData, CardFull, Checklist, MentionPart } from "../types";
+import type {
+  Attachment,
+  BoardData,
+  BoardLabel,
+  CardData,
+  CardFull,
+  Checklist,
+  MentionPart,
+  PresentAgent,
+} from "../types";
 import { AgentLinks, Avatar, ErrorState, Html, Loading } from "./Bits";
+import { AgentsAtWork } from "./Faces";
 import { CardLinks } from "./CardLinkRow";
 import { KbIcon, type IconName } from "./KbIcon";
 import { MarkdownEditor, UploadChips, type DictateHandle } from "./MarkdownEditor";
@@ -212,6 +223,10 @@ function CardDetail({
   // comment, a dot on each running session's newest comment
   const sessionsLive = api.sessionsLive;
   const live = useLivePoll(sessionsLive ? () => sessionsLive(id) : null);
+  // the agents at work on the card now: the host's `present` (owner first), only from a poll that answered — a failed
+  // poll shows nobody here (its error says why), never the last answer; ownership alone is never presence. One small
+  // label each (AgentsAtWork); one that left stays through its exit animation.
+  const present: PresentAgent[] = live.error ? [] : (live.value?.present ?? []);
   const [details, setDetails] = useState(true);
   const [uploads, setUploads] = useState<{ key: number; name: string; pct: number; error?: string }[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -333,8 +348,15 @@ function CardDetail({
     liveSessions,
     c.id,
   );
-  const ownerLive = c.owner_session ? liveSessions?.[c.owner_session] : undefined;
-  const ownerLine = ownerLive ? liveLine(ownerLive, c.id) : null;
+  // the face on a session's newest word (comment, question, answer) wears its mood; its older ones stay still
+  const moods = liveMoods(
+    comments.filter((e) => SPOKEN.has(e.kind)),
+    c,
+    liveSessions,
+  );
+  const agents = data.agents ?? board.agents;
+  const typeOf = (who: string) => faceType(who, agents, config.face_roles);
+  const assigneeHere = present.find((p) => p.agent === c.assignee);
   const press = (key: string) => void run(() => api.dialogAnswer(id, key));
   const options = c.question_options ?? [];
   const files = c.attachments;
@@ -442,7 +464,12 @@ function CardDetail({
               <div>
                 <span className="kb-fact-h">Member</span>
                 <button type="button" className="kb-member" onClick={() => setPanel("members")}>
-                  <Avatar name={c.assignee} email={c.assignee} />
+                  <Avatar
+                    name={c.assignee}
+                    email={c.assignee}
+                    type={assigneeHere?.type ?? typeOf(c.assignee)}
+                    mood={assigneeHere ? moodOf(assigneeHere.live) : null}
+                  />
                   <span>{c.assignee}</span>
                 </button>
               </div>
@@ -832,7 +859,7 @@ function CardDetail({
                 void sendComment(comment, true);
               }}
             >
-              <Avatar name={me} email={me} />
+              <Avatar name={me} email={me} type={typeOf(me)} />
               <div className="kb-comment-box">
                 <MarkdownEditor
                   value={comment}
@@ -868,19 +895,13 @@ function CardDetail({
               </p>
             )}
             <ol className="kb-activity">
-              {c.owner_session && (ownerLine || live.error) && (
-                <li
-                  className={`kb-agent-live t-${ownerLine?.tone ?? "unknown"}${live.error ? " err" : ""}`}
-                  title={ownerLive?.state_by ? `read from ${ownerLive.state_by}` : undefined}
-                >
-                  {/* a screen reader hears the state when it changes, never the timer ticking every poll */}
-                  <span className="kb-sr-only" aria-live="polite">
-                    {ownerLine ? `${c.owner_session} ${liveAnnounce(ownerLine)}` : ""}
-                  </span>
-                  <span className={`kb-live-dot${ownerLine?.running ? " on" : ""}`} aria-hidden="true" />
-                  <b>{c.owner_session}</b>
-                  {ownerLine && <span className="kb-agent-live-text">{ownerLine.text}</span>}
-                  {live.error && <span className="ag-err">live status: {live.error}</span>}
+              {/* unmounted on a failed poll: nobody lingers through it */}
+              {sessionsLive && !live.error && (
+                <AgentsAtWork present={present} cardId={c.id} project={c.project} agents={agents} />
+              )}
+              {live.error && (
+                <li className="kb-live-err">
+                  <span className="ag-err">live status: {live.error}</span>
                 </li>
               )}
               {comments.map((e) =>
@@ -891,7 +912,7 @@ function CardDetail({
                     id={activityAnchorId(e.id)}
                     data-question={e.id}
                   >
-                    <Avatar name={e.author} email={e.author} />
+                    <Avatar name={e.author} email={e.author} type={typeOf(e.author)} mood={moods.get(e.id)} />
                     <div className="kb-cbody">
                       <div className="kb-ameta">
                         <b>{e.author}</b> <span className="kb-q-tag">{e.kind}</span>{" "}
@@ -906,7 +927,7 @@ function CardDetail({
                   </li>
                 ) : e.kind === "comment" ? (
                   <li className="c" key={e.id} id={activityAnchorId(e.id)} data-comment={e.id}>
-                    <Avatar name={e.author} email={e.author} />
+                    <Avatar name={e.author} email={e.author} type={typeOf(e.author)} mood={moods.get(e.id)} />
                     <div className="kb-cbody">
                       <div className="kb-ameta">
                         <b>{e.author}</b>{" "}
@@ -982,7 +1003,7 @@ function CardDetail({
                   </li>
                 ) : (
                   <li className="ev" key={e.id} id={activityAnchorId(e.id)}>
-                    <Avatar name={e.author} email={e.author} />
+                    <Avatar name={e.author} email={e.author} type={typeOf(e.author)} />
                     <span>
                       <b>{e.author}</b> <span className="kb-ev">{e.kind}</span> {e.body}{" "}
                       <span className="muted">{isoAt(e.at)}</span>
@@ -1015,6 +1036,7 @@ function CardDetail({
               current={c.assignee}
               candidates={board.assignees ?? []}
               me={me}
+              agents={agents}
               busy={busy}
               onPick={(a) => void run(() => api.assign(id, a ?? ""))}
             />
@@ -1348,16 +1370,19 @@ function MembersPanel({
   current,
   candidates,
   me,
+  agents,
   busy,
   onPick,
 }: {
   current: string | null;
   candidates: string[];
   me: string;
+  agents: Record<string, string> | undefined;
   busy: boolean;
   onPick: (a: string | null) => void;
 }) {
   const [other, setOther] = useState("");
+  const typeOf = useFaceType(agents);
   const list = [me, ...candidates.filter((x) => x !== me)];
   return (
     <div className="kb-panel" role="group" aria-label="Members">
@@ -1370,7 +1395,7 @@ function MembersPanel({
               aria-pressed={current === m}
               onClick={() => onPick(current === m ? null : m)}
             >
-              <Avatar name={m} email={m} />
+              <Avatar name={m} email={m} type={typeOf(m)} />
               <span>{m}</span>
               {current === m && <b aria-hidden="true">✓</b>}
             </button>

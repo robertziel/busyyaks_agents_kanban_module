@@ -265,7 +265,7 @@ on a single card; `parent`, `children`, `blocked_by` (the unfinished parents), `
 `needs_operator` (bool), `blocked` (`{reason, url, by, at}` | null), `review_round` (the rounds in the card's current
 review column | null) always. Board: `Api#board` — `columns:
 [{column,label,type,operator_only,cards}]`, `labels`, `config` (the host config), `board` (§ 2a: `{columns, transitions,
-rules, types, updated_by, updated}`), `archived?`, `backlog_md`, `columns_order`, `waiting_columns`, `listened_columns`,
+rules, types, updated_by, updated}`), `agents` (`Store#agent_types`: agent name → the type key it registered as on this project, the newest registration winning; also on the card body — a name no session registered under is absent, its face drawn with no type colour), `archived?`, `backlog_md`, `columns_order`, `waiting_columns`, `listened_columns`,
 `priorities`, `label_colors`, `waiting` (the waiting columns' cards + the `needs_operator` cards elsewhere; never a held
 or an `external` one), `held`, `external` (cards only blocked_external, any column), `flagged` + the
 host's `board_extras`; 422 `{error}` when the stored board no longer fits the host.
@@ -363,6 +363,28 @@ Newest first; a heading names the `Schema::VERSION` step when the change brought
   the open card in a **Terminals** section (after the description); absent, or `null` for that card = no section. The
   engine renders nothing of its own there — the host draws its live terminals of the card's agent sessions.
   `KanbanHostValue.cardTerminals` (null when absent; a host that builds the value itself adds it).
+
+### No schema step — agent faces
+
+- Board JSON and the card body carry `agents` (agent name → registered type key). The React `Avatar` draws any
+  identity that is not an email address (and not the operator, `me`) as a face (`AgentFace`, `lib/face.ts`): two eyes,
+  their shape hashed from the name, on a disc coloured by the TYPE; a person keeps the initials. Moods (sleeping · idle ·
+  working · thinking · tool · writing · subagents · blocked) come from the host's `SessionLive` and are shown by the eyes
+  alone (blink, look up, squint, read along, glance, wide, closed); static under `prefers-reduced-motion`.
+- Host config `face_roles` (required; null or `{role: [name globs]}`): a face whose name no session registered (a
+  subagent's own name) wears the colour of the first role whose glob matches it (`faceType`: the registered type, else
+  the role, else none). Config, never a name the code knows.
+- Host config `avatar_url` (required; null or an https template with `{sha256}`): a PERSON's picture, the hex SHA-256
+  of the trimmed, lower-cased email (Gravatar's scheme); the image shows when the URL answers one, else the initials
+  (no picture on record). null = initials only, no request leaves the page.
+- `SessionsLive.present: PresentAgent[]` (required once a host has `sessionsLive`; the engine never derives it — no owner stand-in; a failed poll shows nobody) (`{session, agent, type, live, why: blocked|tool|activity}`): the card's agents
+  at work on it NOW — `Store#presence(slug, live:)` from the host's live reading: an open registration of the project,
+  live state working or blocked, whose running tool names the card (`why: tool`) or whose agent name wrote on the card
+  since its turn began (now − `elapsed_s`; no elapsed → no activity rule; `why: activity`), or — stopped on a
+  dialog (state blocked) — the card it last wrote on since it registered (`why: blocked`); ownership alone is not
+  presence; the card dialog shows them as a "here now" row. New optional
+  `KanbanApi.boardPresence(slug)` → `{cards: {id → PresentAgent[]}}`: the board polls it and shows the present agents'
+  faces on each card face, entering and leaving as they come and go. Absent port → no presence, never guessed.
 
 ### No schema step — the live agent line (React only)
 

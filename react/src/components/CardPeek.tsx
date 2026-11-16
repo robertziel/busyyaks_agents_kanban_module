@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { errMsg } from "../api";
+import { useFaceType } from "../host";
 import { dueLabel, dueState } from "../lib/board";
 import { isoAgo } from "../lib/format";
 import { toneClass } from "../lib/links";
@@ -170,6 +171,7 @@ export function CardPeek({ load, delayMs = 300, ttlMs = 30_000 }: CardPeekProps)
 const MAX_PRS = 2; // the panel is a glance: a card with more PRs says how many more
 
 function PeekBody({ id, read }: { id: number; read: Read }) {
+  const typeOf = useFaceType(read && "data" in read ? read.data.agents : undefined);
   // the id is known before the read: the panel opens with it and the card's shape (kanban.css .kb-peek-bone), which
   // show only when the read takes longer than a blink
   if (!read)
@@ -258,7 +260,7 @@ function PeekBody({ id, read }: { id: number; read: Read }) {
       <footer className="kb-peek-foot kb-badges">
         {who ? (
           <span className="kb-peek-who">
-            <Avatar name={who} email={who} />
+            <Avatar name={who} email={who} type={typeOf(who)} />
             <span className="mono" title={who}>
               {shortName(who)}
             </span>

@@ -9,8 +9,31 @@ export { KbIcon, type IconName } from "./components/KbIcon";
 export { Select, type Option } from "./components/Select";
 export { BoardEditor } from "./components/BoardEditor";
 export { CardLinkRow, CardLinks, LINK_KIND } from "./components/CardLinkRow";
+export { AgentFace, type AgentFaceProps } from "./components/AgentFace";
+export { AgentAtWork, AgentsAtWork, HereNow, presentType } from "./components/Faces";
+export * from "./lib/face";
+export { linger, useLingering, type Lingering } from "./lib/linger";
+export {
+  elapsed,
+  elapsedShort,
+  shortSession,
+  liveAnnounce,
+  liveLine,
+  liveMoods,
+  liveParts,
+  liveSessionOf,
+  type LiveLine,
+  type LiveParts,
+} from "./lib/agentLive";
 export { Avatar, AgentLinks, CopyChip, ErrorState, Html, Loading, sessionFor } from "./components/Bits";
-export { KanbanHostProvider, useKanbanHost, useKanbanHostIfAny, colLabel, type KanbanHostValue } from "./host";
+export {
+  KanbanHostProvider,
+  useKanbanHost,
+  useKanbanHostIfAny,
+  useFaceType,
+  colLabel,
+  type KanbanHostValue,
+} from "./host";
 export { LaunchBar, type LaunchBarProps } from "./components/LaunchBar";
 export { LaunchFailureAlert, type LaunchFailureAlertProps } from "./components/LaunchFailureAlert";
 export { CardPeek, type CardPeekProps } from "./components/CardPeek";

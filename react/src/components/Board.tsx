@@ -22,7 +22,7 @@ import {
   type ReactNode,
 } from "react";
 import { errMsg, type KanbanApi } from "../api";
-import { KanbanHostProvider, colLabel as labelOf, type KanbanHostValue } from "../host";
+import { KanbanHostProvider, colLabel as labelOf, useFaceType, type KanbanHostValue } from "../host";
 import {
   dayGroups,
   dropPosition,
@@ -47,7 +47,8 @@ import { useFetch } from "../lib/fetch";
 import { isoAgo, isoAt } from "../lib/format";
 import { useGlide } from "../lib/glide";
 import { noListener } from "../lib/listen";
-import { useLiveRev } from "../lib/live";
+import { faceType, moodOf } from "../lib/face";
+import { useLivePoll, useLiveRev } from "../lib/live";
 import type {
   BacklogTask,
   BoardShapeData,
@@ -57,8 +58,10 @@ import type {
   CardFull,
   ColumnKey,
   SessionLinks,
+  PresentAgent,
 } from "../types";
 import { Avatar, ErrorState, Loading } from "./Bits";
+import { HereNow } from "./Faces";
 import { BoardEditor } from "./BoardEditor";
 import { CardDialog, PANELS, type Panel } from "./CardDialog";
 import { KbIcon } from "./KbIcon";
@@ -281,6 +284,21 @@ export function Board({
     () => api.boardRev(slug, { archived: showArchived }),
     () => void reload(),
     { paused: () => pause.current },
+  );
+  // the agents at work on each card right now (the host's optional boardPresence port): their faces on the card
+  // faces. No port → none shown; a failed poll shows none either (who was here a while ago is not who is here now)
+  // and says so beside the live mark.
+  const boardPresence = api.boardPresence;
+  const presence = useLivePoll(
+    boardPresence
+      ? () =>
+          boardPresence(slug).then((p) => {
+            // an answer without the cards map is a failed read, said as one — never "nobody is here"
+            if (typeof p.cards !== "object" || p.cards === null) throw new Error("the answer has no cards");
+            return p;
+          })
+      : null,
+    5000,
   );
   // a card that changed place glides there (lib/glide.ts): an agent's move, a drop, the cards making room, a new
   // filter or order. Still while a card is dragged or a move is in flight; the dropped card settles from its slot.
@@ -602,6 +620,11 @@ export function Board({
           >
             <i /> {live.error ? "live · error" : "live"}
           </span>
+          {presence.error && (
+            <span className="kb-live bad" title={`who is at work on each card: ${presence.error}`}>
+              <i /> agents at work · error
+            </span>
+          )}
           <button
             type="button"
             className="btn small"
@@ -875,6 +898,8 @@ export function Board({
                               live={data.live_sessions ?? null}
                               listened={data.listened_columns}
                               links={data.session_links}
+                              agents={data.agents}
+                              present={presence.error ? undefined : presence.value?.cards[String(c.id)]}
                               key={c.id}
                               card={c}
                               colorOf={colorOf}
@@ -928,7 +953,12 @@ export function Board({
                           {(Array.isArray(t.assignee) ? t.assignee : t.assignee ? [t.assignee] : [])
                             .slice(0, 2)
                             .map((a) => (
-                              <Avatar key={a} name={a} email={a} />
+                              <Avatar
+                                key={a}
+                                name={a}
+                                email={a}
+                                type={faceType(a, data.agents, data.config.face_roles)}
+                              />
                             ))}
                         </div>
                       </li>
@@ -1000,6 +1030,8 @@ type CardItemProps = {
   live: string[] | null; // live agent session names; null = launcher down (no "gone" claims)
   listened: string[]; // columns where an assignee without an owner session is flagged "no listener"
   links: Record<string, SessionLinks> | undefined;
+  agents: Record<string, string> | undefined; // agent name → agent type key (the faces' colours)
+  present: PresentAgent[] | undefined; // the agents at work on this card now; undefined = none read
   colorOf: Map<string, string>;
   names: boolean;
   nowMs: number;
@@ -1013,6 +1045,8 @@ type CardItemProps = {
   onDragEnd: () => void;
 };
 
+const NOBODY: PresentAgent[] = [];
+
 function CardItem({
   card: c,
   reviewCols,
@@ -1020,6 +1054,8 @@ function CardItem({
   live,
   listened,
   links,
+  agents,
+  present,
   colorOf,
   names,
   nowMs,
@@ -1034,6 +1070,12 @@ function CardItem({
 }: CardItemProps) {
   const ds = dueState(c.due, c.due_done, nowMs);
   const full = c.checklist_total > 0 && c.checklist_done === c.checklist_total;
+  // the agents at work on the card now (the host's boardPresence): the assignee's own face wears its mood, the others
+  // stand beside it and leave when they are gone
+  const here = present ?? NOBODY;
+  const typeOf = useFaceType(agents);
+  const assigneeHere = here.find((p) => p.agent === c.assignee);
+  const others = assigneeHere ? here.filter((p) => p !== assigneeHere) : here;
   return (
     <>
       {ghostBefore && <li className="kb-ghost" aria-hidden="true" />}
@@ -1199,11 +1241,17 @@ function CardItem({
             #{c.id}
           </span>
           <span className="spacer" />
-          {c.assignee && (
-            <span className="kb-who" title={c.assignee}>
-              <Avatar name={c.assignee} email={c.assignee} />
-            </span>
-          )}
+          <span className="kb-who">
+            <HereNow present={others} agents={agents} label={`at work on card #${c.id} now`} />
+            {c.assignee && (
+              <Avatar
+                name={c.assignee}
+                email={c.assignee}
+                type={assigneeHere?.type ?? typeOf(c.assignee)}
+                mood={assigneeHere ? moodOf(assigneeHere.live) : null}
+              />
+            )}
+          </span>
         </div>
       </li>
     </>

@@ -105,5 +105,7 @@
     "unresolved_label": "unresolved",
     "unresolved_color": "red",
     "columns": ["local_agent_review", "public_agent_review"]
-  }
+  },
+  "face_roles": { "reviewer": ["reviewer-*"], "qa": ["qa-*"] },
+  "avatar_url": "https://gravatar.com/avatar/{sha256}?s=80&d=404"
 }
