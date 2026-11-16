@@ -772,6 +772,18 @@
   height: 28px;
   background: var(--lc);
 }
+.ak-root .kb-cardmedia {
+  display: block;
+  margin: -8px -10px 0 -13px;
+  width: calc(100% + 23px);
+  height: 120px; /* fixed: the face never shifts while the lazy picture loads */
+  object-fit: cover;
+  object-position: top;
+  background: var(--ak-panel-2);
+}
+.ak-root .kb-cardcover + .kb-cardmedia {
+  margin-top: -6px;
+}
 .ak-root .kb-title {
   color: var(--ak-ink);
   font-weight: 500;

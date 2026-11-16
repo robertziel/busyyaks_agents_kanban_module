@@ -88,6 +88,26 @@ class AttachmentsTest < Minitest::Test
     assert_equal 3, kb.card_json(kb.board("g/r")["backlog"].first)[:attachments]
   end
 
+  def test_the_face_carries_the_newest_live_picture
+    face = -> { kb.card_json(kb.board("g/r")["backlog"].first)[:media] }
+    assert_nil face.call
+    @att.add(@card, filename: "notes.txt", bytes: "x", by: "op")
+    @att.add(@card, filename: "i.svg", bytes: "<svg></svg>", by: "op")
+    assert_nil face.call, "a file or an svg is no picture on the face"
+    old = @att.add(@card, filename: "old.png", bytes: PNG, by: "op")
+    @now += 10
+    new = @att.add(@card, filename: "new.png", bytes: PNG, by: "op")
+    assert_equal({ id: new[:id], filename: "new.png", url: "/api/attachments/#{new[:id]}" }, face.call)
+    assert_equal new[:id], kb.card(@card)[:media][:id]
+    @att.delete(new[:id], by: "op")
+    assert_equal old[:id], face.call[:id], "a deleted picture leaves the face; the one before it shows"
+    @att.delete(old[:id], by: "op")
+    assert_nil face.call
+    a = @att.add(@card, filename: "a.png", bytes: PNG, by: "op")
+    b = @att.add(@card, filename: "b.png", bytes: PNG, by: "op")
+    assert_equal [a[:created_at], b[:id]], [b[:created_at], face.call[:id]], "same second: the later row is the newest"
+  end
+
   def test_revision_changes_on_add_and_delete
     rev = -> { AgentsKanban::Rev.of(kb.card_body(kb.card(@card))) }
     c0 = rev.call

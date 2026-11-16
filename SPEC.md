@@ -173,6 +173,9 @@ host's own ledger records each run. Prefix `""` = the unprefixed table names (a 
   listening on the document) opens a panel with that card's title, column, flags, labels, who, the start of its
   description for anything carrying `data-card-id` — the chips, the option buttons, the dialog's dependency line, and
   whatever the host marks; one read per card per ttl, a failed read shown as its reason.
+- A card face (`decorate`d card JSON) carries `media` = its newest live picture attachment `{id, filename, url}` (an
+  inline image type; newest by created, then id; none → null); the React face shows it under the cover so a card is
+  found by its picture.
 - A comment claims the author's own unlinked attachments it references; deleting the comment unlinks, never deletes.
 - Pings: one pending per card + session (a burst coalesces); never to the owner's own author; `relay` when a card
   gains an owner (the operator's undelivered comments since the last agent comment).

@@ -8,6 +8,7 @@ require_relative "host_config"
 require_relative "board_repo"
 require_relative "schema"
 require_relative "session_dialog"
+require_relative "attachment_policy"
 
 module AgentsKanban
   # The kanban engine over a Sequel connection the HOST hands in (tables: Schema, namespaced by `prefix`). Every column
@@ -376,6 +377,7 @@ module AgentsKanban
             labels: c[:labels], assignee: c[:assignee], priority: c[:priority], comments: c[:comments],
             due: iso(c[:due_at]), due_done: c[:due_done], cover: c[:cover], has_description: !c[:notes].to_s.strip.empty?,
             checklist_done: c[:checklist_done], checklist_total: c[:checklist_total], attachments: c[:attachments],
+            media: c[:media], # the newest picture attachment {id, filename, url} for the face (decorated cards only)
             owner_session: c[:owner_session], owner_socket: c[:owner_socket],
             approved: iso(c[:approved_at]), approved_by: c[:approved_by],
             pr_url: c[:pr_url], ci_url: c[:ci_url], ui_change: c[:ui_change],
@@ -2686,12 +2688,13 @@ module AgentsKanban
               due_done: c[:due_done] == 1, metadata: c[:metadata] ? JSON.parse(c[:metadata]) : nil)
     end
 
-    # :comments, :attachments, :checklist_done / :checklist_total, :dialog, :children, :blocked_by, :transitions for the
-    # card face.
+    # :comments, :attachments, :media, :checklist_done / :checklist_total, :dialog, :children, :blocked_by, :transitions
+    # for the card face.
     def decorate(list, boards = nil)
       ids = list.map { |c| c[:id] }
       n = activity_t.where(card_id: ids, kind: "comment").group_and_count(:card_id).as_hash(:card_id, :count)
       files = attachments_t.where(card_id: ids, deleted_at: nil).group_and_count(:card_id).as_hash(:card_id, :count)
+      media = newest_pictures(ids)
       dialogs = dialogs_t.where(id: list.map { |c| c[:dialog_id] }.compact, answered_at: nil).as_hash(:id)
       kids = cards.where(parent_id: ids, archived_at: nil).group_and_count(:parent_id).as_hash(:parent_id, :count)
       parents = list.map { |c| c[:parent_id] }.compact.uniq
@@ -2709,6 +2712,7 @@ module AgentsKanban
         c[:transitions] = b.column?(c[:column]) ? transitions_json(b, c[:column]) : []
         c[:comments] = n[c[:id]] || 0
         c[:attachments] = files[c[:id]] || 0
+        c[:media] = media[c[:id]]
         its = items[c[:id]] || []
         c[:checklist_total] = its.size
         c[:checklist_done] = its.count { |r| r[:done] == 1 }
@@ -2717,6 +2721,21 @@ module AgentsKanban
         c[:blocked_by] = c[:parent_id] && open.include?(c[:parent_id]) ? [c[:parent_id]] : []
       end
     end
+
+    # card id → its newest live picture attachment {id, filename, url} (newest = created_at, then id; an inline image type
+    # only: AttachmentPolicy::INLINE_IMAGES), shown on the card face so a card is found by its picture. No picture → absent.
+    # One row per card: row_number over the card's pictures, newest first (SQLite ≥ 3.25 and PostgreSQL alike).
+    def newest_pictures(ids)
+      rank = Sequel.function(:row_number).over(partition: :card_id, order: [Sequel.desc(:created_at), Sequel.desc(:id)])
+      attachments_t.where(card_id: ids, deleted_at: nil, content_type: AttachmentPolicy::INLINE_IMAGES)
+                   .select(:id, :card_id, :filename, rank.as(:newest))
+                   .from_self
+                   .where(newest: 1)
+                   .all
+                   .to_h { |a| [a[:card_id], picture_json(a)] }
+    end
+
+    def picture_json(a) = { id: a[:id], filename: a[:filename], url: "#{config.attachment_url_prefix}/#{a[:id]}" }
 
     # The open session dialog on a card face / JSON: what the operator may press (SessionDialog.keys) and what is shown only.
     def dialog_json(row)

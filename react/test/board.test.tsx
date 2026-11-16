@@ -161,6 +161,19 @@ describe("Board", () => {
     ).toBeTruthy();
   });
 
+  it("a card face shows its newest picture attachment (media) so a card is found by its picture; none → no picture", async () => {
+    const cards = [
+      card({ id: 1, column: "todo", title: "with a shot", media: { id: 7, filename: "shot.png", url: "/att/7" } }),
+      card({ id: 2, column: "todo", title: "no shot" }),
+    ];
+    render(<Host api={fakeApi(boardData(coding, cards), cards)} />);
+    const face = (await screen.findByText("with a shot")).closest("li")!;
+    const img = within(face).getByRole("img", { name: "shot.png" });
+    expect(img.getAttribute("src")).toBe("/att/7");
+    expect(img.getAttribute("draggable")).toBe("false");
+    expect(within(screen.getByText("no shot").closest("li")!).queryByRole("img")).toBeNull();
+  });
+
   it("the board's height is FIXED — a theme token or the window below it; the lists scroll inside (never grows with cards)", () => {
     // whitespace collapsed: the rules are matched by content, not by how the file is laid out (Prettier)
     const css = readFileSync(join(__dirname, "..", "src", "styles", "kanban.css"), "utf8").replace(/\s+/g, " ");

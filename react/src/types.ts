@@ -273,6 +273,7 @@ export type Card = {
   checklist_done: number;
   checklist_total: number;
   attachments: number; // board faces: the count (a single card carries the list: CardFull)
+  media?: CardMedia | null; // the newest picture attachment, shown on the face (decorated cards only)
   created_by: string;
   created: string;
   updated: string;
@@ -281,6 +282,7 @@ export type Card = {
   description_html?: string;
   checklists?: Checklist[];
 };
+export type CardMedia = { id: number; filename: string; url: string };
 export type ChecklistItem = {
   id: number;
   body: string;
