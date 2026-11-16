@@ -1570,7 +1570,7 @@ module AgentsKanban
                "#{tag} New comment on card ##{c[:id]} \"#{c[:title]}\" (#{b.label(c[:column])}, #{c[:project_slug]}) " \
                "by #{author}:\n\n#{clip}\n\n" \
                "Read the card with kanban_card id=#{c[:id]}, act on it, and reply with kanban_comment."
-             when "ci_idle"
+             when "ci_idle", "pr_closed"
                "#{tag} #{body}"
              when "assigned"
                "#{tag} Card ##{c[:id]} \"#{c[:title]}\" (#{b.label(c[:column])}, #{c[:project_slug]}) " \
@@ -1701,6 +1701,34 @@ module AgentsKanban
 
       cards.where(archived_at: nil, column: gates).order(:id).all.filter_map do |c|
         prefetch_approval(c, boards[c[:project_slug]])
+      end
+    end
+
+    # ── PR watch: a PR assigned to a live card closed without merging ───────────────────────────────────────────
+    #
+    # The host's ci: port may answer closed_prs(card) → [{role:, number:, closed_at: epoch, why: String} |
+    # {error: String}, …]: the PRs assigned to the card that are closed WITHOUT merging (why = the host's words, e.g.
+    # "base deleted"), and one {error:} per assigned PR it could not read — said beside the closes, never hidden by them;
+    # asking it also keeps every PR assigned to the card watched. It raises Delivery::Unavailable when it cannot say at
+    # all. Every unarchived project card outside its board's terminal columns is asked on each notifier watch pass. Each
+    # close is told ONCE (ci_watches kind "pr_closed:<role>", ref = closed_at — a reopened PR closed again is a new
+    # close): a comment by system_author on the card and a "pr_closed" ping to the owner session. A close with no
+    # positive closed_at or a blank why is refused as the port's error, never told. A port without closed_prs → no PR
+    # watch. → [[card_id, :closed | :closed_nobody | "unavailable: <why>"], …]
+    def pr_watch_pass
+      return [] unless @ci.respond_to?(:closed_prs)
+
+      rows = project_cards.where(archived_at: nil).order(:id).all
+      boards = boards_for(rows.map { |c| c[:project_slug] }.uniq)
+      rows.reject { |c| boards[c[:project_slug]].terminal?(c[:column]) }.flat_map do |c|
+        @ci.closed_prs(c).filter_map do |pr|
+          bad = pr[:error] || pr_closed_invalid(pr)
+          next [c[:id], "unavailable: #{bad}"] if bad
+
+          pr_closed!(c, boards[c[:project_slug]], pr)
+        end
+      rescue Delivery::Unavailable, Delivery::Refused => e
+        [[c[:id], "unavailable: #{e.message}"]]
       end
     end
 
@@ -2428,6 +2456,39 @@ module AgentsKanban
       end
       red = RED.include?(pr&.dig(:state)) ? (pr[:finished_at] || 0) : nil
       [c[:id], pr ? pr[:state] : "no PR", gate_event(c, b, hold_from(c, pr), red: red)]
+    end
+
+    # Why one closed_prs answer cannot be told (pr_watch_pass), nil when it can: the key and the words must be real.
+    def pr_closed_invalid(pr)
+      what = "closed_prs answered PR ##{pr[:number].inspect} (#{pr[:role].inspect})"
+      return "#{what} with no role or number" unless pr[:role].is_a?(String) && pr[:number].is_a?(Integer)
+      return "#{what} with closed_at #{pr[:closed_at].inspect}, not a positive epoch" unless positive?(pr[:closed_at])
+
+      "#{what} with a blank why" if pr[:why].to_s.strip.empty?
+    end
+
+    def positive?(value) = value.is_a?(Integer) && value.positive?
+
+    # One closed_prs answer told once (pr_watch_pass) → [id, :closed | :closed_nobody] | nil (told before).
+    def pr_closed!(c, b, pr)
+      kind = "pr_closed:#{pr.fetch(:role)}"
+      ref = pr.fetch(:closed_at)
+      sys = @config.system_author
+      @db.transaction do
+        next nil if watches_t.where(card_id: c[:id], kind: kind, ref: ref).any?
+
+        owner = c[:owner_session]
+        now = @clock.call
+        watches_t.insert(card_id: c[:id], kind: kind, ref: ref, pr: pr.fetch(:number), state: "closed",
+                         pinged_at: owner && now, created_at: now)
+        what = "PR ##{pr.fetch(:number)} (#{pr.fetch(:role)}) closed without merging (#{pr.fetch(:why)})"
+        text = "#{what} while card ##{c[:id]} \"#{c[:title]}\" is in #{b.label(c[:column])} — open a new PR and " \
+               "assign it (kanban_pr_assign), or say on the card why this one is gone."
+        enqueue_ping(c.merge(column_label: b.label(c[:column])), "pr_closed", sys, text) if owner
+        touch(c[:id])
+        log(c[:id], "comment", "#{what} — #{owner ? "pinged #{owner}" : 'no owner session to ping'}.", sys)
+        [c[:id], owner ? :closed : :closed_nobody]
+      end
     end
 
     # → :red (pinged the owner) | :red_nobody (no owner session to ping) | :ready | nil. red: the finish time of a

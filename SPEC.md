@@ -352,6 +352,25 @@ primitives, for a host without its own).
 
 Newest first; a heading names the `Schema::VERSION` step when the change brought one.
 
+### No schema step — the PR watch
+
+- The `ci:` port on Store may answer `closed_prs(card)` → `[{role:, number:, closed_at: epoch, why: String} |
+  {error: String}]`: the PRs assigned to the card that are closed WITHOUT merging, `why` = the host's words (e.g.
+  `base deleted`, `head deleted`, `by <login>`), and one `{error:}` per assigned PR it could not read — said next to the
+  closes, so a closed PR never hides another PR's failed read; asking also keeps every PR assigned to the card watched
+  by the host. It raises `Delivery::Unavailable` / `Refused` when it cannot say at all. A port without it → no PR
+  watch. A close whose `closed_at` is not a positive Integer, whose `why` is blank, or with no `role` / `number` is
+  refused as the port's error (logged like an `{error:}`), never told: a host that does not know a close's time or
+  reason yet answers nothing for that PR until it does.
+- `Notifier#watch` step 3d (`Store#pr_watch_pass` → `[[id, :closed | :closed_nobody | "unavailable: <why>"]]`): every
+  unarchived project card outside its board's terminal columns is asked. Each close is told ONCE (`ci_watches` kind
+  `pr_closed:<role>`, ref = `closed_at`: a reopened PR closed again is a new close): a `comment` by `system_author`
+  "PR #N (<role>) closed without merging (<why>) — pinged <owner>" (or "no owner session to ping") and a `pr_closed`
+  ping to the owner session. A close told while the card had no owner session is not pinged when an owner adopts the
+  card later (the comment stays on the card; the relay carries only the operator's comments). A card the port cannot
+  read is logged once per change of reason (`pr watch: card N: <why>`, every reason of the card in one line), the other
+  cards and the card's other PRs are still watched.
+
 ### No schema step — card terminals
 
 - `Store#card_sessions(id)` → the open registrations working on a card (its owner session, then each registration whose
