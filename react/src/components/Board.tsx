@@ -47,8 +47,10 @@ import { useFetch } from "../lib/fetch";
 import { isoAgo, isoAt } from "../lib/format";
 import { useGlide } from "../lib/glide";
 import { noListener } from "../lib/listen";
+import { workingPhase, workingWords, type WorkingPhase } from "../lib/agentLive";
 import { faceType, moodOf } from "../lib/face";
 import { useLivePoll, useLiveRev } from "../lib/live";
+
 import type {
   BacklogTask,
   BoardShapeData,
@@ -66,6 +68,8 @@ import { BoardEditor } from "./BoardEditor";
 import { CardDialog, PANELS, type Panel } from "./CardDialog";
 import { KbIcon } from "./KbIcon";
 import { Select } from "./Select";
+
+const LIVE_POLL_MS = 3000; // the working glow's boardLive poll
 
 export type BoardView = { card: number | null; panel: Panel; archived: boolean };
 export type BoardProps = {
@@ -285,6 +289,16 @@ export function Board({
     () => void reload(),
     { paused: () => pause.current },
   );
+  // what the board's agent sessions do now (the host's optional boardLive port, one answer per poll for the whole
+  // board): a card whose owner session works glows blue. A failed poll → no glow anywhere (never the last answer) and
+  // the error beside the live chip. Keyed on the slug (a board switch drops the old board's answer at once); an answer
+  // older than 2 polls is dropped too ("live state unknown"), so a stalled poll never keeps an old glow on.
+  const boardLive = api.boardLive;
+  const agentsLive = useLivePoll(boardLive ? () => boardLive(slug) : null, LIVE_POLL_MS, {
+    key: slug,
+    staleAfter: 2 * LIVE_POLL_MS,
+  });
+  const working = agentsLive.error ? null : (agentsLive.value?.sessions ?? null);
   // the agents at work on each card right now (the host's optional boardPresence port): their faces on the card
   // faces. No port → none shown; a failed poll shows none either (who was here a while ago is not who is here now)
   // and says so beside the live mark.
@@ -620,6 +634,15 @@ export function Board({
           >
             <i /> {live.error ? "live · error" : "live"}
           </span>
+          {agentsLive.error && (
+            <span
+              className="kb-live bad kb-agents-err"
+              role="status"
+              title={`agent status failing: ${agentsLive.error}`}
+            >
+              <i /> agents · {agentsLive.error.slice(0, 80)}
+            </span>
+          )}
           {presence.error && (
             <span className="kb-live bad" title={`who is at work on each card: ${presence.error}`}>
               <i /> agents at work · error
@@ -896,6 +919,7 @@ export function Board({
                               reviewCols={reviewCols}
                               maxRounds={maxRounds}
                               live={data.live_sessions ?? null}
+                              working={workingPhase(c, col.type, working)}
                               listened={data.listened_columns}
                               links={data.session_links}
                               agents={data.agents}
@@ -1028,6 +1052,7 @@ type CardItemProps = {
   reviewCols: ColumnKey[]; // the review columns: a card there shows its review round
   maxRounds: number | null; // config.review_loop.max_rounds (null = no limit)
   live: string[] | null; // live agent session names; null = launcher down (no "gone" claims)
+  working: WorkingPhase | null; // what its owner session does now (the blue glow); null = no evidence / not working
   listened: string[]; // columns where an assignee without an owner session is flagged "no listener"
   links: Record<string, SessionLinks> | undefined;
   agents: Record<string, string> | undefined; // agent name → agent type key (the faces' colours)
@@ -1052,6 +1077,7 @@ function CardItem({
   reviewCols,
   maxRounds,
   live,
+  working,
   listened,
   links,
   agents,
@@ -1080,12 +1106,12 @@ function CardItem({
     <>
       {ghostBefore && <li className="kb-ghost" aria-hidden="true" />}
       <li
-        className={cardFaceClass(c, { dragging, busy })}
+        className={cardFaceClass(c, { dragging, busy, working: working !== null })}
         draggable
         tabIndex={0}
         data-id={c.id}
         data-col={c.column}
-        aria-label={`${c.title} — #${c.id}${c.waiting ? " — needs you" : ""}`}
+        aria-label={`${c.title} — #${c.id}${c.waiting ? " — needs you" : working ? ` — its agent is ${workingWords(working)}` : ""}`}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
         onMouseEnter={() => onHover(true)}

@@ -23,6 +23,7 @@ code disagree, `ruby/` + `fixtures/` win and the fix starts there.
 | transport | — | the `api: KanbanApi` prop (react/src/api.ts): every call the board makes |
 | dictation | — | optional `dictation: DictationApi` prop of `<Board>` (react/src/lib/dictation.ts): `shortcut` (a `KeyCombo` or null, lib/shortcut.ts) + `transcribe(wav, prompt)` → `{text, words: [{word, start, end}]}` (16 kHz mono 16-bit WAV; `prompt` = the text confirmed so far), rejecting with the server's reason. The host's own route to its speech server (e.g. an OpenAI-compatible `/v1/audio/transcriptions`); absent = no mic anywhere |
 | live agent line | — | optional `api.sessionsLive(id)` → `{sessions: {name → SessionLive}}` (react/src/types.ts): what the card's agent sessions do now — `state`, and while working `phase` (thinking · tool · writing · subagents), `elapsed_s`, `tokens`, `tool`, the `card` a comment tool writes on, `subagents`; a field the host cannot read is null. The open card dialog polls it every 3 s (`useLivePoll`); absent = no live line |
+| board working glow | — | optional `api.boardLive(slug)` → `{sessions: {name → SessionLive}}` (`BoardLive`: no `present` — who is at work on a card is `boardPresence`), ONE answer for the whole board (at least each card's owner session): the board polls it every 3 s (`useLivePoll`); a card whose owner session is `working` with a `phase` glows blue (`.kb-card.agent-working`, token `--ak-working`); the answer is keyed on the slug (a board switch drops it at once) and dropped after 2 polls with no newer one ("live state unknown"); absent = no glow |
 | checkout (git) | `git:` on `CardLinks.build` (required, no default — the engine runs no git): `branches(project)` → Set of branch names (local + remote-tracking, remote dropped), `default_ref(project)` → the checked-out branch ("HEAD" when detached / unborn), `files_at(project, refs, files)` → `{file => first ref that has it}` (paths with `..` are never asked); a port that cannot read the checkout raises | — |
 | navigation | `card_path:` on `CardLinks::Refs`; `card_url: ->(slug, id) { absolute URL }` on Tools (required): every card a tool returns carries it as `url` | `navigate`, `projectHref`, `cardHref` props; `view` / `onView` own the URL |
 | launch plan | `AgentsKanban::Launch.plan(config, type:, session:, slug:, launcher:, cards:)` → `{argv, agent, prompt_template, vars, model}`; `Launch.render` | — |
@@ -354,6 +355,20 @@ primitives, for a host without its own).
 ## 9. Breaking changes for hosts (config / API)
 
 Newest first; a heading names the `Schema::VERSION` step when the change brought one.
+
+### No schema step — the board's working glow (React only)
+
+- New optional `KanbanApi.boardLive(slug)` (§ 1): the board polls it every 3 s (`useLivePoll`, as the live agent line) —
+  one call for the whole board, never one per card. A card whose OWNER session is `working` with a phase read off its
+  screen (thinking · tool · writing · subagents; `lib/agentLive.ts` `workingPhase`) gets `.kb-card.agent-working`: a
+  blue frame + a soft pulsing glow in the new token `--ak-working` (light `#0a84ff`, dark `#409cff`; a host maps it in
+  its `theme`), steady under `prefers-reduced-motion`, its aria-label "— its agent is thinking / running a tool /
+  writing / waiting on its subagents". No glow for a working session with no phase (no evidence), an idle / blocked / unknown
+  one, no owner, a card in a `done` / `cancelled` column (finished work), or before the first answer; a board switch drops the old
+  board's answer at once (`useLivePoll` `key`), an answer with no newer one for 2 polls is dropped (`staleAfter`: the header
+  shows `agents · live state unknown: no answer for 6 s`); a failed poll clears every glow (the last answer is never shown) and the
+  header shows `agents · <the reason>` (`.kb-agents-err`). A card that needs the operator (`waiting`) shows only its red
+  highlight: needs-you wins. Nothing changes for a host without the port.
 
 ### No schema step — the PR watch
 
