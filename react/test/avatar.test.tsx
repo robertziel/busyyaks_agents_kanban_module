@@ -1,9 +1,9 @@
 // A person's picture: the host's avatar_url with the email's SHA-256; no picture on record → the initials.
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { Avatar } from "../src";
 import { KanbanHostProvider, type KanbanHostValue } from "../src/host";
-import { resetAvatars, sha256Hex } from "../src/lib/avatar";
+import { avatarUrl, resetAvatars, sha256Hex } from "../src/lib/avatar";
 
 const host = (avatar_url: string | null, me = "op@example.com") =>
   ({ me, config: { avatar_url } }) as unknown as KanbanHostValue;
@@ -33,18 +33,20 @@ describe("a person's avatar", () => {
     await waitFor(() => expect(first.container.querySelector("span.avatar")).toHaveTextContent("AL"));
     first.unmount();
     const again = show(TEMPLATE, "ann@example.com");
-    await new Promise((r) => setTimeout(r, 20));
+    // the hook's lookup is this same memoised promise, its callback registered first: once it settles, so has the hook
+    await act(async () => {
+      await avatarUrl(TEMPLATE, "ann@example.com");
+    });
     expect(again.container.querySelector("img")).toBeNull();
     expect(again.container.querySelector("span.avatar")).toHaveTextContent("AL");
   });
 
-  it("no template → the initials, no request; an agent never gets a picture", async () => {
+  it("no template → the initials, no request; an agent never gets a picture", () => {
+    // no template / no address: the hook decides in its effect, which render runs — nothing asynchronous to wait for
     const { container } = show(null, "ann@example.com");
-    await new Promise((r) => setTimeout(r, 20));
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("span.avatar")).toHaveTextContent("AL");
     const agent = show(TEMPLATE, "worker-1");
-    await new Promise((r) => setTimeout(r, 20));
     expect(agent.container.querySelector("img")).toBeNull();
     expect(agent.container.querySelector("svg.ak-face")).not.toBeNull();
   });
