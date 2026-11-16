@@ -15,6 +15,7 @@ export type LaunchBarProps = {
   onLaunched?: (r: LaunchResult) => void; // the host shows its own verdict (Remote Control, trust prompt) from r.result
   className?: string;
   refreshEvery?: number; // ms; 0 = never
+  compact?: boolean; // small "＋ Type" buttons for a host that puts the bar inside another section
 };
 
 function readKey(k: string): string | null {
@@ -32,7 +33,14 @@ function writeKey(k: string, v: string) {
   }
 }
 
-export function LaunchBar({ api, slug, onLaunched, className, refreshEvery = 15_000 }: LaunchBarProps) {
+export function LaunchBar({
+  api,
+  slug,
+  onLaunched,
+  className,
+  refreshEvery = 15_000,
+  compact = false,
+}: LaunchBarProps) {
   const { data, error, reload } = useFetch<LaunchesData>(() => api.launches(slug), [api, slug]);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -72,7 +80,7 @@ export function LaunchBar({ api, slug, onLaunched, className, refreshEvery = 15_
     }
   };
   return (
-    <span className={`ak-launchbar ${className ?? ""}`}>
+    <span className={`ak-launchbar${compact ? " compact" : ""} ${className ?? ""}`}>
       {data.types.map((t) => {
         const key = `ak-launcher:${t.key}`;
         const lock = launcherLock(t);
@@ -91,7 +99,16 @@ export function LaunchBar({ api, slug, onLaunched, className, refreshEvery = 15_
               title={title}
               onClick={() => void run(t.key, launcher)}
             >
-              {busy === t.key ? "Launching…" : t.label}
+              {busy === t.key ? (
+                "Launching…"
+              ) : compact ? (
+                <>
+                  <span aria-hidden="true">＋ </span>
+                  {t.label}
+                </>
+              ) : (
+                t.label
+              )}
               {t.running ? <span className="ak-launch-n">{t.running}</span> : null}
             </button>
             {t.launchers.length > 1 ? (

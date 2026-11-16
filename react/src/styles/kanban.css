@@ -213,6 +213,36 @@
   flex-wrap: wrap;
   min-width: 0;
 }
+/* summary="folded": waiting first, a "<Group>: " prefix as one pill naming its members, the empty columns behind a toggle */
+.ak-root .kb-sum.folded {
+  align-items: center;
+}
+.ak-root .kb-pill.kb-grp small {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ak-ink-faint);
+}
+.ak-root .kb-pill.kb-fold {
+  border: 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ak-ink-faint);
+  cursor: pointer;
+}
+.ak-root .kb-pill.kb-fold:hover {
+  color: var(--ak-ink);
+}
+.ak-root .kb-pill.kb-fold:focus-visible {
+  outline: 2px solid var(--ak-accent);
+  outline-offset: 1px;
+}
+/* a narrow screen keeps the members (touch has no hover title): the group pill wraps its own text instead */
+@media (max-width: 700px) {
+  .ak-root .kb-pill.kb-grp {
+    white-space: normal;
+  }
+}
 .ak-root .tag.bmd {
   color: var(--ak-accent);
   background: rgba(var(--ak-accent-rgb), 0.12);
@@ -3528,6 +3558,31 @@
   border-radius: var(--ak-radius-pill, 999px);
   background: rgba(var(--ak-accent-rgb, 90, 120, 255), 0.18);
   font: 600 11px/18px var(--ak-mono, monospace);
+}
+/* compact: small "＋ Type n" buttons, the launcher as a short mono label in the menu half */
+.ak-launchbar.compact {
+  gap: 6px;
+}
+.ak-launchbar.compact .ak-launch .btn {
+  min-height: 24px;
+  height: 24px;
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 12px;
+}
+.ak-launchbar.compact .ak-launch-menu .sel-label {
+  font: 500 11px var(--ak-mono, monospace);
+  max-width: 11ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ak-launchbar.compact .ak-launch-n {
+  margin-left: 5px;
+  line-height: 16px;
+}
+.ak-launchbar.compact .ak-cap {
+  font-size: 11px;
 }
 .ak-cap {
   font: 500 12px/1 var(--ak-mono, monospace);

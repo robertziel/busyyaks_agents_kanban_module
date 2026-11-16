@@ -52,6 +52,7 @@ export * from "./lib/dictation";
 export * from "./lib/shortcut";
 export * from "./lib/sessionBoards";
 export * from "./lib/peek";
+export * from "./lib/summary";
 export { useLiveRev, type LiveState } from "./lib/live";
 export { useFetch, type Resource } from "./lib/fetch";
 export { ago, at, isoAgo, isoAt, initials, hue, now } from "./lib/format";

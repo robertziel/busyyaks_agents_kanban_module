@@ -112,9 +112,11 @@ function fakeApi(data: BoardData, cards: Card[]): KanbanApi & { calls: string[] 
 function Host({
   api,
   view: initial = { card: null, panel: null, archived: false },
+  summary,
 }: {
   api: KanbanApi;
   view?: BoardView;
+  summary?: "full" | "folded";
 }) {
   const [view, setView] = useState<BoardView>(initial);
   return (
@@ -125,6 +127,7 @@ function Host({
       view={view}
       onView={(c) => setView((v) => ({ ...v, ...c }))}
       projectHref="/projects/g/r"
+      summary={summary}
     />
   );
 }
@@ -772,6 +775,65 @@ describe("Board", () => {
   });
 
   // workflow v3 approves at every gate — the button sits on each step and names the target column
+  // the folded header — waiting first, the empty columns behind a toggle, "<Group>: " as one pill
+  it('summary="folded": waiting for you + CI first, the empty columns behind "+N empty", Local/Public merged', async () => {
+    const cards = [
+      card({ id: 1, column: "backlog", title: "B" }),
+      card({ id: 2, column: "local_human_review", title: "HR" }),
+      card({ id: 3, column: "local_human_review", title: "HR2", gate_hold: "PR #7: CI is still running" }),
+      card({ id: 4, column: "public_create_pr", title: "PC" }),
+    ];
+    render(<Host api={fakeApi(boardData(localV4, cards), cards)} summary="folded" />);
+    await screen.findByText("HR");
+    const sum = document.querySelector(".kb-sum.folded")!;
+    const pills = Array.from(sum.children).map((e) => e.textContent);
+    expect(pills[0]).toMatch(/^\d+ waiting for you$/);
+    expect(pills[1]).toBe("1 waiting for CI");
+    expect(pills).toContain("Backlog 1");
+    expect(pills.find((t) => t!.startsWith("Local"))).toBe("Local 2Human review 2");
+    expect(pills.find((t) => t!.startsWith("Public"))).toBe("Public 1Create PR 1");
+    expect(pills.at(-1)).toBe("total 4");
+    expect(within(sum as HTMLElement).queryByText("To do")).toBeNull();
+    const fold = within(sum as HTMLElement).getByRole("button", { name: /^\+\d+ empty$/ });
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(fold);
+    expect(fold).toHaveAttribute("aria-expanded", "true");
+    expect(within(sum as HTMLElement).getByTitle("To do").textContent).toBe("To do 0");
+    expect(fold.textContent).toBe("fold empty");
+  });
+
+  // a host's menu next to the board keeps its own arrow keys (the board's are document-level)
+  it("arrow keys inside a [role=menu] are the menu's: the board never moves focus onto a card from there", async () => {
+    const cards = [card({ id: 1, column: "backlog", title: "B" })];
+    render(
+      <>
+        <div role="menu">
+          <button role="menuitem">Copy</button>
+        </div>
+        <Host api={fakeApi(boardData(localV4, cards), cards)} />
+      </>,
+    );
+    await screen.findByText("B");
+    const item = screen.getByRole("menuitem", { name: "Copy" });
+    item.focus();
+    fireEvent.keyDown(item, { key: "ArrowDown" });
+    fireEvent.keyDown(item, { key: "j" });
+    expect(document.activeElement).toBe(item);
+    // control: from the page itself the same key does reach the board
+    item.blur();
+    fireEvent.keyDown(document.body, { key: "ArrowDown" });
+    expect(document.activeElement?.closest(".kb-card")).not.toBeNull();
+  });
+
+  it("the default summary keeps a pill per column, zeros included", async () => {
+    const cards = [card({ id: 1, column: "backlog", title: "B" })];
+    render(<Host api={fakeApi(boardData(localV4, cards), cards)} />);
+    await screen.findByText("B");
+    const sum = document.querySelector(".kb-sum")!;
+    expect(sum.classList.contains("folded")).toBe(false);
+    expect(within(sum as HTMLElement).getByTitle("To do").textContent).toBe("To do 0");
+  });
+
   it("a local v3 board offers an approve button on Local: Human review and on Public: Human review", async () => {
     const cards = [
       card({ id: 5, column: "local_human_review", title: "HC", owner_session: "s1" }),
