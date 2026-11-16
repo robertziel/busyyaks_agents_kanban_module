@@ -38,6 +38,9 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
   `pr_closed:<role>`, ref = `closed_at`): a comment by `system_author` on the card and a `pr_closed` ping to the owner
   session, with the host's reason. A PR the port could not read (`{error}`) is said beside the closes; a close with no
   positive `closed_at` or a blank `why` is refused, never told. SPEC § 9.
+- **`<Board summary="folded">`** and **`<LaunchBar compact>`**: a folded header — waiting for you /
+  waiting for CI first, the empty columns behind `+N empty`, columns sharing a `<Group>: ` label prefix as one pill
+  (`foldSummary`) — and smaller `＋ <Type>` launch buttons. Both optional; the defaults render as before. SPEC § 6.
 - **A `stuck` CI answer**: the approval gate's `approval_checks` may answer `state: "stuck"` (a check
   pending longer than the host allows). It holds the gate and is red like `failure`: the gate watch pings the owner once
   per `finished_at`; refusals say "CI is stuck". A handoff asks the port with `handoff_ci_url` (its `ci_url`, not written

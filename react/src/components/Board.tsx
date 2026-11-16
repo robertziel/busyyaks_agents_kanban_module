@@ -46,6 +46,7 @@ import { comboLabel, isMac, type KeyCombo } from "../lib/shortcut";
 import { useFetch } from "../lib/fetch";
 import { isoAgo, isoAt } from "../lib/format";
 import { useGlide } from "../lib/glide";
+import { foldSummary, type SumColumn } from "../lib/summary";
 import { noListener } from "../lib/listen";
 import { workingPhase, workingWords, type WorkingPhase } from "../lib/agentLive";
 import { faceType, moodOf } from "../lib/face";
@@ -84,6 +85,9 @@ export type BoardProps = {
   cardHref?: (slug: string, id: number) => string;
   dictation?: DictationApi; // speech to text for the card dialog's comment box (absent = no mic)
   cardTerminals?: (card: CardFull) => ReactNode; // the card dialog's Terminals section (absent = none)
+  // the header's column counts: "full" = a pill per column (the default); "folded" = "waiting for you" / "waiting for CI"
+  // first, the empty columns behind one "+N empty" toggle, columns sharing a "<Group>: " label prefix as one pill
+  summary?: "full" | "folded";
   className?: string;
 };
 
@@ -131,6 +135,7 @@ export function Board({
   cardHref,
   dictation,
   cardTerminals,
+  summary = "full",
   className,
 }: BoardProps) {
   const showArchived = view.archived;
@@ -141,6 +146,7 @@ export function Board({
     [api, slug, showArchived],
   );
   const [err, setErr] = useState<string | null>(null);
+  const [showEmpty, setShowEmpty] = useState(false); // summary="folded": the empty columns unfolded
   const [drag, setDrag] = useState<Drag | null>(null);
   const [over, setOver] = useState<Over | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
@@ -400,13 +406,16 @@ export function Board({
     writeStore(`kb-collapsed:${slug}`, next);
   };
 
-  // ── keyboard (document-level; never while typing or with the card dialog open) ─────────────────
+  // ── keyboard (document-level; never while typing, in a menu (a host's or the engine's) or with the card dialog open) ─────────────────
   keyHandler.current = (e: KeyboardEvent) => {
     if (!data || openId) return;
     const t = e.target as HTMLElement | null;
     if (
       t &&
-      (t.closest("input, textarea, select, [contenteditable=true], dialog, [role=listbox]") || t.isContentEditable)
+      (t.closest(
+        "input, textarea, select, [contenteditable=true], dialog, [role=listbox], [role=menu], [role=menuitem]",
+      ) ||
+        t.isContentEditable)
     )
       return;
     if (e.ctrlKey || e.metaKey) return;
@@ -506,6 +515,7 @@ export function Board({
   bm?.tasks.forEach((t) => bmByCol.set(t.column, [...(bmByCol.get(t.column) ?? []), t]));
   const total = cols.reduce((n, c) => n + c.cards.length, 0);
   const waiting = data.waiting; // the server counts: the waiting columns' cards + the flagged cards elsewhere
+  const waitingTitle = `cards waiting for you: ${data.waiting_columns.map(colLabel).join(" + ")} that can be approved now + cards with a question for you (needs_operator)`;
   const filtering = isFiltering(filter);
   const viewOf = (cards: Card[]) => ordered(filtering ? cards.filter((c) => matches(c, filter, nowMs)) : cards, order);
   // What a list shows: its view, minus the cards folded behind "Load older" — never while filtering (a search finds
@@ -590,43 +600,38 @@ export function Board({
     <KanbanHostProvider value={host}>
       <div ref={root} className={`ak-root kb-board${className ? ` ${className}` : ""}`} style={theme}>
         <div className="kb-head">
-          <div className="kb-sum">
-            {cols.map((c) => (
-              <span
-                key={c.column}
-                className={`kb-pill kb-c-${c.column}${c.cards.length === 0 ? " zero" : ""}`}
-                title={c.label}
-              >
-                <i />
-                {c.label} <b>{c.cards.length}</b>
+          {summary === "folded" ? (
+            <FoldedSummary
+              cols={cols.map((c) => ({ key: c.column, label: c.label, count: c.cards.length }))}
+              total={total}
+              waiting={waiting}
+              waitingTitle={waitingTitle}
+              held={data.held}
+              external={data.external}
+              showEmpty={showEmpty}
+              onShowEmpty={setShowEmpty}
+            />
+          ) : (
+            <div className="kb-sum">
+              {cols.map((c) => (
+                <span
+                  key={c.column}
+                  className={`kb-pill kb-c-${c.column}${c.cards.length === 0 ? " zero" : ""}`}
+                  title={c.label}
+                >
+                  <i />
+                  {c.label} <b>{c.cards.length}</b>
+                </span>
+              ))}
+              <span className="kb-pill">
+                total <b>{total}</b>
               </span>
-            ))}
-            <span className="kb-pill">
-              total <b>{total}</b>
-            </span>
-            <span
-              className={`kb-waiting${waiting === 0 ? " zero" : ""}`}
-              title={`cards waiting for you: ${data.waiting_columns.map(colLabel).join(" + ")} that can be approved now + cards with a question for you (needs_operator)`}
-            >
-              <b>{waiting}</b> waiting for you
-            </span>
-            {data.held > 0 && (
-              <span
-                className="kb-held"
-                title="gate cards whose Approve would not pass now (CI pending, red or unread; new commits): not counted"
-              >
-                <b>{data.held}</b> waiting for CI
+              <span className={`kb-waiting${waiting === 0 ? " zero" : ""}`} title={waitingTitle}>
+                <b>{waiting}</b> waiting for you
               </span>
-            )}
-            {data.external > 0 && (
-              <span
-                className="kb-held kb-external"
-                title="cards blocked on something outside the board (another card, CI, a third party): not counted"
-              >
-                <b>{data.external}</b> blocked externally
-              </span>
-            )}
-          </div>
+              <HeldPills held={data.held} external={data.external} />
+            </div>
+          )}
           <span className="spacer" />
           <span
             className={`kb-live${live.error ? " bad" : ""}`}
@@ -1473,5 +1478,101 @@ function QuickAdd({ api, slug, column, colLabel, open, setOpen, onAdded, onError
         </button>
       </div>
     </form>
+  );
+}
+
+// "N waiting for CI" (gate cards whose Approve would not pass now) and "N blocked externally": neither waits for you
+function HeldPills({ held, external }: { held: number; external: number }) {
+  return (
+    <>
+      {held > 0 && (
+        <span
+          className="kb-held"
+          title="gate cards whose Approve would not pass now (CI pending, red or unread; new commits): not counted"
+        >
+          <b>{held}</b> waiting for CI
+        </span>
+      )}
+      {external > 0 && (
+        <span
+          className="kb-held kb-external"
+          title="cards blocked on something outside the board (another card, CI, a third party): not counted"
+        >
+          <b>{external}</b> blocked externally
+        </span>
+      )}
+    </>
+  );
+}
+
+// summary="folded": what waits first, then the non-empty columns (a "<Group>: " prefix shared by several columns = one
+// pill naming its members), the empty ones behind "+N empty" (a toggle: unfolded, they show in board order), the total
+function FoldedSummary({
+  cols,
+  total,
+  waiting,
+  waitingTitle,
+  held,
+  external,
+  showEmpty,
+  onShowEmpty,
+}: {
+  cols: SumColumn[];
+  total: number;
+  waiting: number;
+  waitingTitle: string;
+  held: number;
+  external: number;
+  showEmpty: boolean;
+  onShowEmpty: (v: boolean) => void;
+}) {
+  const { items, empty } = foldSummary(cols);
+  return (
+    <div className="kb-sum folded">
+      <span className={`kb-waiting${waiting === 0 ? " zero" : ""}`} title={waitingTitle}>
+        <b>{waiting}</b> waiting for you
+      </span>
+      <HeldPills held={held} external={external} />
+      {showEmpty
+        ? cols.map((c) => (
+            <span key={c.key} className={`kb-pill kb-c-${c.key}${c.count === 0 ? " zero" : ""}`} title={c.label}>
+              <i />
+              {c.label} <b>{c.count}</b>
+            </span>
+          ))
+        : items.map((it) =>
+            it.kind === "column" ? (
+              <span key={it.key} className={`kb-pill kb-c-${it.key}`} title={it.label}>
+                <i />
+                {it.label} <b>{it.count}</b>
+              </span>
+            ) : (
+              <span
+                key={`g-${it.prefix}-${it.members.map((m) => m.key).join("-")}`}
+                className="kb-pill kb-grp"
+                title={it.members.map((m) => `${it.prefix}: ${m.label} ${m.count}`).join(" · ")}
+              >
+                {it.prefix} <b>{it.count}</b>
+                <small>{it.members.map((m) => `${m.label} ${m.count}`).join(" · ")}</small>
+              </span>
+            ),
+          )}
+      {empty.length > 0 && (
+        <button
+          type="button"
+          className="kb-pill kb-fold"
+          aria-expanded={showEmpty}
+          title={
+            showEmpty ? "Fold the empty columns" : `Show the empty columns: ${empty.map((c) => c.label).join(", ")}`
+          }
+          onClick={() => onShowEmpty(!showEmpty)}
+        >
+          {showEmpty ? "fold empty" : `+${empty.length} empty`}
+        </button>
+      )}
+      <span className="kb-pill">
+        total <b>{total}</b>
+      </span>
+    </div>
   );
 }

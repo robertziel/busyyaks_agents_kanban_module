@@ -305,7 +305,7 @@ port unreachable; `Api#sessions` → `{concurrency, registered, ended, sessions_
 
 ## 6. React
 
-`<Board api me slug view onView onChanged? navigate? projectHref? cardHref? dictation? cardTerminals? className? />` renders the board (its
+`<Board api me slug view onView onChanged? navigate? projectHref? cardHref? dictation? cardTerminals? summary? className? />` renders the board (its
 columns from `board.columns`, never a constant) and the card dialog inside `.ak-root` with `config.theme` inline; the
 Workflow button opens `BoardEditor`: an SVG graph (`lib/graph.ts`) of the columns as typed nodes and the transitions
 as labelled arrows, **laid out by dagre** (`@dagrejs/dagre`, the React port's one runtime dependency, MIT): **top to
@@ -339,7 +339,7 @@ its `to`, who / when + "Withdraw approval"; beside the approve button, on a host
 **Force · skip CI** button (`kb-force-btn`: a dashed warning-hue pill with a skip icon, never green; `forceTitle`) sends
 `approve(id, true, true)` — no confirm: the approval is withdrawn in one click and the agent is told to wait for green CI;
 unapproved in a `to` that is a gate, the same button approving in place ("the card stays in <to>"; `lib/workflow.ts` `stepAt` / `approveLabel` / `approveTitle` / `approvedNext`). A collapsed list is a drop target: a card dropped on its strip lands at the bottom of that column. `view` = `{card, panel, archived}` — the host keeps it
-(e.g. `?card=&panel=&archived=`). `KanbanApi` (react/src/api.ts) is the full list of calls. `<LaunchBar api slug onLaunched? />` renders one split pill
+(e.g. `?card=&panel=&archived=`). `KanbanApi` (react/src/api.ts) is the full list of calls. `<LaunchBar api slug onLaunched? compact? />` renders one split pill
 per agent type (the type's launchers in its menu) and `running / cap` from `Api#launches`; a pill is greyed with the cap
 it hits (`lib/launch.ts`), the server's 422 shown verbatim. No `innerHTML` except `Html` injecting the server's `*_html`. Styles: `kanban.css` (required) + `base.css` (the `.btn/.tag/.flash/…`
 primitives, for a host without its own).
@@ -455,6 +455,16 @@ Newest first; a heading names the `Schema::VERSION` step when the change brought
   the open card in a **Terminals** section (after the description); absent, or `null` for that card = no section. The
   engine renders nothing of its own there — the host draws its live terminals of the card's agent sessions.
   `KanbanHostValue.cardTerminals` (null when absent; a host that builds the value itself adds it).
+
+### No schema step — folded summary, compact launch bar (React only)
+
+- New optional `<Board summary>`: `"full"` (default: a pill per column, then total, waiting for you, waiting for CI) or
+  `"folded"`: waiting for you, waiting for CI and blocked externally first; then the non-empty columns, consecutive
+  columns whose labels share a `<Group>: ` prefix (≥ 2 columns on the board) as one pill naming its non-empty members
+  (`lib/summary.ts` `foldSummary`); the empty columns behind one `+N empty` toggle (`aria-expanded`; unfolded = every
+  column in board order); total last. Groups come from the board's labels only.
+- New optional `<LaunchBar compact>`: smaller `＋ <Type>` buttons (the `＋` is `aria-hidden`: the accessible names are the
+  type labels), the launcher label short and mono. Behaviour unchanged.
 
 ### No schema step — agent faces
 

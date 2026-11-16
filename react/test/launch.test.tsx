@@ -83,6 +83,16 @@ describe("LaunchBar", () => {
     expect(screen.queryByLabelText("Plain launcher")).toBeNull();
   });
 
+  // the compact bar inside a host's sessions section
+  it("compact: small '＋ Type' buttons, same names for a screen reader, the launcher menu kept", async () => {
+    render(<LaunchBar api={fakeApi(data())} slug="g/r" refreshEvery={0} compact />);
+    await screen.findByText("1 / 3 running");
+    expect(document.querySelector(".ak-launchbar")!.classList.contains("compact")).toBe(true);
+    expect(lead().textContent).toBe("＋ Launch");
+    expect(screen.getByRole("button", { name: "Plain" })).toBeEnabled();
+    expect(screen.getByLabelText("Launch launcher")).toBeInTheDocument();
+  });
+
   it("launches through the port with the type and its default launcher and reports the result", async () => {
     const api = fakeApi(data());
     const got: LaunchResult[] = [];
