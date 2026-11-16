@@ -13,6 +13,7 @@ import type {
   LaunchResult,
   MoveResult,
   SessionsLive,
+  BoardLive,
   BoardPresence,
 } from "./types";
 
@@ -36,6 +37,9 @@ export interface KanbanApi {
   cardRev(id: number): Promise<string>;
   // optional: what the card's agent sessions do now (the card dialog's live line; absent = the host offers none)
   sessionsLive?: (id: number) => Promise<SessionsLive>;
+  // optional: what the board's agent sessions do now — ONE answer for the whole board (the owner session of each card
+  // on it), polled every 3 s; a card whose owner session works glows blue (absent = no glow)
+  boardLive?: (slug: string) => Promise<BoardLive>;
   // optional: the agents at work on each of the board's cards right now (the card faces; absent = none shown)
   boardPresence?: (slug: string) => Promise<BoardPresence>;
   createCard(slug: string, body: { title: string; column: string; description?: string }): Promise<CardData>;

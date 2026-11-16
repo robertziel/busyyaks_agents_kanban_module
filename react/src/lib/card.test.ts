@@ -51,7 +51,7 @@ describe("activity anchors", () => {
 });
 
 describe("cardFaceClass", () => {
-  const idle = { dragging: false, busy: false };
+  const idle = { dragging: false, busy: false, working: false };
   it("highlights a card only when the server says it waits for the operator", () => {
     expect(cardFaceClass({ id: 1, waiting: true }, idle)).toBe("kb-card needs-you");
     expect(cardFaceClass({ id: 1, waiting: false }, idle)).toBe("kb-card");
@@ -61,8 +61,14 @@ describe("cardFaceClass", () => {
     expect(() => cardFaceClass({ id: 8 }, idle)).toThrow("card 8: no waiting on its face");
   });
   it("keeps the other states", () => {
-    expect(cardFaceClass({ id: 1, waiting: true, cover: "red" }, { dragging: true, busy: true })).toBe(
+    expect(cardFaceClass({ id: 1, waiting: true, cover: "red" }, { dragging: true, busy: true, working: false })).toBe(
       "kb-card dragging busy has-cover needs-you",
     );
+  });
+  it("glows a card whose owner session works, unless it needs the operator (needs-you wins)", () => {
+    const working = { ...idle, working: true };
+    expect(cardFaceClass({ id: 1, waiting: false }, working)).toBe("kb-card agent-working");
+    expect(cardFaceClass({ id: 1, waiting: true }, working)).toBe("kb-card needs-you");
+    expect(cardFaceClass({ id: 1, waiting: false }, idle)).toBe("kb-card");
   });
 });

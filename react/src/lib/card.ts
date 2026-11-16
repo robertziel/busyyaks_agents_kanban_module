@@ -55,9 +55,11 @@ export function jumpNeedsDetails(
 // A card face's classes: `needs-you` (the red highlight) exactly when the server says the card waits for the operator
 // now (Card.waiting — the rule the "N waiting for you" count uses; the client never re-derives it). Every card the board
 // shows is decorated, so a face without a boolean `waiting` is a server bug: it throws, never reads as "not waiting".
+// `agent-working` (the blue glow) when its owner session works now (s.working: lib/agentLive.ts workingPhase); a card
+// that needs the operator shows only the red highlight — needs-you wins.
 export function cardFaceClass(
   c: { id: number; waiting?: boolean | null; cover?: string | null },
-  s: { dragging: boolean; busy: boolean },
+  s: { dragging: boolean; busy: boolean; working: boolean },
 ): string {
   if (typeof c.waiting !== "boolean") throw new Error(`card ${c.id}: no waiting on its face (an undecorated card)`);
   return [
@@ -66,6 +68,7 @@ export function cardFaceClass(
     s.busy && "busy",
     c.cover && "has-cover",
     c.waiting === true && "needs-you",
+    c.waiting === false && s.working && "agent-working",
   ]
     .filter(Boolean)
     .join(" ");

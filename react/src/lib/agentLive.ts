@@ -1,6 +1,6 @@
 // The card dialog's live agent line (SPEC § 9): what a session does now, worded from the host's SessionLive. Pure, so
 // the wording is tested without a DOM. A field the host could not read is left out, never guessed.
-import type { Card, SessionLive } from "../types";
+import type { Card, ColumnTypeKey, SessionLive } from "../types";
 import { moodOf, type Mood } from "./face";
 
 export type LiveLine = { text: string; tone: "working" | "blocked" | "idle" | "unknown"; running: boolean };
@@ -144,4 +144,32 @@ export function liveMoods(
 // what a screen reader announces for a live line: its tone in words, never the counter (it changes every poll)
 export function liveAnnounce(l: LiveLine): string {
   return { working: "is working", blocked: "is waiting for you", idle: "is idle", unknown: "state unknown" }[l.tone];
+}
+
+// The board's working glow (SPEC § 9): the phase a card's OWNER session is in, read off the host's boardLive answer —
+// only a working session with evidence of what it does (thinking · tool · writing · subagents) glows; idle, blocked,
+// unknown, a working session with no phase (no evidence), no owner, a card in a done / cancelled column (finished work:
+// its session works on something else), or a failed / unread poll (`sessions` null) → null.
+export type WorkingPhase = Exclude<SessionLive["phase"], null>;
+const WORKING: readonly WorkingPhase[] = ["thinking", "tool", "writing", "subagents"];
+export function workingPhase(
+  card: Pick<Card, "owner_session">,
+  column: ColumnTypeKey,
+  sessions: Record<string, SessionLive> | null,
+): WorkingPhase | null {
+  if (!sessions || !card.owner_session || column === "done" || column === "cancelled") return null;
+  const l = sessions[card.owner_session];
+  if (!l || l.state !== "working" || l.phase === null) return null;
+  return WORKING.includes(l.phase) ? l.phase : null;
+}
+
+// the face's words for it (title / aria): what the owner session does, never the counters
+const WORKING_WORDS: Record<WorkingPhase, string> = {
+  thinking: "thinking",
+  tool: "running a tool",
+  writing: "writing",
+  subagents: "waiting on its subagents",
+};
+export function workingWords(phase: WorkingPhase): string {
+  return WORKING_WORDS[phase];
 }

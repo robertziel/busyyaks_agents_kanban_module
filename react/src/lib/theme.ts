@@ -46,6 +46,7 @@ export const AK_TOKENS = [
   "--ak-vivid-red",
   "--ak-vivid-teal",
   "--ak-vivid-yellow",
+  "--ak-working",
   "--ak-warn",
   "--ak-warn-rgb",
 ] as const;

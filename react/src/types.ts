@@ -347,6 +347,8 @@ export type PresentAgent = {
 };
 // present: the agents at work on the card now, as the host reads them (SPEC § 9) — required: the engine never derives it
 export type SessionsLive = { sessions: Record<string, SessionLive>; present: PresentAgent[] };
+// the board working glow's answer (api.boardLive): ONE read for the whole board, each card's owner session at least
+export type BoardLive = { sessions: Record<string, SessionLive> };
 export type BoardPresence = { cards: Record<string, PresentAgent[]> }; // card id → the agents at work on it now
 export type Ping = {
   at: string;

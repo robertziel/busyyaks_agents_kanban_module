@@ -11,6 +11,12 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 - **Card-face picture**: decorated cards carry `media` = their newest live picture attachment (`{id, filename, url}`;
   png / jpeg / gif / webp, newest by `created_at` then id; `null` when none). The board face shows it under the cover
   at a fixed height, lazily loaded. SPEC § 4.
+- **Working glow**: the optional `KanbanApi.boardLive(slug)` port (one answer for the whole board, polled every 3 s)
+  makes a card whose owner session is working with a phase read off its screen (thinking · tool · writing · subagents)
+  glow blue (`.kb-card.agent-working`, new token `--ak-working`). No glow without that evidence, for a card in a
+  `done` / `cancelled` column, after a failed poll (the header shows `agents · <reason>`), after a board switch until
+  the new board answers, or when no answer came for 2 polls (`agents · live state unknown`); needs-you wins; steady
+  under reduced motion. `useLivePoll` takes `{key, staleAfter}`. SPEC § 1.
 - **Agent faces**: `AgentFace` draws every agent identity as two eyes on a disc in its type's colour
   (`--ak-face-type-<type|role>`), its mood from the live state shown by the eyes alone (CSS only; a still pose under
   reduced motion). `Avatar`: an agent wears its face; a person shows their picture from `avatar_url`, else the initials.

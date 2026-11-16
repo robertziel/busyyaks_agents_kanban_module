@@ -2,9 +2,9 @@
 // theme lands as --ak-* custom properties on .ak-root, a quick-add goes through api.createCard, a comment through
 // api.comment, the gates' UI follows the board (a card flagged needs_operator shows its question box in any column; a
 // board without an approval step shows no approve button), and a card waiting for a parent shows the badge.
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Board, type BoardView, type KanbanApi } from "../src";
@@ -128,6 +128,16 @@ function Host({
     />
   );
 }
+
+const liveOf = (state: string, phase: "thinking" | null) => ({
+  state,
+  phase,
+  elapsed_s: null,
+  tokens: null,
+  tool: null,
+  card: null,
+  subagents: null,
+});
 
 describe("Board", () => {
   it("lists the latest change first in day groups and folds cards past the column's hide_after_hours behind Load older", async () => {
@@ -477,6 +487,131 @@ describe("Board", () => {
     await screen.findByLabelText("Comment");
     expect(document.querySelector(".kb-agent-live")).toBeNull();
     expect(document.querySelector(".kb-agents-live")).toBeNull();
+  });
+
+  it("a card whose owner session works glows blue from ONE board-wide boardLive poll; needs-you wins; none when done; a failed poll clears every glow", async () => {
+    const cards = [
+      card({ id: 5, column: "running", title: "Thinking", owner_session: "s1" }),
+      card({ id: 6, column: "running", title: "Waits", owner_session: "s1", waiting: true }),
+      card({ id: 7, column: "running", title: "No evidence", owner_session: "s2" }),
+      card({ id: 8, column: "running", title: "Idle", owner_session: "s3" }),
+      card({ id: 9, column: "running", title: "Ownerless" }),
+      card({ id: 11, column: "done", title: "Finished", owner_session: "s1" }),
+    ];
+    const api = fakeApi(boardData(content, cards), cards);
+    const s = (state: string, phase: "thinking" | null) => ({
+      state,
+      phase,
+      elapsed_s: null,
+      tokens: null,
+      tool: null,
+      card: null,
+      subagents: null,
+    });
+    let fail = false;
+    const asked: string[] = [];
+    api.boardLive = (slug) => {
+      asked.push(slug);
+      return fail
+        ? Promise.reject(new Error("agent sessions: launcher down"))
+        : Promise.resolve({ sessions: { s1: s("working", "thinking"), s2: s("working", null), s3: s("idle", null) } });
+    };
+    render(<Host api={api} />);
+    const face = (title: string) => screen.getByText(title).closest("li")!;
+    await waitFor(() => expect(face("Thinking")).toHaveClass("agent-working"));
+    expect(face("Thinking")).toHaveAttribute("aria-label", "Thinking — #5 — its agent is thinking");
+    expect(face("Waits")).toHaveClass("needs-you");
+    expect(face("Waits")).not.toHaveClass("agent-working");
+    for (const t of ["No evidence", "Idle", "Ownerless", "Finished"]) expect(face(t)).not.toHaveClass("agent-working");
+    expect(asked).toEqual(["g/r"]); // one call for the whole board, not one per card
+    fail = true;
+    await waitFor(() => expect(face("Thinking")).not.toHaveClass("agent-working"), { timeout: 5000 });
+    expect(document.querySelector(".kb-agents-err")).toHaveTextContent("agents · agent sessions: launcher down");
+  });
+
+  it("the working glow is keyed on the board: a switch drops the old board's answer at once, never shown for the new one", async () => {
+    const cards = [card({ id: 5, column: "running", title: "Thinking", owner_session: "s1" })];
+    const api = fakeApi(boardData(content, cards), cards);
+    const asked: string[] = [];
+    api.boardLive = (slug) => {
+      asked.push(slug);
+      // the first board answers; the second never does (a slow server): its cards must not wear the first's glow
+      return slug === "g/r"
+        ? Promise.resolve({ sessions: { s1: { ...liveOf("working", "thinking") } } })
+        : new Promise(() => {});
+    };
+    function Switch() {
+      const [slug, setSlug] = useState("g/r");
+      return (
+        <>
+          <button onClick={() => setSlug("g/other")}>switch</button>
+          <Board
+            api={api}
+            me="me"
+            slug={slug}
+            view={{ card: null, panel: null, archived: false }}
+            onView={() => {}}
+            projectHref={`/projects/${slug}`}
+          />
+        </>
+      );
+    }
+    render(<Switch />);
+    const face = () => screen.getByText("Thinking").closest("li")!;
+    await waitFor(() => expect(face()).toHaveClass("agent-working"));
+    fireEvent.click(screen.getByText("switch"));
+    expect(face()).not.toHaveClass("agent-working"); // at once, before any answer for g/other
+    await waitFor(() => expect(asked).toContain("g/other"));
+    expect(face()).not.toHaveClass("agent-working");
+  });
+
+  it("the working glow drops an answer older than 2 polls: a stalled poll says live state unknown, never the old glow", async () => {
+    const cards = [card({ id: 5, column: "running", title: "Thinking", owner_session: "s1" })];
+    const api = fakeApi(boardData(content, cards), cards);
+    let answers = 0;
+    api.boardLive = () => {
+      answers += 1;
+      // the first poll answers; every later one hangs (a stalled connection: no error, no answer)
+      return answers === 1
+        ? Promise.resolve({ sessions: { s1: { ...liveOf("working", "thinking") } } })
+        : new Promise(() => {});
+    };
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<Host api={api} />);
+      const face = () => screen.getByText("Thinking").closest("li")!;
+      await waitFor(() => expect(face()).toHaveClass("agent-working"));
+      await vi.advanceTimersByTimeAsync(5900);
+      expect(face()).toHaveClass("agent-working"); // within 2 polls: still the answer
+      await vi.advanceTimersByTimeAsync(200);
+      await waitFor(() => expect(face()).not.toHaveClass("agent-working"));
+      expect(document.querySelector(".kb-agents-err")).toHaveTextContent(
+        "agents · live state unknown: no answer for 6 s",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a host without boardLive: no poll, no glow, no agents error", async () => {
+    const cards = [card({ id: 12, column: "running", title: "Owned", owner_session: "s1" })];
+    const api = fakeApi(boardData(content, cards), cards);
+    expect(api.boardLive).toBeUndefined();
+    render(<Host api={api} />);
+    await screen.findByText("Owned");
+    await waitFor(() => expect(api.calls).toContain("boardRev")); // the board's own live poll ran
+    expect(screen.getByText("Owned").closest("li")).not.toHaveClass("agent-working");
+    expect(document.querySelector(".kb-card.agent-working")).toBeNull();
+    expect(document.querySelector(".kb-agents-err")).toBeNull();
+  });
+
+  it("the working glow is CSS: a pulse, steady under prefers-reduced-motion", () => {
+    const css = readFileSync(join(__dirname, "..", "src", "styles", "kanban.css"), "utf8");
+    expect(css).toMatch(/\.kb-card\.agent-working \{[^}]*animation: kb-working-glow/);
+    expect(css).toMatch(
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.ak-root \.kb-card\.agent-working \{\s*animation: none;/,
+    );
+    expect(css).toMatch(/\.kb-card\.agent-working \{[^}]*var\(--ak-working\)/); // a token, never a literal colour
   });
 
   it("a card on a workflow board moves by TRANSITION: the list holds the operator's transitions and sends the name", async () => {

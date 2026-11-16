@@ -39,6 +39,7 @@
   --ak-vivid-purple: #af52de;
   --ak-vivid-teal: #30b0c7;
   --ak-vivid-pink: #ff2d55;
+  --ak-working: #0a84ff; /* the blue glow of a card whose agent works now */
   --ak-radius-card: 14px;
   --ak-radius-band: 10px;
   --ak-radius-ctl: 9px;
@@ -76,6 +77,7 @@
     --ak-vivid-orange: #ff9f0a;
     --ak-vivid-red: #ff453a;
     --ak-vivid-blue: #0a84ff;
+    --ak-working: #409cff;
     --ak-vivid-yellow: #ffd60a;
     --ak-vivid-purple: #bf5af2;
     --ak-vivid-teal: #40c8e0;
@@ -718,6 +720,42 @@
   box-shadow:
     var(--ak-shadow-card),
     inset 0 0 0 1.5px var(--ak-vivid-red);
+}
+/* its owner agent session works now (thinking · tool · writing · subagents; lib/agentLive.ts workingPhase): a blue frame
+   + a soft pulsing glow, the red needs-you family; a steady glow under prefers-reduced-motion. Never with needs-you. */
+.ak-root .kb-card.agent-working {
+  border-left-color: var(--ak-working);
+  box-shadow:
+    var(--ak-shadow-card),
+    inset 0 0 0 1.5px color-mix(in srgb, var(--ak-working) 70%, transparent),
+    0 0 10px 1px color-mix(in srgb, var(--ak-working) 45%, transparent);
+  animation: kb-working-glow 2.4s ease-in-out infinite;
+}
+.ak-root .kb-card.agent-working:hover {
+  box-shadow:
+    var(--ak-shadow-card),
+    inset 0 0 0 1.5px var(--ak-working),
+    0 0 12px 2px color-mix(in srgb, var(--ak-working) 55%, transparent);
+}
+@keyframes kb-working-glow {
+  0%,
+  100% {
+    box-shadow:
+      var(--ak-shadow-card),
+      inset 0 0 0 1.5px color-mix(in srgb, var(--ak-working) 70%, transparent),
+      0 0 10px 1px color-mix(in srgb, var(--ak-working) 45%, transparent);
+  }
+  50% {
+    box-shadow:
+      var(--ak-shadow-card),
+      inset 0 0 0 1.5px color-mix(in srgb, var(--ak-working) 45%, transparent),
+      0 0 4px 0 color-mix(in srgb, var(--ak-working) 20%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ak-root .kb-card.agent-working {
+    animation: none;
+  }
 }
 .ak-root .kb-needsyou {
   font-size: 11px;

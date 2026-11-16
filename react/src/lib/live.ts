@@ -64,6 +64,9 @@ export function useLiveRev(
 // until it has been pending for 5 intervals (a stalled connection then no longer blocks the next).
 // Failures back off: after n failed polls in a row the next waits every × 2^n, at most POLL_BACKOFF_MAX_MS; the first
 // success polls at `every` again.
+// `opts.key`: what the value is OF (e.g. the board's slug) — a new key drops the value and error at once and polls
+// afresh, so one board never shows another's answer. `opts.staleAfter` (ms): a value with no newer answer for that long
+// is dropped and the error says "live state unknown: no answer for N s" — an old answer is never shown as live.
 export const POLL_BACKOFF_MAX_MS = 30_000;
 export function pollDelay(every: number, failures: number): number {
   return Math.min(every * 2 ** failures, Math.max(every, POLL_BACKOFF_MAX_MS));
@@ -71,15 +74,26 @@ export function pollDelay(every: number, failures: number): number {
 export function useLivePoll<T>(
   fetch: (() => Promise<T>) | null,
   every = 3000,
+  opts: { key?: string; staleAfter?: number } = {},
 ): { value: T | null; error: string | null } {
   const fetcher = useRef(fetch);
   fetcher.current = fetch;
   const [state, setState] = useState<{ value: T | null; error: string | null }>({ value: null, error: null });
   const key = fetch ? 1 : 0;
+  const of = opts.key ?? "";
+  const staleAfter = opts.staleAfter ?? 0;
+  if (staleAfter < 0) throw new Error(`useLivePoll: staleAfter must be ≥ 0 ms, got ${staleAfter}`);
+  // a new key: the old key's answer is dropped in this very render, never shown for the new one
+  const [shownOf, setShownOf] = useState(of);
+  if (shownOf !== of) {
+    setShownOf(of);
+    setState({ value: null, error: null });
+  }
 
   useEffect(() => {
     if (!key) return;
     let stop = false;
+    let staleTimer = 0;
     // as useLiveRev: one that has not settled after 5 intervals (a stalled connection) no longer blocks the next
     let inFlightSince = 0;
     let failures = 0;
@@ -94,7 +108,19 @@ export function useLivePoll<T>(
       try {
         const value = await fetcher.current();
         failures = 0;
-        if (!stop) setState({ value, error: null });
+        if (!stop) {
+          setState({ value, error: null });
+          if (staleAfter) {
+            window.clearTimeout(staleTimer);
+            staleTimer = window.setTimeout(() => {
+              if (!stop)
+                setState({
+                  value: null,
+                  error: `live state unknown: no answer for ${Math.round(staleAfter / 1000)} s`,
+                });
+            }, staleAfter);
+          }
+        }
       } catch (e) {
         failures += 1;
         if (!stop) setState((s) => ({ ...s, error: e instanceof Error ? e.message : String(e) }));
@@ -109,9 +135,10 @@ export function useLivePoll<T>(
     return () => {
       stop = true;
       window.clearInterval(id);
+      window.clearTimeout(staleTimer);
       document.removeEventListener("visibilitychange", vis);
     };
-  }, [key, every]);
+  }, [key, every, of, staleAfter]);
 
   return state;
 }

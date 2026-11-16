@@ -9,6 +9,8 @@ import {
   liveMoods,
   liveParts,
   liveSessionOf,
+  workingPhase,
+  workingWords,
 } from "./agentLive";
 import { pollDelay } from "./live";
 import type { SessionLive } from "../types";
@@ -103,6 +105,31 @@ describe("announcing and polling", () => {
   });
   it("backs off after failed polls, capped", () => {
     expect([0, 1, 2, 3, 4, 9].map((n) => pollDelay(3000, n))).toEqual([3000, 6000, 12000, 24000, 30000, 30000]);
+  });
+});
+
+describe("workingPhase (the board's blue glow)", () => {
+  const card = { owner_session: "lead" };
+  it("glows on each phase a working owner session shows evidence of", () => {
+    for (const phase of ["thinking", "tool", "writing", "subagents"] as const)
+      expect(workingPhase(card, "working", { lead: live({ phase }) })).toBe(phase);
+    expect(workingWords("tool")).toBe("running a tool");
+    expect(workingWords("subagents")).toBe("waiting on its subagents"); // "its agent is waiting on its subagents"
+  });
+  it("does not glow without evidence, for an idle / blocked / unknown session, or another session working", () => {
+    expect(workingPhase(card, "working", { lead: live({}) })).toBeNull(); // working, no phase read: no guess
+    for (const state of ["idle", "finished", "blocked", "review", "unknown"])
+      expect(workingPhase(card, "working", { lead: live({ state, phase: "thinking" }) })).toBeNull();
+    expect(workingPhase(card, "working", { other: live({ phase: "thinking" }) })).toBeNull();
+    expect(workingPhase({ owner_session: null }, "working", { lead: live({ phase: "thinking" }) })).toBeNull();
+  });
+  it("does not glow on a card in a done or cancelled column (finished work)", () => {
+    expect(workingPhase(card, "review", { lead: live({ phase: "thinking" }) })).toBe("thinking");
+    for (const t of ["done", "cancelled"] as const)
+      expect(workingPhase(card, t, { lead: live({ phase: "thinking" }) })).toBeNull();
+  });
+  it("does not glow when the live read failed or has not answered (sessions null)", () => {
+    expect(workingPhase(card, "working", null)).toBeNull();
   });
 });
 
