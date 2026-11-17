@@ -4,7 +4,7 @@
 // board without an approval step shows no approve button), and a card waiting for a parent shows the badge.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Board, type BoardView, type KanbanApi } from "../src";
@@ -690,6 +690,60 @@ describe("Board", () => {
     expect(screen.getByText("Human Check handoff")).toBeInTheDocument();
     fireEvent.click(btn);
     await waitFor(() => expect(api.calls).toContain("approve 5 true"));
+  });
+
+  // the actions that move a card are the rail's last block (sticky in kanban.css: card-actions-sticky.test.ts)
+  it("the card dialog's action block holds the Approve step and the Transition list, last in the rail; the rest of the rail stays above it", async () => {
+    const cards = [card({ id: 5, column: "human_check", title: "HC", owner_session: "s1" })];
+    render(<Host api={fakeApi(boardData(coding, cards), cards)} view={{ card: 5, panel: null, archived: false }} />);
+    const approve = await screen.findByText("✓ Approve to merge");
+    const side = document.querySelector("aside.kb-side")!;
+    const acts = side.querySelector(".kb-side-acts")!;
+    expect(side.lastElementChild).toBe(acts);
+    expect(acts).toHaveAttribute("role", "group");
+    expect(acts.contains(approve)).toBe(true);
+    expect(acts.querySelector("#kb-list-5")?.textContent).toBe("Transition");
+    const rest = side.querySelector(".kb-side-main")!;
+    for (const label of ["Members", "Labels", "Cover", "Copy link", "Archive"])
+      expect(rest.contains(screen.getByText(label))).toBe(true);
+    expect(rest.querySelector("#kb-prio-5")).not.toBeNull();
+  });
+
+  it("the dialog's scroll-padding-bottom follows the action block's height (--kb-acts-h), cleared on close", async () => {
+    let fire: (() => void) | null = null;
+    class RO {
+      constructor(cb: () => void) {
+        fire = cb;
+      }
+      observe() {
+        fire?.();
+      }
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", RO);
+    try {
+      const cards = [card({ id: 5, column: "human_check", title: "HC", owner_session: "s1" })];
+      const { unmount } = render(
+        <Host api={fakeApi(boardData(coding, cards), cards)} view={{ card: 5, panel: null, archived: false }} />,
+      );
+      await screen.findByText("✓ Approve to merge");
+      const dialog = document.querySelector<HTMLElement>(".kb-dialog")!;
+      await waitFor(() => expect(dialog.style.getPropertyValue("--kb-acts-h")).not.toBe(""));
+      // jsdom lays nothing out: the block's height is given here, and each resize must carry the block's own height
+      const acts = document.querySelector<HTMLElement>(".kb-side-acts")!;
+      let height = 109;
+      Object.defineProperty(acts, "offsetHeight", { configurable: true, get: () => height });
+      act(() => fire!());
+      expect(dialog.style.getPropertyValue("--kb-acts-h")).toBe("109px");
+      height = 64;
+      act(() => fire!());
+      expect(dialog.style.getPropertyValue("--kb-acts-h")).toBe("64px");
+      unmount();
+      expect(dialog.style.getPropertyValue("--kb-acts-h")).toBe("");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   // workflow v3 approves at every gate — the button sits on each step and names the target column

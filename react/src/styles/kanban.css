@@ -986,6 +986,8 @@
   box-shadow: var(--ak-menu-shadow, var(--ak-shadow-card));
   overflow-y: auto;
   overflow-x: hidden;
+  /* --kb-acts-h = the sticky action block's height, set by CardDialog while it is shown; none shown → no padding */
+  scroll-padding-bottom: var(--kb-acts-h, 0px);
 }
 .ak-root .kb-dialog::backdrop {
   background: rgba(0, 0, 0, 0.4);
@@ -1999,12 +2001,36 @@
   border-radius: var(--ak-radius-chip);
 }
 
-/* sidebar */
+/* sidebar: the rail stretches to the dialog body's full height; its last block (.kb-side-acts: the Approve step and the
+   transitions) sits at the rail's end and sticks to the bottom of the dialog's scroll port, so it is on screen at every
+   scroll position (sticky needs every ancestor up to .kb-dialog free of a scroll container: the rail clips, never hides) */
 .ak-root .kb-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-self: stretch;
+  min-width: 0;
+}
+.ak-root .kb-side-main {
   display: grid;
   gap: 6px;
   align-content: start;
   min-width: 0;
+}
+.ak-root .kb-side-acts {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-top: auto;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 0 12px;
+  background: var(--ak-panel);
+  box-shadow: 0 -1px 0 var(--ak-line);
+}
+.ak-root .kb-side-acts .kb-approve {
+  margin: 0;
 }
 .ak-root .kb-side h4 {
   margin: 4px 0 0;
@@ -2205,8 +2231,25 @@
   .ak-root .kb-dbody {
     grid-template-columns: minmax(0, 1fr);
   }
+  /* one column: the rail stacks under the main column, so its box starts below the fold and could not hold a sticky
+     child there; the body becomes a flex column and the rail's two blocks its items, and the actions stick to the
+     dialog's bottom as a bar over the whole card */
+  .ak-root .kb-dbody {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
   .ak-root .kb-side {
+    display: contents;
+  }
+  .ak-root .kb-side-main {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* edge to edge over the dialog's side padding (beats the rail's `> * { max-width: 100% }`, which kept it 12px short) */
+  .ak-root .kb-side > .kb-side-acts {
+    max-width: none;
+    margin: 0 calc(-1 * var(--kb-gutter)) calc(-1 * var(--kb-gutter-bottom));
+    padding: 10px var(--kb-gutter) 12px;
   }
   .ak-root .kb-side h4,
   .ak-root .kb-side .kb-panel,
@@ -2214,8 +2257,11 @@
   .ak-root .kb-side .kb-owner-panel {
     grid-column: 1 / -1;
   }
+  /* the side + bottom gutter, one value: the action bar below cancels exactly these to reach the dialog's edges */
   .ak-root .kb-detail {
-    padding: 12px 12px 16px;
+    --kb-gutter: 12px;
+    --kb-gutter-bottom: 16px;
+    padding: 12px var(--kb-gutter) var(--kb-gutter-bottom);
   }
   .ak-root .kb-cover {
     margin: -12px -12px 0;
@@ -2655,7 +2701,7 @@
 /* the card sidebar never wider than its column */
 .ak-root .kb-side {
   min-width: 0;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 .ak-root .kb-side > * {
   max-width: 100%;

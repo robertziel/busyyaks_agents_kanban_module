@@ -241,6 +241,19 @@ function CardDetail({
   const [dragging, setDragging] = useState(false);
   const [lightbox, setLightbox] = useState<{ url: string; name: string; a?: Attachment } | null>(null);
   const picker = useRef<HTMLInputElement>(null);
+  // the sticky action block's height, as the dialog's scroll-padding-bottom (kanban.css): a field focused or scrolled into
+  // view is placed above the bar, never under it
+  const [acts, setActs] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const port = acts?.closest<HTMLElement>(".kb-dialog");
+    if (!acts || !port) return;
+    const ro = new ResizeObserver(() => port.style.setProperty("--kb-acts-h", `${acts.offsetHeight}px`));
+    ro.observe(acts);
+    return () => {
+      ro.disconnect();
+      port.style.removeProperty("--kb-acts-h");
+    };
+  }, [acts]);
   const seq = useRef(0);
   // a comment-reference chip (href "#a-<id>") was clicked: scroll that activity entry into view and glow it. Runs
   // after the render that switched details on, so a hidden event is in the DOM by then.
@@ -1025,201 +1038,212 @@ function CardDetail({
         </div>
 
         <aside className="kb-side" aria-label="Card actions">
-          {data.links && data.links.length > 0 && (
-            <>
-              <h4>Links · {data.links.length}</h4>
-              <CardLinks links={data.links} />
-            </>
-          )}
-          <h4>Owner session</h4>
-          <OwnerPanel card={c} data={data} busy={busy} run={run} id={id} />
-          <h4>Add to card</h4>
-          <SideBtn
-            icon="user"
-            label="Members"
-            on={panel === "members"}
-            onClick={() => setPanel(panel === "members" ? null : "members")}
-          />
-          {panel === "members" && (
-            <MembersPanel
-              current={c.assignee}
-              candidates={board.assignees ?? []}
-              me={me}
-              agents={agents}
-              busy={busy}
-              onPick={(a) => void run(() => api.assign(id, a ?? ""))}
+          <div className="kb-side-main">
+            {data.links && data.links.length > 0 && (
+              <>
+                <h4>Links · {data.links.length}</h4>
+                <CardLinks links={data.links} />
+              </>
+            )}
+            <h4>Owner session</h4>
+            <OwnerPanel card={c} data={data} busy={busy} run={run} id={id} />
+            <h4>Add to card</h4>
+            <SideBtn
+              icon="user"
+              label="Members"
+              on={panel === "members"}
+              onClick={() => setPanel(panel === "members" ? null : "members")}
             />
-          )}
-          <SideBtn
-            icon="tag"
-            label="Labels"
-            on={panel === "labels"}
-            onClick={() => setPanel(panel === "labels" ? null : "labels")}
-          />
-          {panel === "labels" && (
-            <LabelsPanel
-              slug={slug}
-              board={board}
-              chosen={c.labels}
-              busy={busy}
-              run={run}
-              onToggle={(ls) => void patch({ labels: ls })}
+            {panel === "members" && (
+              <MembersPanel
+                current={c.assignee}
+                candidates={board.assignees ?? []}
+                me={me}
+                agents={agents}
+                busy={busy}
+                onPick={(a) => void run(() => api.assign(id, a ?? ""))}
+              />
+            )}
+            <SideBtn
+              icon="tag"
+              label="Labels"
+              on={panel === "labels"}
+              onClick={() => setPanel(panel === "labels" ? null : "labels")}
             />
-          )}
-          <SideBtn
-            icon="check"
-            label="Checklist"
-            on={panel === "checklist"}
-            onClick={() => setPanel(panel === "checklist" ? null : "checklist")}
-          />
-          <SideBtn icon="clip" label="Attach" onClick={() => picker.current?.click()} />
-          <input
-            ref={picker}
-            type="file"
-            multiple
-            hidden
-            aria-label="Attach files"
-            data-testid="attach-input"
-            onChange={(e) => {
-              attachFiles(Array.from(e.target.files ?? []));
-              e.target.value = "";
-            }}
-          />
-          {panel === "checklist" && (
-            <ChecklistPanel
-              busy={busy}
-              onAdd={(t) => void run(() => api.checklistCreate(id, t)).then((ok) => ok && setPanel(null))}
+            {panel === "labels" && (
+              <LabelsPanel
+                slug={slug}
+                board={board}
+                chosen={c.labels}
+                busy={busy}
+                run={run}
+                onToggle={(ls) => void patch({ labels: ls })}
+              />
+            )}
+            <SideBtn
+              icon="check"
+              label="Checklist"
+              on={panel === "checklist"}
+              onClick={() => setPanel(panel === "checklist" ? null : "checklist")}
             />
-          )}
-          <SideBtn
-            icon="clock"
-            label="Due date"
-            on={panel === "due"}
-            onClick={() => setPanel(panel === "due" ? null : "due")}
-          />
-          {panel === "due" && (
-            <DuePanel
-              due={c.due}
-              done={c.due_done}
-              busy={busy}
-              onSave={(due, done) => void patch({ due, due_done: done }).then((ok) => ok && setPanel(null))}
-              onClear={() => void patch({ due: "", due_done: false }).then((ok) => ok && setPanel(null))}
+            <SideBtn icon="clip" label="Attach" onClick={() => picker.current?.click()} />
+            <input
+              ref={picker}
+              type="file"
+              multiple
+              hidden
+              aria-label="Attach files"
+              data-testid="attach-input"
+              onChange={(e) => {
+                attachFiles(Array.from(e.target.files ?? []));
+                e.target.value = "";
+              }}
             />
-          )}
-          <SideBtn
-            icon="cover"
-            label="Cover"
-            on={panel === "cover"}
-            onClick={() => setPanel(panel === "cover" ? null : "cover")}
-          />
-          {panel === "cover" && (
-            <div className="kb-panel">
-              <div className="kb-swatches">
-                {board.label_colors.map((col) => (
-                  <button
-                    type="button"
-                    key={col}
-                    className={`kb-swatch lc-${col}`}
-                    aria-pressed={c.cover === col}
-                    title={col}
-                    aria-label={`cover ${col}`}
-                    onClick={() => void patch({ cover: col })}
-                  />
-                ))}
-              </div>
-              <button type="button" className="btn small" disabled={!c.cover} onClick={() => void patch({ cover: "" })}>
-                Remove cover
-              </button>
-            </div>
-          )}
-
-          {step && (
-            <div className="kb-approve">
-              {c.approved ? (
-                <>
-                  <p className="kb-approved-now">
-                    ✓ Approved by <b>{c.approved_by}</b> · {isoAt(c.approved)} — {approvedNext(step, colLabel)}
-                  </p>
-                  <button
-                    type="button"
-                    className="btn small"
-                    disabled={busy}
-                    onClick={() => void run(() => api.approve(id, false))}
-                    title={`Withdraw: the card goes back to ${colLabel(step.from)}`}
-                  >
-                    Withdraw approval
-                  </button>
-                </>
-              ) : (
+            {panel === "checklist" && (
+              <ChecklistPanel
+                busy={busy}
+                onAdd={(t) => void run(() => api.checklistCreate(id, t)).then((ok) => ok && setPanel(null))}
+              />
+            )}
+            <SideBtn
+              icon="clock"
+              label="Due date"
+              on={panel === "due"}
+              onClick={() => setPanel(panel === "due" ? null : "due")}
+            />
+            {panel === "due" && (
+              <DuePanel
+                due={c.due}
+                done={c.due_done}
+                busy={busy}
+                onSave={(due, done) => void patch({ due, due_done: done }).then((ok) => ok && setPanel(null))}
+                onClear={() => void patch({ due: "", due_done: false }).then((ok) => ok && setPanel(null))}
+              />
+            )}
+            <SideBtn
+              icon="cover"
+              label="Cover"
+              on={panel === "cover"}
+              onClick={() => setPanel(panel === "cover" ? null : "cover")}
+            />
+            {panel === "cover" && (
+              <div className="kb-panel">
+                <div className="kb-swatches">
+                  {board.label_colors.map((col) => (
+                    <button
+                      type="button"
+                      key={col}
+                      className={`kb-swatch lc-${col}`}
+                      aria-pressed={c.cover === col}
+                      title={col}
+                      aria-label={`cover ${col}`}
+                      onClick={() => void patch({ cover: col })}
+                    />
+                  ))}
+                </div>
                 <button
                   type="button"
-                  className="btn kb-approve-btn"
-                  disabled={busy}
-                  onClick={() => void run(() => api.approve(id, true))}
-                  title={approveTitle(step, colLabel, at?.inPlace)}
+                  className="btn small"
+                  disabled={!c.cover}
+                  onClick={() => void patch({ cover: "" })}
                 >
-                  {approveLabel(step, colLabel, at?.inPlace)}
+                  Remove cover
                 </button>
-              )}
-              {!c.owner_session && !c.approved && (
-                <p className="muted">no owner session — nobody will be pinged; set one above</p>
-              )}
-            </div>
-          )}
-          <h4>Actions</h4>
-          <label
-            className="kb-side-field"
-            title={transitionMoves.length === 0 ? "no transition out of this column for you" : undefined}
-          >
-            <span id={`kb-list-${id}`}>Transition</span>
-            <Select
-              options={moveOptions}
-              value={c.column}
-              onChange={moveTo}
-              ariaLabelledBy={`kb-list-${id}`}
-              disabled={!!c.archived || busy || transitionMoves.length === 0}
+              </div>
+            )}
+
+            <h4>Actions</h4>
+            <label className="kb-side-field">
+              <span id={`kb-prio-${id}`}>Priority</span>
+              <Select
+                options={[{ value: "", label: "—" }, ...board.priorities.map((p) => ({ value: p, label: p }))]}
+                value={c.priority ?? ""}
+                onChange={(v) => void patch({ priority: v })}
+                ariaLabelledBy={`kb-prio-${id}`}
+                disabled={busy}
+              />
+            </label>
+            <SideBtn icon="link" label={copied ?? "Copy link"} onClick={copyLink} />
+            <SideBtn
+              icon="archive"
+              label={c.archived ? "Restore" : "Archive"}
+              onClick={() => void run(() => api.archive(id, !c.archived))}
             />
-          </label>
-          <label className="kb-side-field">
-            <span id={`kb-prio-${id}`}>Priority</span>
-            <Select
-              options={[{ value: "", label: "—" }, ...board.priorities.map((p) => ({ value: p, label: p }))]}
-              value={c.priority ?? ""}
-              onChange={(v) => void patch({ priority: v })}
-              ariaLabelledBy={`kb-prio-${id}`}
-              disabled={busy}
-            />
-          </label>
-          <SideBtn icon="link" label={copied ?? "Copy link"} onClick={copyLink} />
-          <SideBtn
-            icon="archive"
-            label={c.archived ? "Restore" : "Archive"}
-            onClick={() => void run(() => api.archive(id, !c.archived))}
-          />
-          {(c.parent || c.children > 0) && (
-            <p className="kb-side-meta muted kb-deps">
-              {c.parent && (
-                <>
-                  waits for{" "}
-                  <span className="kb-mention" data-card-id={c.parent} tabIndex={0}>
-                    card #{c.parent}
-                  </span>
-                  {c.blocked_by.length > 0 ? <b className="err"> · not done</b> : " · done"}
-                  <br />
-                </>
-              )}
-              {c.children > 0 && (
-                <>
-                  {c.children} card{c.children === 1 ? "" : "s"} wait for this one
-                </>
-              )}
+            {(c.parent || c.children > 0) && (
+              <p className="kb-side-meta muted kb-deps">
+                {c.parent && (
+                  <>
+                    waits for{" "}
+                    <span className="kb-mention" data-card-id={c.parent} tabIndex={0}>
+                      card #{c.parent}
+                    </span>
+                    {c.blocked_by.length > 0 ? <b className="err"> · not done</b> : " · done"}
+                    <br />
+                  </>
+                )}
+                {c.children > 0 && (
+                  <>
+                    {c.children} card{c.children === 1 ? "" : "s"} wait for this one
+                  </>
+                )}
+              </p>
+            )}
+            <p className="kb-side-meta muted">
+              created {isoAt(c.created)} · {c.created_by}
+              <br />
+              updated {isoAt(c.updated)}
             </p>
-          )}
-          <p className="kb-side-meta muted">
-            created {isoAt(c.created)} · {c.created_by}
-            <br />
-            updated {isoAt(c.updated)}
-          </p>
+          </div>
+          {/* the actions that move the card: pinned to the bottom of the dialog's visible area at every scroll position
+              (position: sticky in kanban.css), so the Approve step and the transitions never need looking for */}
+          <div ref={setActs} className="kb-side-acts" role="group" aria-label="Move the card">
+            {step && (
+              <div className="kb-approve">
+                {c.approved ? (
+                  <>
+                    <p className="kb-approved-now">
+                      ✓ Approved by <b>{c.approved_by}</b> · {isoAt(c.approved)} — {approvedNext(step, colLabel)}
+                    </p>
+                    <button
+                      type="button"
+                      className="btn small"
+                      disabled={busy}
+                      onClick={() => void run(() => api.approve(id, false))}
+                      title={`Withdraw: the card goes back to ${colLabel(step.from)}`}
+                    >
+                      Withdraw approval
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn kb-approve-btn"
+                    disabled={busy}
+                    onClick={() => void run(() => api.approve(id, true))}
+                    title={approveTitle(step, colLabel, at?.inPlace)}
+                  >
+                    {approveLabel(step, colLabel, at?.inPlace)}
+                  </button>
+                )}
+                {!c.owner_session && !c.approved && (
+                  <p className="muted">no owner session — nobody will be pinged; set one above</p>
+                )}
+              </div>
+            )}
+            <label
+              className="kb-side-field"
+              title={transitionMoves.length === 0 ? "no transition out of this column for you" : undefined}
+            >
+              <span id={`kb-list-${id}`}>Transition</span>
+              <Select
+                options={moveOptions}
+                value={c.column}
+                onChange={moveTo}
+                ariaLabelledBy={`kb-list-${id}`}
+                disabled={!!c.archived || busy || transitionMoves.length === 0}
+              />
+            </label>
+          </div>
         </aside>
       </div>
       {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} />}
