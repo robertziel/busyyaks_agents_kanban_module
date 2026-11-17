@@ -35,6 +35,7 @@
   "table_prefix": "kanban_",
   "theme": {},
   "idle_watch": null,
+  "progress_watch": { "stale_minutes": null },
   "handoff": null,
   "approval": null,
   "dependencies": true,

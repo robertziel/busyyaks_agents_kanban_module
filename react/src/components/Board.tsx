@@ -1191,6 +1191,11 @@ function CardItem({
               ⏳ {c.gate_hold.slice(0, 60)}
             </span>
           )}
+          {c.progress_stale && (
+            <span className="kb-stale" title={`waiting for you: ${c.progress_stale} — the progress watch`}>
+              ⌛ {c.progress_stale.slice(0, 60)}
+            </span>
+          )}
           {c.review_round != null && reviewCols.includes(c.column) && (
             <span
               className="kb-round"

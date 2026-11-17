@@ -26,6 +26,9 @@ module AgentsKanban
   #       hold cleared logs "ready for your approval" once;
   #   3d. the PR watch (the ci: port's optional closed_prs): every PR assigned to a live card stays watched; one closed
   #       without merging is told ONCE — a comment on the card and a ping to its owner (Store#pr_watch_pass);
+  #   3e. the progress watch (config.progress_watch): a card in a working / review column with no progress for
+  #       stale_minutes pings its owner, then gets a comment, then counts as waiting (Store#progress_watch_pass); a card
+  #       the Store's ci: port cannot answer is said once per change of reason;
   #   4. owner sessions the collector snapshot shows waiting get their screen read: a dialog becomes ONE ask-gate question
   #      once it has stayed on the screen session_dialogs.settle_seconds (first seen → still there that much later);
   #      a host with no collector (agents Refused) or an unreachable one turns off only this step ("dialog scan off");
@@ -49,6 +52,7 @@ module AgentsKanban
       @prefetch_failed = {} # card id => why the approval prefetch could not ask its checks: logged on change
       @prefetch_skipped = {} # card id => why the approval prefetch did not ask a gate card: logged on change
       @pr_watch_failed = {} # card id => why the PR watch could not read its PRs: logged on change
+      @progress_failed = {} # card id => why the progress watch could not read its evidence: logged on change
       @log = log
       # the idle watch's port (errors.rb, CiChecks): a board with idle_watch configured and no port is a wiring error
       @ci = ci
@@ -98,18 +102,35 @@ module AgentsKanban
       taken = @store.adopt_ownerless(live: live, grace: @grace)
       @log.puts("intake assigned cards #{taken.join(', ')}") if taken.any?
       @log.puts("watchdog released cards #{released.join(', ')}") if released.any?
-      reminded = @store.flag_reminders
-      @log.puts("flag reminders on cards #{reminded.join(', ')}") if reminded.any?
-      shelved = @store.session_boards_expire_pass
-      @log.puts("session boards archived (inactive): #{shelved.join(', ')}") if shelved.any?
-      idle_watch(live)
-      approval_prefetch
-      pr_watch
-      watch_dialogs
+      watchers(live)
       released
     rescue Delivery::Unavailable, Delivery::Refused => e
       @log.puts("watchdog skipped: #{e.message}")
       []
+    end
+
+    # The watchers after the watchdog, each on its own: one that raises (a host port's error, a bug) is said and skipped
+    # for this pass — the others, the dialog scan and the released cards still run and are returned.
+    def watchers(live)
+      guard("flag reminders") do
+        reminded = @store.flag_reminders
+        @log.puts("flag reminders on cards #{reminded.join(', ')}") if reminded.any?
+      end
+      guard("session boards") do
+        shelved = @store.session_boards_expire_pass
+        @log.puts("session boards archived (inactive): #{shelved.join(', ')}") if shelved.any?
+      end
+      guard("idle watch") { idle_watch(live) }
+      guard("approval prefetch") { approval_prefetch }
+      guard("pr watch") { pr_watch }
+      guard("progress watch") { progress_watch }
+      guard("dialog scan") { watch_dialogs }
+    end
+
+    def guard(what)
+      yield
+    rescue StandardError => e
+      @log.puts("#{what} skipped: #{e.class}: #{e.message}")
     end
 
     # CI finished with nobody acting, and live owners gone quiet (Store#idle_watch_pass). A port that cannot answer
@@ -167,6 +188,19 @@ ready: "ready for approval", }
                closed_nobody: "PR closed without merging, no owner session to ping", }
       pass.each { |id, what| @log.puts("pr watch: card #{id} #{said.fetch(what)}") if what.is_a?(Symbol) }
       @pr_watch_failed = failed
+    end
+
+    # Cards in work columns that stopped moving (Store#progress_watch_pass): each escalation step is said; a card whose
+    # evidence the port could not read is said once per change of reason, and once when it answers again.
+    def progress_watch
+      pass = @store.progress_watch_pass
+      failed = pass.filter_map { |id, what| [id, what.delete_prefix(UNAVAILABLE)] if what.is_a?(String) }.to_h
+      failed.each { |id, why| @log.puts("progress watch: card #{id}: #{why}") unless @progress_failed[id] == why }
+      (@progress_failed.keys - failed.keys).each { |id| @log.puts("progress watch: card #{id} answered again") }
+      said = { ping: "no progress, owner pinged", ping_nobody: "no progress, no owner session to ping",
+               comment: "no progress, commented", waiting: "no progress, counts as waiting", }
+      pass.each { |id, what| @log.puts("progress watch: card #{id} #{said.fetch(what)}") if what.is_a?(Symbol) }
+      @progress_failed = failed
     end
 
     # Owner sessions the collector snapshot shows waiting get their screen read. A stale snapshot skips only this step

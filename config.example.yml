@@ -149,6 +149,16 @@ theme: {}
 #                                 → ONE comment per idle stretch
 # No defaults in code: a missing or non-integer value fails the load; a Notifier given this config without the `ci:` port fails to build.
 idle_watch: { ci_ping_after_minutes: 10, ci_comment_after_minutes: 20, owner_idle_hours: 4 }
+# card-progress watch (SPEC § 4 Progress watch; Store#progress_watch_pass, every notifier watch pass). stale_minutes (N) is
+# required: null = off. Scope: every unarchived project card in a WORKING or REVIEW column, not flagged (needs_operator /
+# blocked_external). Progress = any card activity not signed by system_author (comment, move, edit, checklist,
+# attachment), plus — when the Store's `ci:` port answers progress(card) + progress_kinds — a change in the evidence
+# it gives (busyyaks: the assigned PR's head, that head's CI state, a commit on a branch the card names). A host with
+# no such port watches card activity only; the board JSON's `progress_watch.evidence` says which.
+# No progress for N min → ONE ping to the owner naming the last evidence; N min later still none → ONE system_author
+# comment; N min after that the card counts as waiting for the operator ("no progress for M min") until progress resets
+# the stretch (each step once per stretch).
+progress_watch: { stale_minutes: 30 }
 # the handoff gate's requirements on a board with a GATE column (kanban_handoff: how to check it + PR / CI URLs when
 # required, screenshots attached first when ui_change and ui_change_needs_screenshots). null = this host has no handoff
 # gate — a board with a gate column is then refused when read.

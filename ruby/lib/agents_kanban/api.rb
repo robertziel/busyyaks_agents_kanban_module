@@ -183,6 +183,8 @@ module AgentsKanban
         [200, body.merge(columns_order: b.keys, waiting_columns: b.waiting, listened_columns: b.listened,
                          waiting: w.waiting[p[:slug]], held: w.held[p[:slug]], external: w.external[p[:slug]],
                          approved: w.approved[p[:slug]], flagged: flagged,
+                         # the progress watch: N min, what counts as progress here (null = off)
+                         progress_watch: @store.progress_watch_json,
                          priorities: @config.priorities, label_colors: @config.label_colors,
                          lead: lead_json(p[:slug]),
                          **@board_extras.call(p)),]
@@ -684,6 +686,8 @@ module AgentsKanban
         # what the agent says to check, in a gate
         handoff_first_line: b.gate?(c[:column]) && c[:handoff_at] ? first_line(c[:qa_notes]) : nil,
         gate_hold: c[:gate_hold],
+        # the progress watch's reason (no progress for N min), when that is why it waits
+        progress_stale: c[:progress_stale],
         # who approved it and when (null = not approved), its owner session, and — carried on by its agent
         # (the one predicate, Store#carried_on_json) — where the agent takes it next; an approved card nobody owns
         # waits here with carried_on null

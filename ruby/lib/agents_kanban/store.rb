@@ -63,6 +63,10 @@ module AgentsKanban
         raise ConfigError, "host config has approval.requires_green_ci but the Store got no ci: port answering " \
                            "approval_checks(card, step)"
       end
+      if ci.respond_to?(:progress) != ci.respond_to?(:progress_kinds)
+        raise ConfigError, "the ci: port must answer both progress(card) and progress_kinds (the progress watch's " \
+                           "evidence and what it is), or neither"
+      end
       unless markdown.respond_to?(:card) && markdown.respond_to?(:inline)
         raise ArgumentError, "markdown must answer card(md) and inline(md)"
       end
@@ -289,7 +293,10 @@ module AgentsKanban
     def waiting_cards(slugs)
       rows = cards.where(archived_at: nil, project_slug: slugs.to_a).all
       boards = boards_for(rows.map { |c| c[:project_slug] }.uniq + [Board::TEMPLATE])
-      picked = rows.select { |c| flagged?(c) || boards[c[:project_slug]].waiting.include?(c[:column]) }
+      picked = rows.select do |c|
+        b = boards[c[:project_slug]]
+        flagged?(c) || b.waiting.include?(c[:column]) || progress_stale(c, b)
+      end
       all = decorate(picked.map { |c| hydrate(c, boards[c[:project_slug]]) }, boards)
       external, rest = all.partition { |c| external?(c) }
       held, rest = rest.partition { |c| c[:gate_hold] && !flagged?(c) }
@@ -301,11 +308,12 @@ module AgentsKanban
       external.each { |c| c[:since] = flag_since(c) }
       approved.each { |c| c[:since] = c[:approved_at] }
       list.each do |c|
-        c[:since] = flag_since(c) ||
+        c[:since] = flag_since(c) || (c[:progress_stale] && c[:progress_stale_at]) ||
                     (acts[c[:id]] || []).select { |a| a[:body].end_with?(c[:column_label]) }.map { |a| a[:created_at] }.max
       end
       sorted = list.sort_by do |c|
-        [flagged?(c) ? 0 : 1, boards[c[:project_slug]].waiting.index(c[:column]) || -1, c[:since] || 0, c[:id]]
+        b = boards[c[:project_slug]]
+        [flagged?(c) ? 0 : 1, b.waiting.index(c[:column]) || -1, c[:since] || 0, c[:id]]
       end
       WaitingCards.new(sorted.group_by { |c| c[:project_slug] }, boards, held.group_by { |c| c[:project_slug] },
                        external.sort_by { |c| [c[:since], c[:id]] }.group_by { |c| c[:project_slug] },
@@ -324,8 +332,10 @@ module AgentsKanban
     # The one rule of "waiting for the operator" for a card (its face, the counts): a question open on it wherever it
     # sits, or it sits in a WAITING column (a gate) with nothing held (hold = Store#gate_hold's why, nil = approvable
     # now) and is not only blocked_external (that waits for the world).
+    # A card the progress watch escalated to its last step (progress_stale) waits for the operator too.
     def waits_for_operator?(c, b, hold)
-      needs_operator?(c) || (!external?(c) && hold.nil? && !carried_on?(c, b, hold) && b.waiting.include?(c[:column]))
+      needs_operator?(c) || (!external?(c) && hold.nil? && !carried_on?(c, b, hold) && b.waiting.include?(c[:column])) ||
+        !progress_stale(c, b).nil?
     end
 
     # Approved and carried on by its agent: a card in a waiting gate the operator approved, whose next step is
@@ -416,6 +426,10 @@ module AgentsKanban
             asked: iso(c[:asked_at]), asked_by: c[:asked_by], dialog: c[:dialog],
             needs_operator: !c[:asked_at].nil?,
             gate_hold: c[:gate_hold], # waiting for CI, not for the operator (gate_hold; decorated cards only)
+            # the progress watch's last step: why the card waits for the operator (decorated cards only)
+            progress_stale: c[:progress_stale],
+            # why the progress watch could not read this card's evidence on its last pass (nil = it could)
+            progress_error: progress_watch? ? c[:progress_error] : nil,
             waiting: c[:waiting], # waits for the operator now (waits_for_operator?: the counts' rule; decorated cards only)
             # approved and carried on by its agent (carried_on_json: {next_column, next_label, final} | nil;
             # decorated cards only)
@@ -1684,7 +1698,7 @@ module AgentsKanban
                "#{tag} New comment on card ##{c[:id]} \"#{c[:title]}\" (#{b.label(c[:column])}, #{c[:project_slug]}) " \
                "by #{author}:\n\n#{clip}\n\n" \
                "Read the card with kanban_card id=#{c[:id]}, act on it, and reply with kanban_comment."
-             when "ci_idle", "pr_closed"
+             when "ci_idle", "pr_closed", "progress"
                "#{tag} #{body}"
              when "assigned"
                "#{tag} Card ##{c[:id]} \"#{c[:title]}\" (#{b.label(c[:column])}, #{c[:project_slug]}) " \
@@ -1989,17 +2003,20 @@ module AgentsKanban
           done << [c[:id], "CI skipped: #{e.message}"]
           pr = nil
         end
+        # the progress watch covers this card: it says "no progress" on the card itself — the idle watch keeps its CI
+        # ping but never comments too (one voice per quiet card)
+        quiet = progress_watch? && progress_scope?(c, boards[c[:project_slug]])
         if pr && %w[success failure].include?(pr[:state]) && pr[:finished_at]
-          done.concat(ci_step(c, pr, last, w, now, sys))
+          done.concat(ci_step(c, pr, last, w, now, sys, comment: !quiet))
         end
-        done.concat(idle_step(c, last, w, now, sys, live, ci))
+        done.concat(idle_step(c, last, w, now, sys, live, ci)) unless quiet
       end
       done
     end
 
     def last_activity_at(card_id) = activity_t.where(card_id: card_id).exclude(author: @config.system_author).max(:created_at)
 
-    def ci_step(c, pr, last, w, now, sys)
+    def ci_step(c, pr, last, w, now, sys, comment: true)
       return [] if last > pr[:finished_at] # the owner (or the operator) acted after the checks finished
 
       done = []
@@ -2018,7 +2035,7 @@ module AgentsKanban
                                  "#{c[:owner_session] ? "pinged #{c[:owner_session]}" : 'no owner session to ping'}", sys)
         end
         done << [c[:id], :ci_ping]
-      elsif row && row[:commented_at].nil? && now - row[:pinged_at] >= w.ci_comment_after_minutes * 60
+      elsif comment && row && row[:commented_at].nil? && now - row[:pinged_at] >= w.ci_comment_after_minutes * 60
         @db.transaction do
           watches_t.where(id: row[:id]).update(commented_at: now)
           touch(c[:id])
@@ -2049,6 +2066,201 @@ module AgentsKanban
                                "and #{commit ? "no commit for #{(now - commit) / 3600} h" : 'no commit on its branch'}.", sys)
       end
       [[c[:id], :idle_comment]]
+    end
+
+    # ── progress watch (config.progress_watch): a card in a work column that stopped moving ────────────────────────
+    #
+    # Seen on the first host: five cards sat 1–3 h with their builder subagents idle while the owner session
+    # (the lead running them) stayed alive and busy — the watchdog acts on a gone session, the idle watch on CI or on a
+    # quiet session, so nothing fired. This watch looks at the CARD.
+    #
+    # Scope: every unarchived project card in a WORKING or REVIEW column (Board#working? / #review?: never a gate, a
+    # terminal or a parked column) that is not flagged (needs_operator / blocked_external: those wait for someone else).
+    # Progress = the card's newest activity entry not signed by system_author (a comment, move, edit, checklist,
+    # attachment; the engine's own entries never count) or a change in the evidence the Store's ci: port gives:
+    #   progress(card) → [{kind: String, key: String, text: String}, …] — one entry per thing it watches for the card
+    #   (busyyaks: the assigned PR's head, that head's CI state, each branch the card names); `key` is the state (a sha,
+    #   "<sha> success"), `text` how a human reads it ("PR repo#5 head abc1234"); raises Delivery::Unavailable /
+    #   Refused when it cannot say. progress_kinds → [String] what it watches (the board JSON says it). A port without
+    #   progress → card activity only. An entry's key that differs from the one the last pass stored (or a kind not seen
+    #   before) is progress at this pass's time (cards.progress_marks keeps {kind => {key, text, at}}).
+    # The stretch: cards.progress_at = the newest progress seen. No progress for stale_minutes (N) →
+    #   1. ONE ping to the owner session naming the last evidence (none → said in the entry);
+    #   2. N min after the ping, still none → ONE comment by system_author on the card;
+    #   3. N min after the comment → progress_stale_at: the card counts as waiting for the operator
+    #      ("no progress for M min"), until progress starts a new stretch (every step again, once).
+    # A card leaving the scope forgets its stretch and marks. A card the port cannot answer is skipped and said (its
+    # stretch is kept; nothing is guessed). → [[card_id, :ping | :ping_nobody | :comment | :waiting |
+    # "unavailable: <why>"], …] what this pass did.
+    PROGRESS_ACTIVITY = "card activity"
+    # the activity kinds that are the card's progress (the spec's: comment, move, checklist, attachment) — never an
+    # owner change, an edit, a terminal event, an archive / restore, a flag or the engine's own entries
+    PROGRESS_KINDS = %w[comment move checklist attachment].freeze
+    PROGRESS_RESET = { progress_pinged_at: nil, progress_commented_at: nil, progress_stale_at: nil }.freeze
+
+    def progress_watch? = @config.progress_watch.on?
+    def progress_port? = @ci.respond_to?(:progress)
+
+    # The board JSON's statement of the watch: what it counts as progress on this host. nil = off.
+    def progress_watch_json
+      return nil unless progress_watch?
+
+      { stale_minutes: @config.progress_watch.stale_minutes,
+        evidence: [PROGRESS_ACTIVITY, *(progress_port? ? @ci.progress_kinds : [])],
+        port: progress_port?, }
+    end
+
+    def progress_scope?(c, b)
+      b.column?(c[:column]) && (b.working?(c[:column]) || b.review?(c[:column])) && !flagged?(c)
+    end
+
+    # Why the card counts as waiting for the operator (step 3), or nil. Read off the last watch pass (its stretch), so
+    # progress since then shows at the next pass. Fixed text: a read's rev changes only when the content does.
+    def progress_stale(c, b)
+      return nil unless progress_watch? && c[:progress_stale_at] && c[:progress_at] && progress_scope?(c, b)
+
+      "no progress for #{(c[:progress_stale_at] - c[:progress_at]) / 60} min (since #{hhmm(c[:progress_at])})"
+    end
+
+    def progress_watch_pass
+      return [] unless progress_watch?
+
+      now = @clock.call
+      rows = project_cards.where(archived_at: nil).order(:id).all
+      boards = boards_for(rows.map { |c| c[:project_slug] }.uniq)
+      rows.filter_map do |c|
+        b = boards[c[:project_slug]]
+        unless progress_scope?(c, b)
+          forget_progress(c)
+          next
+        end
+        progress_card(c, b, now)
+      end
+    end
+
+    def forget_progress(c)
+      return if c[:progress_at].nil? && c[:progress_marks].nil?
+
+      cards.where(id: c[:id]).update(progress_at: nil, progress_marks: nil, progress_error: nil, **PROGRESS_RESET)
+    end
+
+    # One card's pass. A port that cannot answer (any error: Delivery::*, a malformed answer, a bug in the port) skips the
+    # card for this pass with the reason — logged by the Notifier and kept on the card (progress_error, card JSON) until
+    # the port answers again; its stretch is kept, nothing is guessed.
+    def progress_card(c, b, now)
+      begin
+        marks = progress_marks(c, now)
+      rescue StandardError => e
+        why = e.is_a?(Delivery::Unavailable) || e.is_a?(Delivery::Refused) ? e.message : "#{e.class}: #{e.message}"
+        cards.where(id: c[:id]).update(progress_error: why[0, 2000]) if c[:progress_error] != why[0, 2000]
+        return [c[:id], "unavailable: #{why}"]
+      end
+      act = activity_t.where(card_id: c[:id], kind: PROGRESS_KINDS).exclude(author: @config.system_author)
+                      .order(Sequel.desc(:created_at), Sequel.desc(:id)).select(:id, :kind, :created_at).first
+      latest = [c[:created_at], act&.fetch(:created_at), *marks.values.map { |m| m["at"] }].compact.max
+      json = marks.empty? ? nil : JSON.generate(marks)
+      # progress only moves the stretch FORWARD: a vanished mark (a port kind missing for a pass, a deleted branch) or a
+      # deleted comment lowers `latest` — that is no progress, and never restarts the steps
+      if c[:progress_at].nil? || latest > c[:progress_at]
+        cards.where(id: c[:id]).update(progress_at: latest, progress_marks: json, progress_error: nil, **PROGRESS_RESET)
+        c = c.merge(progress_at: latest, **PROGRESS_RESET)
+      elsif json != c[:progress_marks] || c[:progress_error]
+        cards.where(id: c[:id]).update(progress_marks: json, progress_error: nil)
+      end
+      step = progress_step(c, b, now)
+      step && [c[:id], step.call(progress_last(c, act, marks))]
+    end
+
+    # The port's evidence merged into the stored marks: an unchanged key keeps its time, a changed or new one is now. A
+    # kind the port no longer answers is KEPT, marked gone (its time unchanged): when it comes back with the same key it
+    # is no progress (a flapping answer never restarts the stretch); with another key it is.
+    def progress_marks(c, now)
+      return {} unless progress_port?
+
+      old = c[:progress_marks] ? JSON.parse(c[:progress_marks]) : {}
+      items = @ci.progress(c)
+      raise Delivery::Refused, "progress port answered #{items.class}, not a list" unless items.is_a?(Array)
+
+      now_seen = items.each_with_object({}) do |e, acc|
+        bad = %i[kind key text].find { |k| !(e.is_a?(Hash) && e[k].is_a?(String) && !e[k].strip.empty?) }
+        raise Delivery::Refused, "progress port answered #{e.inspect}: #{bad} must be a non-blank String" if bad
+        raise Delivery::Refused, "progress port answered kind #{e[:kind]} twice" if acc.key?(e[:kind])
+
+        prev = old[e[:kind]]
+        at = prev && prev["key"] == e[:key] ? prev["at"] : now
+        acc[e[:kind]] = { "key" => e[:key], "text" => e[:text], "at" => at }
+      end
+      gone = old.reject { |k, _| now_seen.key?(k) }.transform_values { |m| m.merge("gone" => true) }
+      now_seen.merge(gone)
+    end
+
+    # The step due now (a lambda: last-evidence text → the step's symbol), or nil.
+    def progress_step(c, b, now)
+      period = @config.progress_watch.stale_minutes * 60
+      return nil if now - c[:progress_at] < period
+
+      if c[:progress_pinged_at].nil?
+        ->(last) { progress_ping!(c, b, now, last) }
+      elsif c[:progress_commented_at].nil? && now - c[:progress_pinged_at] >= period
+        ->(last) { progress_comment!(c, b, now, last) }
+      elsif c[:progress_commented_at] && c[:progress_stale_at].nil? && now - c[:progress_commented_at] >= period
+        ->(_) { progress_waiting!(c, now) }
+      end
+    end
+
+    def progress_last(c, act, marks)
+      parts = [act ? "#{act[:kind]} ##{act[:id]} at #{hhmm(act[:created_at])}" : "created at #{hhmm(c[:created_at])}"]
+      marks.each_value { |m| parts << "#{m['text']} since #{hhmm(m['at'])}" unless m["gone"] }
+      "last: #{parts.join(' · ')}"
+    end
+
+    def progress_mins(c, now) = (now - c[:progress_at]) / 60
+
+    def progress_ping!(c, b, now, last)
+      sys = @config.system_author
+      owner = c[:owner_session]
+      @db.transaction do
+        cards.where(id: c[:id]).update(progress_pinged_at: now)
+        if owner
+          enqueue_ping(c, "progress", sys,
+                       "No progress on card ##{c[:id]} \"#{c[:title]}\" (#{b.label(c[:column])}, #{c[:project_slug]}) " \
+                       "for #{progress_mins(c, now)} min — #{last}. Post what is happening with kanban_comment, push " \
+                       "the work, hand it off, or flag what blocks it (kanban_block / kanban_ask).")
+        end
+        log(c[:id], "progress", "no progress for #{progress_mins(c, now)} min — #{last} — " \
+                                "#{owner ? "pinged #{owner}" : 'no owner session to ping'}", sys)
+      end
+      owner ? :ping : :ping_nobody
+    end
+
+    def progress_comment!(c, b, now, last)
+      sys = @config.system_author
+      pinged = "owner #{c[:owner_session]} was pinged at #{hhmm(c[:progress_pinged_at])}"
+      owner = c[:owner_session] ? pinged : "no owner session"
+      @db.transaction do
+        cards.where(id: c[:id]).update(progress_commented_at: now)
+        touch(c[:id])
+        log(c[:id], "comment", "**No progress** on this card for #{progress_mins(c, now)} min in #{b.label(c[:column])} " \
+                               "(#{owner}) — #{last}. In #{@config.progress_watch.stale_minutes} min more it counts " \
+                               "as waiting for the operator.", sys)
+      end
+      :comment
+    end
+
+    def progress_waiting!(c, now)
+      @db.transaction do
+        cards.where(id: c[:id]).update(progress_stale_at: now)
+        touch(c[:id])
+        log(c[:id], "progress", "counts as waiting for the operator: no progress for #{progress_mins(c, now)} min",
+            @config.system_author)
+      end
+      :waiting
+    end
+
+    # HH:MM in the host's zone; another day than now → MM-DD HH:MM
+    def hhmm(t)
+      at = Time.at(t)
+      at.strftime(at.to_date == Time.at(@clock.call).to_date ? "%H:%M" : "%m-%d %H:%M")
     end
 
     # ── comment edit / delete ─────────────────────────────────────────────────────────────────────
@@ -2870,6 +3082,7 @@ module AgentsKanban
       list.each do |c|
         b = boards[c[:project_slug]]
         c[:gate_hold] = holds[c[:id]]
+        c[:progress_stale] = progress_stale(c, b)
         c[:waiting] = waits_for_operator?(c, b, c[:gate_hold])
         c[:carried_on] = carried_on_json(c, b)
         c[:transitions] = b.column?(c[:column]) ? transitions_json(b, c[:column]) : []

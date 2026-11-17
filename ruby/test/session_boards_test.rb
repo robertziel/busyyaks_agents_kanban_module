@@ -340,8 +340,9 @@ tmux_session: "s_two")["columns"].first["cards"].first["id"])
 
   # review round 1 (minor): each pass checked against a project card it DOES act on, so no assertion is vacuous
   def test_intake_idle_watch_and_dialogs_skip_session_cards
+    # the idle watch's own comment is under test: the progress watch (which supersedes it on a working card) is off
     raw = JSON.parse(File.read(File.join(KanbanTest::ROOT, "fixtures/boards/coding.json")))
-              .merge("table_prefix" => KanbanTest::PREFIX)
+              .merge("table_prefix" => KanbanTest::PREFIX, "progress_watch" => { "stale_minutes" => nil })
     st = store(AgentsKanban::HostConfig.new(raw))
     st.session_board!("s_one", by: "s_one")
     sess = st.create(slug: "session:s_one", title: "mine", by: "s_one", owner_session: "s_one", agent: true)
