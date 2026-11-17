@@ -13,6 +13,13 @@ repository.
             https://creativecommons.org/licenses/by/3.0/
    Copyright (c) Cookpad Inc. Unmodified; this repository's own settings are in .rubocop.yml.
 
+2. picomatch 4.0.7 with an upstream security fix (vendored copy, a dev dependency of the React port)
+   Path:    react/vendor/picomatch/ (what changed and why: react/vendor/picomatch/VENDOR.md)
+   Source:  https://github.com/micromatch/picomatch, release 4.0.7 + lib/parse.js of
+            https://github.com/micromatch/picomatch/pull/237
+   License: MIT, full text in react/vendor/picomatch/LICENSE
+   Copyright (c) 2017-present, Jon Schlinkert.
+
 Code ported from busyyaks (the board's time and avatar formatting, the Select component, the board rules and their
 tests) is the same author's work under the same license, and needs no separate notice.
 

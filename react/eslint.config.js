@@ -6,7 +6,9 @@ import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
 
 export default tseslint.config(
-  { ignores: ["node_modules/"] },
+  // vendor/ = a third-party package installed as a dependency (picomatch, upstream code + one upstream fix:
+  // vendor/picomatch/VENDOR.md), not this repo's code — like node_modules/
+  { ignores: ["node_modules/", "vendor/"] },
   // an eslint-disable comment has no effect and is itself reported: a finding is fixed, never silenced
   { linterOptions: { noInlineConfig: true, reportUnusedDisableDirectives: "error" } },
   js.configs.recommended,
