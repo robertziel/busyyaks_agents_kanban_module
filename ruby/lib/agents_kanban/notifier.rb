@@ -48,6 +48,7 @@ module AgentsKanban
       @dialog_scan_off = nil # why the host does not answer the collector snapshot (nil = it does): logged on change
       @dialog_read_failed = {} # session => why its screen could not be read in the last dialog scan: logged on change
       @prefetch_failed = {} # card id => why the approval prefetch could not ask its checks: logged on change
+      @prefetch_skipped = {} # card id => why the approval prefetch did not ask a gate card: logged on change
       @pr_watch_failed = {} # card id => why the PR watch could not read its PRs: logged on change
       @log = log
       # the idle watch's port (errors.rb, CiChecks): a board with idle_watch configured and no port is a wiring error
@@ -129,13 +130,26 @@ module AgentsKanban
     # The gate's PR checks of every card waiting for an approval, asked again (Store#approval_prefetch_pass): the host's
     # answer stays fresh, so Approve answers at once. A card the port could not answer is said, never guessed.
     UNAVAILABLE = "unavailable: " # Store#approval_prefetch_pass's mark of a card the port could not answer
+    FAILED = "failed: " # ... of a card whose port call raised (a host error): said like an unavailable one
+    SKIPPED = "skipped: " # ... of a gate card no Approve can take now (approved, or a gate with no step)
 
-    # Said once per change of reason per card, and once when it answers again.
+    # Said once per change of reason per card, and once when it answers again. A gate card the pass does not ask is
+    # said once per change of why (card #511: a skipped gate card was silent).
     def approval_prefetch
       pass = @store.approval_prefetch_pass
-      failed = pass.filter_map { |id, what| [id, what.delete_prefix(UNAVAILABLE)] if what.start_with?(UNAVAILABLE) }.to_h
+      failed = pass.filter_map do |id, what|
+        next [id, what.delete_prefix(UNAVAILABLE)] if what.start_with?(UNAVAILABLE)
+
+        [id, what] if what.start_with?(FAILED)
+      end.to_h
+      skipped = pass.filter_map { |id, what| [id, what.delete_prefix(SKIPPED)] if what.start_with?(SKIPPED) }.to_h
+      skipped.each do |id, why|
+        @log.puts("approval prefetch: card #{id} not asked: #{why}") unless @prefetch_skipped[id] == why
+      end
+      @prefetch_skipped = skipped
       failed.each { |id, why| @log.puts("approval prefetch: card #{id}: #{why}") unless @prefetch_failed[id] == why }
-      recovered = (@prefetch_failed.keys & pass.map(&:first)) - failed.keys # a card that left the gate is not said
+      # a card that left the gate, or is no longer asked, is not said to answer
+      recovered = (@prefetch_failed.keys & pass.map(&:first)) - failed.keys - skipped.keys
       recovered.each { |id| @log.puts("approval prefetch: card #{id} answered again") }
       pass.each do |id, _, event|
         said = { red: "CI failed, owner pinged", red_nobody: "CI failed, no owner session to ping",

@@ -1689,21 +1689,42 @@ module AgentsKanban
 
     # ── approval prefetch (approval.requires_green_ci): Approve never waits for a CI read ─────────────────────
     #
-    # Every card sitting in a gate an approval step leaves from has that step's checks asked of the host's ci: port —
-    # at the handoff and on every notifier watch pass — so a host that answers asynchronously (a poller holding the
-    # token, answering what was asked recently) always holds a fresh answer when the operator clicks Approve. Only a
-    # question: the answer is discarded here and the gate (green_ci!) asks again and refuses anything but green. A card
-    # that left the gate is no longer asked. → [[card_id, state | "no PR" | "unavailable: <why>", gate event], …]
+    # Every card the operator can Approve has that step's checks asked of the host's ci: port — at the handoff and on
+    # every notifier watch pass — so a host that answers asynchronously (a poller holding the token, answering what was
+    # asked recently) always holds a fresh answer when the operator clicks Approve. Such a card sits in a gate an
+    # approval step leaves from, or UNAPPROVED in a gate a step leads into (the operator dragged it there: Store#approve
+    # approves it in place — card #511: such a card was never asked, so its Approve read a request hours old and was
+    # refused "not read yet" once per row it reads). Only a question: the answer is discarded here and the gate
+    # (green_ci!) asks again and refuses anything but green. A card that left the gate is no longer asked. Every other
+    # card in a gate is listed as "skipped: <why>", and a card whose port call raised as "failed: <error>" — the pass
+    # goes on to the next card, nothing is silent.
+    # → [[card_id, state | "no PR" | "unavailable: <why>" | "skipped: <why>" | "failed: <why>", gate event], …]
     def approval_prefetch_pass
       return [] unless @config.green_ci_gate?
 
-      boards = boards_for(cards.where(archived_at: nil).distinct.select_map(:project_slug))
-      gates = boards.values.flat_map { |b| b.approvals.map(&:from) }.uniq
-      return [] if gates.empty?
+      gate_cards.map do |c, b|
+        next [c[:id], "skipped: #{prefetch_skipped(c, b)}", nil] unless approval_pending(c, b)
 
-      cards.where(archived_at: nil, column: gates).order(:id).all.filter_map do |c|
-        prefetch_approval(c, boards[c[:project_slug]])
+        begin
+          prefetch_approval(c, b)
+        rescue StandardError => e # one card's host error never ends the pass for the others
+          [c[:id], "failed: #{e.class}: #{e.message}", nil]
+        end
       end
+    end
+
+    # The approval step the operator's Approve would take for card c on board b, or nil: the step leaving its gate, or
+    # the step leading into its gate while the card sits there unapproved (Store#approve's two cases).
+    def approval_pending(c, b)
+      b.approval_from(c[:column]) || (c[:approved_at] ? nil : b.approval_into(c[:column]))
+    end
+
+    # Every unarchived card the operator can Approve now, with the step it takes, in id order — the cards the prefetch
+    # asks: a host's guard checks their reads stayed fresh (card #511) → [[card row, step], …]; [] without the gate.
+    def approval_pending_cards
+      return [] unless @config.green_ci_gate?
+
+      gate_cards.filter_map { |c, b| (step = approval_pending(c, b)) && [c, step] }
     end
 
     # ── PR watch: a PR assigned to a live card closed without merging ───────────────────────────────────────────
@@ -2443,14 +2464,32 @@ module AgentsKanban
       b.workflow.from(column).map { |e| { name: e.name, to: e.to, to_label: b.label(e.to), by: e.by } }
     end
 
-    # One card's approval step asked of the ci: port (approval_prefetch_pass) → [id, what it said] | nil (no step here).
+    # every unarchived card sitting in a gate column of its board, with that board → [[card row, board], …]
+    def gate_cards
+      boards = boards_for(cards.where(archived_at: nil).distinct.select_map(:project_slug))
+      gates = boards.values.flat_map(&:gate_columns).uniq
+      return [] if gates.empty?
+
+      cards.where(archived_at: nil, column: gates).order(:id).all.filter_map do |c|
+        b = boards[c[:project_slug]]
+        [c, b] if b.gate?(c[:column])
+      end
+    end
+
+    # Why a gate card is not asked (approval_prefetch_pass): approved, its agent carries on — or no step at all.
+    def prefetch_skipped(c, b)
+      return "approved by #{c[:approved_by]}, its agent carries on" if c[:approved_at] && b.approval_into(c[:column])
+
+      "no approval step leaves or enters #{b.label(c[:column])}"
+    end
+
     # One gate card's step asked of the ci: port (approval_prefetch_pass) → [id, what it said, gate event] | nil (no
     # step here). The gate event is said once per change, the last state kept on the card (gate_state):
     # :red = its CI turned red (the owner is pinged to fix it), :ready = a hold cleared (it now waits for the operator).
     def prefetch_approval(c, b)
       return nil unless @config.green_ci_gate? && !c[:archived_at]
 
-      step = b.approval_from(c[:column]) or return nil
+      step = approval_pending(c, b) or return nil
       begin
         pr = @ci.approval_checks(c, step.to_h)
       rescue Delivery::Unavailable => e
