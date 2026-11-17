@@ -24,6 +24,8 @@ module AgentsKanban
   #       fresh answer and Approve never waits for a CI read; a card the port cannot answer is logged;
   #       The same pass is the gate watch (card #248): a gate card whose CI turned red pings its owner once; one whose
   #       hold cleared logs "ready for your approval" once;
+  #   3c'. the rebase watch (card #497): a card approved with needs rebase (its PR conflicted with its base) has its
+  #       step's checks asked again; green with no conflict clears the mark (Store#rebase_watch_pass);
   #   3d. the PR watch (the ci: port's optional closed_prs): every PR assigned to a live card stays watched; one closed
   #       without merging is told ONCE — a comment on the card and a ping to its owner (Store#pr_watch_pass);
   #   3e. the progress watch (config.progress_watch): a card in a working / review column with no progress for
@@ -53,6 +55,7 @@ module AgentsKanban
       @prefetch_skipped = {} # card id => why the approval prefetch did not ask a gate card: logged on change
       @pr_watch_failed = {} # card id => why the PR watch could not read its PRs: logged on change
       @progress_failed = {} # card id => why the progress watch could not read its evidence: logged on change
+      @rebase_said = {} # card id => what the rebase watch last said of it: logged on change
       @log = log
       # the idle watch's port (errors.rb, CiChecks): a board with idle_watch configured and no port is a wiring error
       @ci = ci
@@ -122,6 +125,7 @@ module AgentsKanban
       end
       guard("idle watch") { idle_watch(live) }
       guard("approval prefetch") { approval_prefetch }
+      guard("rebase watch") { rebase_watch }
       guard("pr watch") { pr_watch }
       guard("progress watch") { progress_watch }
       guard("dialog scan") { watch_dialogs }
@@ -177,6 +181,18 @@ ready: "ready for approval", }
 
     # The PRs assigned to live cards (Store#pr_watch_pass): a PR closed without merging is told once on its card and to
     # its owner. A card whose PRs the port could not read is said once per change of reason, and once when it answers.
+    # The cards approved with needs rebase (card #497), asked again (Store#rebase_watch_pass): a rebased PR green with
+    # no conflict clears its mark; a hold is said once per change of its words.
+    def rebase_watch
+      pass = @store.rebase_watch_pass
+      pass.each do |id, what|
+        next if @rebase_said[id] == what
+
+        @log.puts("rebase watch: card #{id} #{what == :cleared ? 'rebased, CI green: mark cleared' : what}")
+      end
+      @rebase_said = pass.to_h
+    end
+
     def pr_watch
       pass = @store.pr_watch_pass
       # a card may say several (one per PR it could not read): one line per card, every reason in it

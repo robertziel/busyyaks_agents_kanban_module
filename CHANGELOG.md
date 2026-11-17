@@ -13,6 +13,10 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
   own drawing (`layoutGraph`: the column cards with their type tiles, the arrows) through a square window on the
   board's first two columns (`miniCrop`); its title gives the counts. `WorkflowMini`, `miniCrop`, `miniLayout`,
   `MINI_PX` (24) exported.
+- **Approve with rebase**: an approval whose green CI answer carries `rebase: {state, base, base_sha}` (the PR
+  conflicts with its base) is accepted and marked needs rebase (card JSON `needs_rebase`); the one approve ping tells
+  the owner to rebase, re-run CI and merge on green; its onward move waits until the step's checks are green with no
+  conflict (`Store#rebase_watch_pass` clears the mark on the watch pass). A forced approval marks nothing.
 - **Approved and carried on**: a gate card the operator approved whose next step is its agent's named transition
   (Awaiting merge after the final Approve) no longer counts as waiting for the operator. The boards, `Api#waiting` and
   `Store#waiting_counts` / `#waiting_cards` carry it apart as `approved`; card JSON `carried_on`; `Board#agent_next`;
