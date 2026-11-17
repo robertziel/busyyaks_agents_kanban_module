@@ -42,7 +42,9 @@ module AgentsKanban
     SESSION = /\A[A-Za-z0-9._-]{1,100}\z/
     PING_BODY = 1500
     DRAGGED_NOTE = "It was dragged: CI was not asked — read the PR's checks first."
+    FORCED_NOTE = "It was approved with Force: CI was not asked — read the PR's checks first."
     CI_NOT_ASKED = "ci-not-asked" # the approve ping's marker: a drag approved the step, the green-CI gate was not asked
+    CI_FORCED = "ci-forced" # the approve ping's marker: the operator's Force approved the step, CI was not asked
     URL_RE = %r{\Ahttps?://[^\s<>"]{3,2000}\z}
     DIALOG_REASK = 120 # an answered dialog still on screen this long after the key press is not re-posted
     FIELDS = %i[title notes labels assignee priority due due_done cover parent metadata].freeze
@@ -574,8 +576,12 @@ module AgentsKanban
     # button) or the step's own named transition ("Approve"). Any other operator move along the step — a drag, the
     # catch-all edge — is never refused by it: it still approves, and its activity line says CI was not asked.
     # `withdraw:` = Store#unapprove's move back to the step's gate: the operator's undo needs no edge in the workflow.
+    # `force:` = Store#approve(force: true), the operator's Force button: the explicit approval WITHOUT the green-CI
+    # gate (every other check stays); its activity line says "(forced: CI not asked)".
     def move(id, column: nil, by:, position: nil, agent: false, handoff: false, transition: nil, approval: false,
-             withdraw: false)
+             withdraw: false, force: false)
+      raise Denied, "only the operator forces an approval" if force && agent
+
       c = card!(id)
       named = !transition.to_s.strip.empty?
       raise Invalid, "card #{id} is archived" if c[:archived_at]
@@ -593,7 +599,12 @@ module AgentsKanban
       end
 
       step = !agent && b.approval_for(c[:column], column)
-      checked = step && c[:column] != column && (approval || (named && transition.to_s.strip.casecmp?(step.name)))
+      if force && !step
+        raise Invalid, "force: true only approves along an approval step (#{b.label(c[:column])} → #{b.label(column)} is none)"
+      end
+
+      checked = step && c[:column] != column && !force &&
+                (approval || (named && transition.to_s.strip.casecmp?(step.name)))
       green_ci!(c, b, step) if checked
       rounds = c[:column] != column ? review_rounds_after(b, c, column, agent) : nil
       @db.transaction do
@@ -610,10 +621,12 @@ module AgentsKanban
             cards.where(id: c[:id]).update(approved_at: @clock.call, approved_by: by)
             note = approval_note(b, step)
             unasked = @config.green_ci_gate? && !checked
-            note += " (dragged: CI not asked)" if unasked
+            how = force ? "forced" : "dragged"
+            note += " (#{how}: CI not asked)" if unasked
             log(c[:id], "approve", note, by)
             # the ping says it too: the owner carries on from it (a final step merges) and must read CI itself
-            enqueue_ping(c, "approve", by, unasked ? "#{step.from} #{CI_NOT_ASKED}" : step.from)
+            marker = force ? CI_FORCED : CI_NOT_ASKED
+            enqueue_ping(c, "approve", by, unasked ? "#{step.from} #{marker}" : step.from)
           else
             # leaving the approved column for anywhere but a terminal one (history) withdraws the approval
             cards.where(id: c[:id]).update(approved_at: nil, approved_by: nil) if c[:approved_at] && !b.terminal?(column)
@@ -887,13 +900,19 @@ module AgentsKanban
 
     # ── approval: the operator approves a card for the next step; its agent then moves it on ──
     # Every approval step of the board (Board#approvals: a gate's one forward operator exit) works the same way.
-    def approve(id, by:)
+    # `force: true` = the operator's Force button: the same approval without the green-CI gate (approval.requires_green_ci
+    # — CI and the PR's state at the handoff's head are not asked); every other refusal stays. Operator only: no MCP
+    # tool approves, and Store#move refuses force with agent: true.
+    def approve(id, by:, force: false)
       c = card!(id)
       b = board_of(c[:project_slug])
       raise Invalid, "this board has no approval step (no gate with a single forward operator exit)" if b.approvals.empty?
+      if force && !@config.green_ci_gate?
+        raise Invalid, "force: true needs approval.requires_green_ci — this host's Approve asks no CI: approve without force"
+      end
 
       step = b.approval_from(c[:column])
-      return move(id, column: step.to, by: by, approval: true) if step
+      return move(id, column: step.to, by: by, approval: true, force: force) if step
 
       into = b.gate?(c[:column]) ? b.approval_into(c[:column]) : nil
       unless into
@@ -901,24 +920,26 @@ module AgentsKanban
                        "(card ##{c[:id]} is in #{b.label(c[:column])})"
       end
 
-      approve_in_place(c, b, into, by)
+      approve_in_place(c, b, into, by, force: force)
     end
 
     # A card sitting UNAPPROVED in a gate an approval step leads into (the operator dragged it there from anywhere but
     # the step's gate — a plain move): agents never leave a gate unapproved, so the operator approves it where it sits.
     # The same question as the step's Approve (green CI), the same approval, activity line and ping; no move.
-    def approve_in_place(c, b, step, by)
+    def approve_in_place(c, b, step, by, force: false)
       raise Invalid, "card ##{c[:id]} is archived" if c[:archived_at]
       if c[:approved_at]
         raise Invalid, "card ##{c[:id]} is already approved (by #{c[:approved_by]}) in #{b.label(c[:column])}"
       end
 
       by = who!(by)
-      green_ci!(c, b, step)
+      green_ci!(c, b, step) unless force
+      unasked = force && @config.green_ci_gate?
       @db.transaction do
         cards.where(id: c[:id]).update(approved_at: @clock.call, approved_by: by, updated_at: @clock.call)
-        log(c[:id], "approve", "#{approval_note(b, step)} (approved in #{b.label(c[:column])})", by)
-        enqueue_ping(c, "approve", by, step.from)
+        log(c[:id], "approve",
+            "#{approval_note(b, step)} (approved in #{b.label(c[:column])})#{' (forced: CI not asked)' if unasked}", by)
+        enqueue_ping(c, "approve", by, unasked ? "#{step.from} #{CI_FORCED}" : step.from)
       end
       card(c[:id])
     end
@@ -1582,7 +1603,11 @@ module AgentsKanban
                from, how = body.split(" ", 2)
                step = b.approval_from(from)
                # dragged along the step: the green-CI gate was not asked, so the owner reads the PR's checks first
-               unasked = how == CI_NOT_ASKED ? " #{DRAGGED_NOTE}" : ""
+               unasked = case how
+                         when CI_NOT_ASKED then " #{DRAGGED_NOTE}"
+                         when CI_FORCED then " #{FORCED_NOTE}"
+                         else ""
+                         end
                if step.final
                  # dragged: the merge waits for green checks (a red or unread one is not merged)
                  merge = unasked.empty? ? "Merge it now" : "Merge it once its checks are green (red: do not merge, say so)"
@@ -1602,9 +1627,12 @@ module AgentsKanban
                  # approved where it sat (Store#approve_in_place): nothing moved
                  went = "it moved #{b.label(step.from)} → #{b.label(step.to)}"
                  went = "it stays in #{b.label(step.to)}" if c[:column] == step.to
+                 # CI not asked (dragged / forced): the next step (a merge, a deploy) waits for green checks too
+                 wait = "Take the next step only once the PR's checks are green (red: do not take it, say so)"
+                 now = unasked.empty? ? "Do the next step now" : wait
                  "#{tag} #{author} APPROVED card ##{c[:id]} \"#{c[:title]}\" (#{c[:project_slug]}) " \
                    "— #{went}.#{unasked} " \
-                   "Do the next step now#{on}, and post what you did with kanban_comment."
+                   "#{now}#{on}, and post what you did with kanban_comment."
                end
              else
                "#{tag} #{author} #{body} card ##{c[:id]} \"#{c[:title]}\" (#{c[:project_slug]}). " \

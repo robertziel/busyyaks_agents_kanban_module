@@ -8,6 +8,12 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Added
 
+- **Force approve**: the card dialog shows a **Force · skip CI** button (a dashed warning-hue pill with a skip icon)
+  beside every approve button on a host with `approval.requires_green_ci` — the same approval without the green-CI
+  gate. `Store#approve(force: true)`, `Api#approve` body `force: true` (operator only; no MCP tool; an agent move with
+  `force` is `Denied`; refused on a host without the gate); the activity ends "(forced: CI not asked)" and the owner's
+  ping says to take the next step only once the PR's checks are green. `KanbanApi.approve(id, approved, force?)`.
+  SPEC § 4 + § 6.
 - **Card-face picture**: decorated cards carry `media` = their newest live picture attachment (`{id, filename, url}`;
   png / jpeg / gif / webp, newest by `created_at` then id; `null` when none). The board face shows it under the cover
   at a fixed height, lazily loaded. SPEC § 4.

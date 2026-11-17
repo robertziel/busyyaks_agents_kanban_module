@@ -3116,6 +3116,65 @@
 .ak-root .kb-approve-btn:hover {
   filter: brightness(1.06);
 }
+/* Force beside Approve on one row at every width: Approve takes the rest and wraps its label, Force keeps
+   its size */
+.ak-root .kb-approve-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+.ak-root .kb-approve-row .kb-approve-btn {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.ak-root .kb-approve-row .kb-force-btn {
+  flex: none;
+}
+.ak-root .kb-approve-solo {
+  display: contents;
+}
+/* Force: approve without asking CI — the override, never the green of the normal path: a dashed outline
+   (off the gated path) in the warning hue, a step-over icon, the label in ink + what it skips */
+.ak-root .kb-force-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(var(--ak-warn-rgb), 0.08);
+  color: var(--ak-ink);
+  border: 1px dashed var(--ak-warn);
+  border-radius: var(--ak-radius-pill);
+  padding: 0.2rem 0.75rem 0.2rem 0.6rem;
+  cursor: pointer;
+}
+.ak-root .kb-force-btn .ico {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--ak-warn);
+}
+.ak-root .kb-force-txt {
+  display: grid;
+  text-align: left;
+  line-height: 1.15;
+}
+.ak-root .kb-force-txt b {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.ak-root .kb-force-txt small {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--ak-ink-dim);
+  white-space: nowrap;
+}
+.ak-root .kb-force-btn:hover:not(:disabled) {
+  background: rgba(var(--ak-warn-rgb), 0.18);
+  border-style: solid;
+}
+.ak-root .kb-force-btn:focus-visible {
+  outline: 3px solid rgba(var(--ak-accent-rgb), 0.5);
+  outline-offset: 2px;
+}
 .ak-root .kb-approved-now {
   margin: 0;
   font-size: 12.5px;

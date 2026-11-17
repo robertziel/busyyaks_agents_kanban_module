@@ -20,6 +20,8 @@ const PATHS = {
   chevRight: "M6.2 3.6 10.6 8l-4.4 4.4",
   terminal: "M2 3h12v10H2zM4.5 6l2 2-2 2M8 10.5h3.5",
   mic: "M8 1.8a2 2 0 0 0-2 2v4.4a2 2 0 0 0 4 0V3.8a2 2 0 0 0-2-2zM3.8 7.6a4.2 4.2 0 0 0 8.4 0M8 11.8v2.4M5.6 14.2h4.8",
+  // step over: an arc hopping a dot — the Force button (the approval that skips the CI check)
+  skip: "M2.5 9.5a5.5 5.5 0 0 1 10.6-2M13.4 4v3.6H9.8M8 12.3h.01",
 } as const;
 
 export type IconName = keyof typeof PATHS;

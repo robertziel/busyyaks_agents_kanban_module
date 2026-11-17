@@ -79,6 +79,11 @@ export function approveTitle(step: ApprovalStep, label: (k: string) => string, i
   return `${name}: ${where ?? `the card moves ${label(step.from)} → ${label(step.to)}`}; the owner agent is pinged to carry on${step.then ? ` and move the card to ${label(step.then)}` : ""}`;
 }
 
+// The Force button's tooltip: the same step, CI not asked — the agent is told to read the checks first.
+export function forceTitle(step: ApprovalStep, label: (k: string) => string): string {
+  return `${step.name} without asking CI (forced): the card moves on to ${label(step.to)} as Approve would, CI and the PR's state are not checked; the activity and the owner's ping say "forced: CI not asked", so the agent reads the PR's checks first`;
+}
+
 // After the approval: what its agent does next.
 export function approvedNext(step: ApprovalStep, label: (k: string) => string): string {
   if (step.final) return `its agent merges and moves it to ${label(step.then)}`;

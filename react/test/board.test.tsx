@@ -84,7 +84,7 @@ function fakeApi(data: BoardData, cards: Card[]): KanbanApi & { calls: string[] 
     assign: (id, a) => note(`assign ${id} ${a}`, cardData(id)),
     archive: (id, a) => note(`archive ${id} ${a}`, cardData(id)),
     setOwner: (id, s) => note(`setOwner ${id} ${s}`, cardData(id)),
-    approve: (id, a) => note(`approve ${id} ${a}`, cardData(id)),
+    approve: (id, a, f) => note(`approve ${id} ${a}${f ? " force" : ""}`, cardData(id)),
     dialogAnswer: (id, k) => note(`dialogAnswer ${id} ${k}`, cardData(id)),
     comment: (id, body) => note(`comment ${id} ${body}`, { ...cardData(id), delivered: "queued: s1" }),
     commentUpdate: (id) => note(`commentUpdate ${id}`, cardData(1)),
@@ -787,6 +787,49 @@ describe("Board", () => {
     expect(screen.queryByText(/✓ Approve/)).toBeNull();
     fireEvent.click(btn);
     await waitFor(() => expect(api.calls).toContain("approve 9 true"));
+  });
+
+  // Force beside every Approve — the same step without the green-CI gate, never on an approved card
+  it("a Force button beside each Approve approves without CI; none once approved or with no CI gate", async () => {
+    const cards = [
+      card({ id: 5, column: "local_human_review", title: "HC", owner_session: "s1" }),
+      card({ id: 8, column: "awaiting_merge", title: "DR", owner_session: "s1" }),
+      card({
+        id: 7,
+        column: "awaiting_merge",
+        title: "AM",
+        owner_session: "s1",
+        approved: "2026-11-09T10:00:00Z",
+        approved_by: "op@x",
+      }),
+    ];
+    const api = fakeApi(boardData(localV4, cards), cards);
+    let r = render(<Host api={api} view={{ card: 5, panel: null, archived: false }} />);
+    await screen.findByText("✓ Approve → Local: Merged");
+    const force = screen.getByRole("button", { name: "Force skip CI" });
+    expect(force).toHaveClass("kb-force-btn");
+    expect(force).not.toHaveClass("kb-approve-btn");
+    expect(force.getAttribute("title")).toMatch(
+      /^Approve without asking CI \(forced\): the card moves on to Local: Merged/,
+    );
+    fireEvent.click(force);
+    await waitFor(() => expect(api.calls).toContain("approve 5 true force"));
+    expect(api.calls).not.toContain("approve 5 true");
+    r.unmount();
+    r = render(<Host api={api} view={{ card: 8, panel: null, archived: false }} />);
+    await screen.findByText("✓ Approve to merge");
+    fireEvent.click(screen.getByRole("button", { name: "Force skip CI" }));
+    await waitFor(() => expect(api.calls).toContain("approve 8 true force"));
+    r.unmount();
+    r = render(<Host api={api} view={{ card: 7, panel: null, archived: false }} />);
+    await screen.findByText("Withdraw approval");
+    expect(screen.queryByRole("button", { name: "Force skip CI" })).toBeNull();
+    r.unmount();
+    const noGate = { ...localV4, host: { ...localV4.host, approval: null } };
+    render(<Host api={fakeApi(boardData(noGate, cards), cards)} view={{ card: 5, panel: null, archived: false }} />);
+    await screen.findByText("✓ Approve → Local: Merged");
+    expect(screen.queryByRole("button", { name: "Force skip CI" })).toBeNull();
+    expect(screen.getByText("✓ Approve → Local: Merged").parentElement).toHaveClass("kb-approve-solo");
   });
 
   it("an approved card in Awaiting merge shows who approved and withdraws; one dragged in without approval is approved in place", async () => {

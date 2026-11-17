@@ -48,7 +48,8 @@ export interface KanbanApi {
   assign(id: number, assignee: string): Promise<CardData>; // "" unassigns
   archive(id: number, archived: boolean): Promise<CardData>;
   setOwner(id: number, session: string): Promise<CardData>; // "" clears
-  approve(id: number, approved: boolean): Promise<CardData>;
+  // force: the operator's Force — approve without the green-CI gate (approval.requires_green_ci); only with approved true
+  approve(id: number, approved: boolean, force?: boolean): Promise<CardData>;
   dialogAnswer(id: number, key: string): Promise<CardData>;
   comment(id: number, body: string): Promise<CardData>; // + delivered
   commentUpdate(commentId: number, body: string): Promise<CardData>;
