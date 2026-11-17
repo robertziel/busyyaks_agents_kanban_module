@@ -30,8 +30,12 @@ module AgentsKanban
     # 11 = boards.archived_at (a SESSION board hidden after HostConfig#session_boards.idle_hours with no activity; its
     # cards archived, nothing deleted);
     # 12 = agent_sessions.lead_id / needs_lead / lead_key_digest + CHECK (needs_lead = 0 OR lead_id IS NOT NULL):
-    # lead-first boards — a session of a type `under` a lead exists only under a lead registration
-    VERSION = 12
+    # lead-first boards — a session of a type `under` a lead exists only under a lead registration;
+    # 13 = the progress watch's stretch on the card (Store#progress_watch_pass): cards.progress_at (the last progress the
+    # watch saw), progress_marks (JSON {kind => {key, text, at}}: the ci: port's evidence as last seen, at = when it
+    # changed), progress_pinged_at / progress_commented_at / progress_stale_at (the stretch's escalation steps),
+    # progress_error (why the last pass could not read the card's evidence)
+    VERSION = 13
     TABLES = %i[cards card_activity board_labels checklists checklist_items card_pings card_attachments session_dialogs
                 agent_sessions ci_watches boards board_columns board_transitions].freeze
 
@@ -73,6 +77,13 @@ module AgentsKanban
       add_missing(db, t[:cards], [[:gate_head, String], [:gate_state, String, { text: true }]]) if to >= 10
       add_missing(db, t[:boards], [[:archived_at, Integer]]) if to >= 11
       add_lead(db, t[:agent_sessions]) if to >= 12
+      if to >= 13
+        add_missing(db, t[:cards], [
+                      [:progress_at, Integer], [:progress_marks, String, { text: true }], [:progress_pinged_at, Integer],
+                      [:progress_commented_at, Integer], [:progress_stale_at, Integer],
+                      [:progress_error, String, { text: true }],
+                    ])
+      end
       t
     end
 

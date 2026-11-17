@@ -255,6 +255,9 @@ export type Card = {
   // in an approval gate: why its Approve would not pass now ("PR #7: CI is still running") — waiting for CI, not for
   // the operator; null = approvable now (or no such gate)
   gate_hold?: string | null;
+  // the progress watch's last step: why the card waits for the operator ("no progress for 90 min (since 14:02)"); null =
+  // it moves, or is not watched
+  progress_stale?: string | null;
   // waits for the operator NOW (the server's one rule, the same the "N waiting for you" count uses): a question open on
   // it, or in a gate and approvable now — the card face is highlighted
   waiting: boolean | null; // required: a Card built without it fails tsc (null = not decorated: no highlight)
@@ -454,6 +457,9 @@ export type BoardData = {
   // gate cards the operator approved that their agent carries on: shown apart, never counted as waiting
   approved: number;
   flagged: number;
+  // the progress watch (config progress_watch): its period and what counts as progress on this host (evidence: "card
+  // activity" + the host port's kinds; port false = card activity only); null = off
+  progress_watch?: { stale_minutes: number; evidence: string[]; port: boolean } | null;
   priorities: string[];
   lead?: BoardLead | null;
   assignees?: string[];

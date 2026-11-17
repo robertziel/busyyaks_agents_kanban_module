@@ -132,6 +132,7 @@ cards returned to the column of their last move into it, flagged; handoff / appr
 | `agent_types` `[{key,label,launchers,model,prompt,agent_name,session_name,takes,max,max_per_project,under?}]` | WHAT a session is (the library ships none). `launchers`: the keys it may run (no default: a start names one — the UI's menu, `Api#launch`'s `launcher`, `kanban_register`'s `launcher` — or the type has only one; several and none named → `Invalid` with the keys: nothing picks one); `model`: `--model` value or null, or a map launcher key → value / null naming every launcher of the type (`AgentType#model_for`: a gateway launcher picks its own model); `prompt`: template typed after the start or null, placeholders `{slug} {dir} {session} {agent} {type} {cards}`; `agent_name`: the author name the session acts as, must contain `{session}` (`Store#session_for_author` resolves it back); `session_name`: the tmux name (must contain `{slug}`); `takes`: column TYPES whose ownerless cards the session ADOPTS at registration and from then on (the intake rule, `Store#adopt_ownerless`, on every board's columns of those types; fewest owned cards wins; the new owner is pinged) — on a lead-first host the lead takes the work types too, so an ownerless card is the lead's (one `assigned` ping) and it decides who works it; `under` (optional; LEAD-FIRST BOARDS): the lead type a session of this type runs under — such a session exists ONLY while the board's lead RUNS: started by the operator's `Api#launch` or by the lead's `kanban_spawn`, or registered by hand (`kanban_register`) while a lead the host started runs — the host vouches for it, the agent passes no key; it runs the lead's launcher (`Store#launcher_for!`: another one asked for → `Denied` 422, never swapped) and its registration carries `lead_id` = the lead's (Schema v12's `CHECK (needs_lead = 0 OR lead_id IS NOT NULL)` refuses the row without one); no lead running → `Denied` "launch the lead first", from the operator too. The lead type must have `max_per_project: 1`, list no launcher the type lacks, and be under none and not standalone (one level). `standalone` (optional, bool): a PLAIN session that runs without a lead — `prompt: null` and `takes: []` required. EVERY type is a lead (some type is `under` it), `under` one, or `standalone` — anything else is a `ConfigError` (no type runs leaderless by omission: a revision that drops `under` is refused when saved, when loaded and by the host's launcher). `spawns_for` / `spawn_launcher` / `launcher_follows` are REMOVED (`ConfigError` naming what replaced them): the engine starts nothing on its own; `max` / `max_per_project`: caps (null / 0 = none) |
 | `concurrency` `{max_sessions}` | registered agent sessions running at once on the host: `Store#launch_check!` refuses the (N+1)th with who runs; `Store#concurrency` is the UI's `running / cap` |
 | `owner_sessions` | `null` or session-name globs: `Store#set_owner` / `#claim` refuse a session that matches none; the React owner picker lists only matching sessions |
+| `progress_watch` | `{stale_minutes}` (the key required; `null` = off, else an integer ≥ 1): the progress watch (§ 4 Progress watch, `Store#progress_watch_pass`) |
 | `idle_watch` | `null` or `{ci_ping_after_minutes (N), ci_comment_after_minutes (M), owner_idle_hours (X)}` on every board's WORKING column (`Store#idle_watch_pass`, needs the host's `ci:` port): PR checks all finished and no non-system activity for N min → ONE owner ping per CI completion, M min later still silent → ONE comment by `system_author`; a live owner with no activity and no commit for X h → ONE comment per idle stretch |
 | `handoff` | `null` or `{requires_pr_url, requires_ci_url, qa_min_chars, ui_change_needs_screenshots}`: what `Store#handoff` requires on a board with a gate column (`qa` ≥ `qa_min_chars`, http(s) URLs required per flag, ≥ 1 picture attached when `ui_change` and the flag). A gate column on a host with `null` is refused on read |
 | `approval` | `null` or `{requires_green_ci}`: `true` = every explicit approval (`Store#approve` = the Approve button, or `Store#move` with the step's own transition name) asks the host's `ci:` port (`Store.new(ci:)`, `approval_checks(card, step)` → the `pr_checks` answer for the PR that step is about; `step` = `{from, to, then, name, final}`) and is refused (`Invalid`, nothing moved or logged) unless `state` is `success` (an answer's `reason:` = the host's own refusal, e.g. a prerequisite PR not merged, said instead of the CI wording): no PR, `pending`, `failure`, `stuck` (the host's word for a check pending longer than it allows: red like `failure` — the gate watch pings the owner once per `finished_at`, the moment it became stuck), not read yet, no checks, or the port raising `Delivery::Unavailable` → the refusal names the step, the PR and what it saw. A Store built from such a config without that port raises `ConfigError`. **Prefetch** (Approve never waits for a CI read): the same question is asked, its answer discarded, for a card handed off into a gate an approval step leaves from (`Store#handoff`: see **Handoff on green CI**) and, on every `Notifier#watch` pass, for every unarchived card the operator can Approve — sitting in such a gate, or UNAPPROVED in a gate an approval step leads into (`Store#approve` approves it in place; card #511: such a card was never asked) (`Store#approval_pending`, the list `Store#approval_pending_cards` → `[[card, step]]` for a host's freshness guard; `Store#approval_prefetch_pass` → `[[id, state \| "no PR" \| "unavailable: <why>" \| "failed: <error>" \| "skipped: <why>"]]`; an unavailable or failed one (the port raised: the pass goes on to the next card) is logged once per change of reason and once when it answers again, the others still asked; every other gate card (approved, or a gate with no step) is listed `skipped` and logged once per change of why — nothing in a gate is silent) — a host that answers asynchronously (a poller answering recent requests) keeps every gated card's answer fresh; a card that left the gate is no longer asked; the same pass is the gate watch (§ 9, Schema v10: approvable now). **Handoff on green CI**: a `kanban_handoff` into a gate an approval step leaves from asks the same question BEFORE anything is written, for the card as it will sit there (the gate's column, the handoff's `pr_url`, and `handoff_ci_url` = its `ci_url` — a key only a handoff carries: a host may refuse a `ci_url` that is not the build of the head handed over, while an Approve or a watch pass asks only about the head's CI, so a rebuild never parks a card), and is refused (`Invalid`, nothing written) unless `state` is `success`: `not handed off (→ <gate>): <PR> of card #N — <state>; hand off once CI is green` (unread → "CI not read yet (asked now — hand off again in a minute)", the port unavailable → "CI state … is unknown"). So a card in such a gate is green when it arrives, and the operator's Approve answers at once |
@@ -144,7 +145,7 @@ cards returned to the column of their last move into it, flagged; handoff / appr
 
 `HostConfig#digest` = sha256 of the canonical JSON the client receives (`to_h`); a host may pin it.
 
-## 3. Tables (`Schema`, v12)
+## 3. Tables (`Schema`, v13)
 
 `cards` (+ `parent_id`, `metadata` JSON text since v2), `card_activity`, `board_labels`, `checklists`,
 `checklist_items`, `card_pings`, `card_attachments`, `session_dialogs`, `agent_sessions` (v3: `session`, `socket`,
@@ -156,7 +157,7 @@ template; v7 adds `board_columns.hide_after_hours`, null = the type's default; v
 nothing about it is stored); v10 adds `cards.gate_head` (the approval PR's head the handoff's green answer carried) and
 `cards.gate_state` (the last watch pass's view of the card's gate: `ready` or its hold); v11 adds `boards.archived_at` (a session board hidden after `session_boards.idle_hours` idle, § 2b); v12 adds
 `agent_sessions.lead_id` (the lead registration a session runs under), `needs_lead` (0/1: its type is `under` a lead),
-`lead_key_digest` (a lead's key, SHA-256 hex) and the CHECK `needs_lead = 0 OR lead_id IS NOT NULL`; v5's `workflows` is carried over and dropped by `BoardRepo#seed!`) — epochs as integers. `migrate!(db, prefix:,
+`lead_key_digest` (a lead's key, SHA-256 hex) and the CHECK `needs_lead = 0 OR lead_id IS NOT NULL`; v13 adds the progress watch's stretch on the card — `cards.progress_at`, `progress_marks` (JSON `{kind => {key, text, at}}`), `progress_pinged_at`, `progress_commented_at`, `progress_stale_at`, `progress_error`; v5's `workflows` is carried over and dropped by `BoardRepo#seed!`) — epochs as integers. `migrate!(db, prefix:,
 to: VERSION)`: a host migration is PINNED to the step it introduced (`to: 5` still creates `workflows`, `to: 6` the
 boards tables), so a fresh DB replays the host's migrations step by step and a rollback lands on that version's shape, JSON as text, done flags 0/1, portable DDL (`text: true` where > 255 chars may occur). `migrate!` is idempotent by introspection; the
 host's own ledger records each run. Prefix `""` = the unprefixed table names (a host whose tables already carry them needs no data move).
@@ -265,6 +266,33 @@ host's own ledger records each run. Prefix `""` = the unprefixed table names (a 
   registered for another project. An unregistered session cannot be checked.
 - PR references (`PR #N`, `pull/N`) resolve against the handoff `pr_url`'s repo, else the host's `project[:remote]` —
   which the host sets to the repo the work is PUSHED to (e.g. the branch's push remote), not necessarily origin.
+- **Progress watch** (`progress_watch.stale_minutes` = N; `Store#progress_watch_pass`, Notifier watch step 3e — the
+  watchers beside the watchdog, the flag reminders, the idle watch and the PR watch): every unarchived project card in a
+  `working` or `review` column that is not flagged. Progress = its newest activity entry of the kinds `comment`, `move`,
+  `checklist`, `attachment` not by `system_author` (`Store::PROGRESS_KINDS`: an edit, an owner change, a terminal event,
+  an archive / restore or a flag is not progress), or a change in the evidence of the Store's `ci:` port —
+  `progress(card)` → `[{kind:, key:, text:}]` (each kind once; `key` = the state, e.g. a sha; `text` = how a human
+  reads it) and `progress_kinds` → `[String]`, both or neither (else `ConfigError`); a key that differs from the stored
+  one, or a kind not stored before, is progress at that pass (`progress_marks`). A kind the port stops answering is kept,
+  marked `gone` (never shown as evidence): back with the same key it is no progress. The stretch only moves FORWARD
+  (`progress_at` grows): a vanished mark or a deleted comment never restarts the steps. A port without them → card activity
+  only; the board JSON's `progress_watch` says so (`{stale_minutes, evidence: ["card activity", …kinds], port}`, null
+  = off). No progress for N min → ONE `progress` ping to the owner naming the last evidence ("last: comment #N at
+  HH:MM · PR o/r#5 head abc1234 since HH:MM · …") and a `progress` entry (no owner → said there); N min after the ping
+  → ONE `comment` by `system_author`; N min after the comment → `progress_stale_at`: the card waits for the operator
+  (`waits_for_operator?`, the counts, `waiting_cards` with `since` = that step; card JSON / waiting card
+  `progress_stale` = "no progress for M min (since HH:MM)"; a `⌛` badge on the face). Each step once per stretch;
+  progress starts a new stretch (read at the next pass). A card leaving the scope forgets its stretch and marks; a card
+  the port cannot answer (ANY error it raises, or a malformed list) is skipped and said (`"unavailable: <why>"`, the
+  Notifier logs it once per change of reason; `cards.progress_error` = card JSON `progress_error` until it answers
+  again), its stretch kept.
+- **One voice per quiet card**: on a card the progress watch covers (on, and in its scope) the idle watch never
+  comments — neither its CI comment nor its idle-owner comment; its CI ping ("CI finished — hand off or fix") still
+  goes. Off, or outside the scope, the idle watch comments as before.
+- **Watchers never abort the watch pass**: after the watchdog, each watcher (flag reminders, session boards, idle watch,
+  approval prefetch, PR watch, progress watch, dialog scan) runs on its own — one that raises is logged
+  `<watcher> skipped: <class>: <message>` for that pass; the others still run and `Notifier#watch` returns the released
+  cards.
 - Open session-dialog questions are expired (`expire_dialogs`) when the session's screen no longer shows that dialog
   (clear, a different dialog, the session gone): closed by the system author, the card's dialog, question and flag
   cleared; the card stays where it is. An unreadable screen is not a verdict.
@@ -367,10 +395,24 @@ primitives, for a host without its own).
 | 5 three uncoordinated sessions for one project | `concurrency.max_sessions` + `agent_types[].max` / `max_per_project` refuse the launch with who runs; the UI greys the pill with the cap it hits |
 | 6 the agent's picture of the board was wrong (column) | `column_label` on every card JSON; the registration result and the prompt name each adopted card with its column |
 | 7 a board's lead was killed (systemd-oomd, 2026-11-15) and the engine spawned 7 workers for its cards over 19 h — a team with nobody leading it, and nobody told | LEAD-FIRST: the engine starts no session on its own (`Team#start` is the one caller of the host's `start`, reached only by the operator's `Api#launch` and the lead's `kanban_spawn`; `test/no_leadless_spawn_test.rb`); a session `under` a lead needs the running lead (`CHECK (needs_lead = 0 OR lead_id IS NOT NULL)`); every type is a lead, under one or a declared standalone plain session; a lead's key is held by the host's launcher (its state, never the session, a JSON answer or a log) and checked by the host when the lead calls `kanban_spawn` — the agent handles no key; a guard against cooperative agents, not authentication (one MCP bearer can name any tmux session); any lead end but the operator's stop is `lead_ends`; a lead gone on its own is `lead_ends` on the waiting list and the board says "no lead: press Launch" — nothing relaunches it |
+| 8 five cards sat 1–3 h with their builder subagents idle; the owner (the lead running them) stayed alive and busy, so no watcher fired | the progress watch looks at the CARD, not the session: no card activity and no new PR head / CI / branch commit for N min → owner ping, then a comment, then the card waits for the operator |
 
 ## 9. Breaking changes for hosts (config / API)
 
 Newest first; a heading names the `Schema::VERSION` step when the change brought one.
+
+### Schema v13 — the progress watch
+
+- New REQUIRED host config key `progress_watch: {stale_minutes: N | null}` (null = off; a missing key, a missing or extra
+  sub-key, or a value that is not null or an integer ≥ 1 → `ConfigError`). A host adds it, and a migration calling
+  `migrate!(db, prefix:, to: 13)` (the stretch columns on `cards`).
+- The Store's `ci:` port may answer `progress(card)` + `progress_kinds` (both or neither, § 4 Progress watch).
+- `Notifier#watch` step 3e logs `progress watch: card N <step>` / `card N: <why>` (once per reason) / `card N answered again`.
+  Every watcher after the watchdog is guarded on its own: a raising one logs `<watcher> skipped: <class>: <message>`
+  (before, a Delivery error in any of them logged `watchdog skipped` and returned no released cards).
+- Card JSON: `progress_error` (string | null).
+- Card JSON + `Api#waiting` cards: `progress_stale` (string | null); board JSON: `progress_watch`. React: `Card.progress_stale`
+  (`⌛` badge `.kb-stale` on the face and in `CardPeek`), `BoardData.progress_watch`.
 
 ### Schema v12 — lead-first boards
 

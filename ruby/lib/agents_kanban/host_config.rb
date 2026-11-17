@@ -45,6 +45,9 @@ module AgentsKanban
   #   idle_watch                null or {ci_ping_after_minutes, ci_comment_after_minutes, owner_idle_hours}: the timings of
   #                             the idle watch on every board's WORKING column (Store#idle_watch_pass; needs the Notifier's
   #                             ci: port)
+  #   progress_watch            {stale_minutes}: null = off; N = a card in a working / review column (not flagged) with
+  #                             no progress for N min pings its owner, N min later gets a system_author comment, N min
+  #                             after that counts as waiting for the operator (Store#progress_watch_pass)
   #   handoff                   null or {requires_pr_url, requires_ci_url, qa_min_chars, ui_change_needs_screenshots}: what
   #                             kanban_handoff requires on a board with a handoff column (a handoff column + null = refused)
   #   dependencies              true = parent dependencies are ENFORCED (a child cannot enter a work column nor be claimed
@@ -61,7 +64,7 @@ module AgentsKanban
   # key, fixtures/boards/*.json are complete examples (coding.json + coding.board.json are busyyaks's).
   class HostConfig
     KEYS = %w[priorities label_colors system_author attachment_url_prefix launchers agent_types concurrency owner_sessions
-              table_prefix theme idle_watch handoff approval dependencies session_dialogs flags review_loop
+              table_prefix theme idle_watch progress_watch handoff approval dependencies session_dialogs flags review_loop
               session_boards face_roles avatar_url].freeze
     # Keys a host config had before lead-first boards: refused with what replaced them, never read.
     REMOVED_AGENT_TYPE_KEYS = {
@@ -125,6 +128,13 @@ module AgentsKanban
     APPROVAL_KEYS = %w[requires_green_ci].freeze
     Approval = Struct.new(:requires_green_ci, keyword_init: true)
     IdleWatch = Struct.new(:ci_ping_after_minutes, :ci_comment_after_minutes, :owner_idle_hours, keyword_init: true)
+    # progress_watch: {stale_minutes} — a card in a working or review column with no progress (its activity, or the
+    # evidence the host's ci: port gives: a PR head, a CI check, a branch commit) for that long escalates, one step per
+    # period (Store#progress_watch_pass). stale_minutes null = off; the key itself is required.
+    PROGRESS_WATCH_KEYS = %w[stale_minutes].freeze
+    ProgressWatch = Struct.new(:stale_minutes, keyword_init: true) do
+      def on? = !stale_minutes.nil?
+    end
     SESSION_DIALOG_KEYS = %w[settle_seconds context_minutes].freeze
     SessionDialogs = Struct.new(:settle_seconds, :context_minutes, keyword_init: true)
     # flags: the cross-cutting card flags (needs_operator, blocked_external): reminder_hours = after how long a flagged
@@ -158,8 +168,8 @@ module AgentsKanban
     AVATAR_URL = %r{\Ahttps://[A-Za-z0-9.-]+(?::\d+)?/[A-Za-z0-9._~/%&=?+-]*\{sha256\}[A-Za-z0-9._~/%&=?+-]*\z}
 
     attr_reader :priorities, :label_colors, :system_author, :attachment_url_prefix, :launchers, :agent_types, :concurrency,
-                :owner_sessions, :table_prefix, :theme, :idle_watch, :handoff, :approval, :dependencies, :session_dialogs,
-                :flags, :review_loop, :session_boards, :face_roles, :avatar_url, :raw
+                :owner_sessions, :table_prefix, :theme, :idle_watch, :progress_watch, :handoff, :approval, :dependencies,
+                :session_dialogs, :flags, :review_loop, :session_boards, :face_roles, :avatar_url, :raw
 
     def self.load(path)
       raise ConfigError, "host config not found: #{path}" unless File.file?(path)
@@ -205,6 +215,7 @@ module AgentsKanban
 
       @theme = parse_theme(hash["theme"])
       @idle_watch = hash["idle_watch"] && parse_idle_watch(hash["idle_watch"])
+      @progress_watch = parse_progress_watch(hash["progress_watch"])
       @handoff = hash["handoff"] && parse_handoff(hash["handoff"])
       @approval = hash["approval"] && parse_approval(hash["approval"])
       @dependencies = bool!(hash["dependencies"], "dependencies")
@@ -327,6 +338,16 @@ module AgentsKanban
         [k.to_sym, v[k]]
       end
       IdleWatch.new(**n).freeze
+    end
+
+    def parse_progress_watch(v)
+      shape!(v, PROGRESS_WATCH_KEYS, "progress_watch")
+      m = v["stale_minutes"]
+      unless m.nil? || (m.is_a?(Integer) && m >= 1)
+        raise ConfigError, "progress_watch.stale_minutes must be null (off) or an integer >= 1 (got #{m.inspect})"
+      end
+
+      ProgressWatch.new(stale_minutes: m).freeze
     end
 
     def parse_session_dialogs(v)

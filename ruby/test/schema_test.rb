@@ -43,7 +43,11 @@ class SchemaTest < Minitest::Test
     S.migrate!(db, prefix: p, to: 9)
     assert_empty db.schema(t[:board_columns]).map(&:first) & %i[x y], "v9 = − board_columns.x / y"
     assert_empty db.schema(t[:cards]).map(&:first) & %i[gate_head gate_state], "v9 has no gate head / state"
+    S.migrate!(db, prefix: p, to: 12)
+    pw = %i[progress_at progress_marks progress_pinged_at progress_commented_at progress_stale_at]
+    assert_empty db.schema(t[:cards]).map(&:first) & pw, "v12 has no progress watch stretch"
     S.migrate!(db, prefix: p) # = to: VERSION
+    assert_equal pw, db.schema(t[:cards]).map(&:first) & pw, "v13 = + the progress watch's stretch on the card"
     assert_equal %i[gate_head gate_state], db.schema(t[:cards]).map(&:first) & %i[gate_head gate_state],
                  "v10 = + cards.gate_head / gate_state"
     assert db.table_exists?(:"#{p}workflows"), "migrate! never drops: BoardRepo#seed! carries the rows over and drops it"

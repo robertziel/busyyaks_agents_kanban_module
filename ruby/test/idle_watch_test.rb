@@ -33,6 +33,10 @@ class IdleWatchTest < Minitest::Test
     def drop(name) = @live.delete(name)
   end
 
+  # the idle watch alone: the coding host's progress watch (progress_watch_test) would comment on the same quiet card
+  QUIET = AgentsKanban::HostConfig.new(KanbanTest.config.raw.merge("progress_watch" => { "stale_minutes" => nil }))
+  def config = QUIET
+
   def setup
     super
     @id = kb.create(slug: "p", title: "ship the thing", by: "lead", column: "doing")
