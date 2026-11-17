@@ -38,7 +38,13 @@ module AgentsKanban
   #                        handoff into the step's gate and on every notifier watch pass for each card waiting there
   #                        (Store#approval_prefetch_pass), so a host answering asynchronously keeps the answer fresh.
   #                        A green answer may carry head: (the PR head sha): the handoff records it and the card waits
-  #                        for the operator only while later answers carry the same head (Store#gate_hold)
+  #                        for the operator only while later answers carry the same head (Store#gate_hold).
+  #                        A green answer may also carry rebase: {state:, base:, base_sha:} (card #497: the PR's checks
+  #                        are green but it conflicts with its base — state = the host's word, e.g. "conflicts"; base =
+  #                        the base branch; base_sha = its commit the PR was compared with): the approval is accepted and
+  #                        marked needs rebase; the agent's onward move waits until an answer is green without it (a
+  #                        handoff of such a PR is refused). A marked card is asked carrying needs_rebase: answer its
+  #                        step PR, once merged, with that merge's CI (never nil — the mark would hold the card for good)
   # Both raise Delivery::Unavailable when they cannot answer (token rejected, rate limited, unreachable).
   module CiChecks; end
 

@@ -47,6 +47,11 @@ module AgentsKanban
     DRAGGED_NOTE = "It was dragged: CI was not asked — read the PR's checks first."
     FORCED_NOTE = "It was approved with Force: CI was not asked — read the PR's checks first."
     CI_NOT_ASKED = "ci-not-asked" # the approve ping's marker: a drag approved the step, the green-CI gate was not asked
+    # Card #497: an approval whose green answer carried rebase: (the PR conflicts with its base) is accepted and marked
+    # — a ci_watches row of this kind (ref = the card's nth mark, created_at = the approval time, state = the JSON
+    # {state, base, base_sha}); open while
+    # commented_at is nil. The approve ping's marker: "rebase:" + that JSON.
+    REBASE = "rebase"
     CI_FORCED = "ci-forced" # the approve ping's marker: the operator's Force approved the step, CI was not asked
     URL_RE = %r{\Ahttps?://[^\s<>"]{3,2000}\z}
     DIALOG_REASK = 120 # an answered dialog still on screen this long after the key press is not re-posted
@@ -430,6 +435,10 @@ module AgentsKanban
             progress_stale: c[:progress_stale],
             # why the progress watch could not read this card's evidence on its last pass (nil = it could)
             progress_error: progress_watch? ? c[:progress_error] : nil,
+            # approved on a PR that conflicts with its base (card #497; decorated cards only): what to rebase onto
+            needs_rebase: c[:needs_rebase] && { pr: c[:needs_rebase]["pr"], state: c[:needs_rebase]["state"],
+                                                base: c[:needs_rebase]["base"], base_sha: c[:needs_rebase]["base_sha"],
+                                                at: iso(c[:needs_rebase]["at"]), },
             waiting: c[:waiting], # waits for the operator now (waits_for_operator?: the counts' rule; decorated cards only)
             # approved and carried on by its agent (carried_on_json: {next_column, next_label, final} | nil;
             # decorated cards only)
@@ -650,7 +659,8 @@ module AgentsKanban
 
       checked = step && c[:column] != column && !force &&
                 (approval || (named && transition.to_s.strip.casecmp?(step.name)))
-      green_ci!(c, b, step) if checked
+      green = checked ? green_ci!(c, b, step) : nil
+      rebase = green && rebase_of!(c, green)
       rounds = c[:column] != column ? review_rounds_after(b, c, column, agent) : nil
       @db.transaction do
         place(c, column, pos)
@@ -660,6 +670,8 @@ module AgentsKanban
           # the gate's head / last view belong to the handoff that brought the card in: any other move ends them (a
           # drag into another gate starts with nothing recorded — its hold is read live)
           cards.where(id: c[:id]).update(gate_head: nil, gate_state: nil) if !handoff && (c[:gate_head] || c[:gate_state])
+          # an open needs-rebase mark belongs to the column the approval put the card in: any move out of it ends it
+          close_rebase(c, "the card moved #{b.label(c[:column])} → #{b.label(column)}", by) if c[:needs_rebase]
           if step
             # the operator moving a card from an approval step's gate into its target IS that approval (any other move
             # into it — from elsewhere, by a catch-all edge — is a plain move: nobody is pinged to carry on)
@@ -669,9 +681,11 @@ module AgentsKanban
             how = force ? "forced" : "dragged"
             note += " (#{how}: CI not asked)" if unasked
             log(c[:id], "approve", note, by)
+            rebase_mark!(c, green, rebase, by) if rebase
             # the ping says it too: the owner carries on from it (a final step merges) and must read CI itself
-            marker = force ? CI_FORCED : CI_NOT_ASKED
-            enqueue_ping(c, "approve", by, unasked ? "#{step.from} #{marker}" : step.from)
+            # (dragged or forced); a conflicting PR: it rebases first
+            marker = (force ? CI_FORCED : CI_NOT_ASKED) if unasked
+            enqueue_ping(c, "approve", by, approve_ping_body(step, marker, rebase))
           else
             # leaving the approved column for anywhere but a terminal one (history) withdraws the approval
             cards.where(id: c[:id]).update(approved_at: nil, approved_by: nil) if c[:approved_at] && !b.terminal?(column)
@@ -978,15 +992,163 @@ module AgentsKanban
       end
 
       by = who!(by)
-      green_ci!(c, b, step) unless force
+      green = force ? nil : green_ci!(c, b, step)
+      rebase = green && rebase_of!(c, green)
       unasked = force && @config.green_ci_gate?
       @db.transaction do
         cards.where(id: c[:id]).update(approved_at: @clock.call, approved_by: by, updated_at: @clock.call)
         log(c[:id], "approve",
             "#{approval_note(b, step)} (approved in #{b.label(c[:column])})#{' (forced: CI not asked)' if unasked}", by)
-        enqueue_ping(c, "approve", by, unasked ? "#{step.from} #{CI_FORCED}" : step.from)
+        rebase_mark!(c, green, rebase, by) if rebase
+        enqueue_ping(c, "approve", by, approve_ping_body(step, (CI_FORCED if unasked), rebase))
       end
       card(c[:id])
+    end
+
+    # ── needs rebase (card #497): an approval on a PR that conflicts with its base ────────────────────────────────
+    #
+    # The operator: "Approve merge should proceed with rebase and merge!" The ci: port's green answer to an approval
+    # step may carry rebase: {state:, base:, base_sha:} — the PR's checks are green and nothing else refuses it, but it
+    # conflicts with its base (the base moved while the card waited). The approval is accepted, the card is marked
+    # needs rebase (card JSON `needs_rebase`) and the approve ping tells the owner to rebase onto that base, re-run CI and
+    # merge only on green. While marked, the agent's onward move out of the column (the next handoff, the move to done)
+    # is refused until the step's checks, asked live, answer green with no rebase: — then the mark clears and the move
+    # goes on. The notifier's watch pass clears it the same way (Store#rebase_watch_pass). Any move out of the column
+    # (the operator's withdraw / rework, the agent back to a working column) ends it.
+
+    # A green answer's rebase: as the engine keeps it ({"state", "base", "base_sha"}), nil when none; a malformed one is
+    # the port's error, refused — never approved as if clean.
+    def rebase_of!(c, pr)
+      r = pr[:rebase] or return nil
+      bad = !r.is_a?(Hash) || %i[state base base_sha].any? { |k| !r[k].is_a?(String) || r[k].strip.empty? }
+      raise Invalid, "card ##{c[:id]}: the CI port answered rebase: #{r.inspect} — want {state:, base:, base_sha:}" if bad
+
+      { "state" => r[:state], "base" => r[:base], "base_sha" => r[:base_sha] }
+    end
+
+    def rebase_mark!(c, pr, rebase, by)
+      now = @clock.call
+      # ref = the card's nth mark (the unique key): two approvals racing for the same n — the loser's insert, in its
+      # own savepoint, retries with the next one (a third collision in a row is raised, never swallowed)
+      tries = 0
+      begin
+        @db.transaction(savepoint: true) do
+          n = (watches_t.where(card_id: c[:id], kind: REBASE).max(:ref) || 0) + 1
+          watches_t.insert(card_id: c[:id], kind: REBASE, ref: n, pr: pr[:number], state: JSON.generate(rebase),
+                           pinged_at: c[:owner_session] && now, created_at: now)
+        end
+      rescue Sequel::UniqueConstraintViolation
+        tries += 1
+        retry if tries < 3
+        raise
+      end
+      log(c[:id], "gate", "needs rebase: #{rebase_what(pr[:number], rebase)} — approved; the agent rebases, re-runs CI " \
+                          "and merges once it is green (approved by #{by})", @config.system_author)
+    end
+
+    def rebase_what(number, r)
+      pr = number ? "PR ##{number}" : "its PR"
+      "#{pr} #{r['state'] == 'conflicts' ? 'conflicts' : r['state']} with #{r['base']} (#{r['base_sha'][0, 7]})"
+    end
+
+    # marker = CI_NOT_ASKED (dragged) / CI_FORCED (Force) / nil (CI asked); only an asked approval carries a rebase
+    def approve_ping_body(step, marker, rebase)
+      return "#{step.from} #{marker}" if marker
+      return "#{step.from} #{REBASE}:#{JSON.generate(rebase)}" if rebase
+
+      step.from
+    end
+
+    def rebase_instructions(c, b, step, r)
+      onward = if step.final
+                 "then move the card to #{b.label(step.then)} with kanban_move id=#{c[:id]} column=#{step.then}"
+               elsif step.then && b.gate?(step.then)
+                 "then hand the card to #{b.label(step.then)} with kanban_handoff id=#{c[:id]} column=#{step.then}"
+               elsif step.then
+                 "then move the card to #{b.label(step.then)} with kanban_move id=#{c[:id]} column=#{step.then}"
+               else
+                 "then carry on"
+               end
+      "approved: rebase onto #{r['base']} (#{r['base_sha'][0, 7]}), re-run CI, then merge. The PR #{r['state']} with " \
+        "#{r['base']}: merge #{r['base']} in, resolve every conflict keeping both sides' intent, run the gates and a " \
+        "reviewer on the resolution, push, and merge only once CI is green on the new head; #{onward}. " \
+        "The board holds the card in #{b.label(step.to)} until the step's checks are green with no conflict. A " \
+        "conflict you cannot resolve: kanban_ask on card ##{c[:id]} naming the conflicting files — never a silent hold."
+    end
+
+    # {card id => the open mark} ({"pr", "state", "base", "base_sha", "at"}) for the given ids
+    def rebase_marks(ids)
+      watches_t.where(card_id: ids, kind: REBASE, commented_at: nil).order(:id).all.to_h do |w|
+        [w[:card_id], JSON.parse(w[:state]).merge("pr" => w[:pr], "at" => w[:created_at], "id" => w[:id])]
+      end
+    end
+
+    def close_rebase(c, why, by)
+      mark = c[:needs_rebase] or return
+      # once: a move that cleared it in its own check (rebase_hold!) holds the card as it was read before
+      return false if watches_t.where(id: mark["id"], commented_at: nil).update(commented_at: @clock.call).zero?
+
+      log(c[:id], "gate", "needs rebase cleared: #{why}", by)
+      true
+    end
+
+    # The step's checks asked live for a marked card: green with no rebase: → the mark clears (→ true); anything else
+    # → the hold's words (a String). The port down → its words.
+    def rebase_cleared(c, b, ping: false)
+      step = b.approval_into(c[:column])
+      return "#{b.label(c[:column])} is no approval step's column any more" unless step
+
+      pr = begin
+        @ci.approval_checks(c, step.to_h)
+      rescue Delivery::Unavailable => e
+        return "CI state unknown — #{e.message}"
+      end
+      return "no PR whose checks could be read" if pr.nil?
+      return hold_reason(pr) unless pr[:state] == "success"
+      return "#{rebase_what(pr[:number], rebase_of!(c, pr))} — rebase it and re-run CI" if pr[:rebase]
+
+      head = pr[:head] ? " at #{pr[:head][0, 7]}" : ""
+      @db.transaction do
+        cleared = close_rebase(c, "CI green#{head} and no conflict with #{c[:needs_rebase]['base']}",
+                               @config.system_author)
+        # the watch pass's clear wakes the owner (it may be waiting on it to merge); a clear at the agent's own move
+        # needs no ping — the agent is acting
+        rebase_cleared_ping(c, b, step, pr) if cleared && ping
+      end
+      true
+    end
+
+    def rebase_cleared_ping(c, b, step, pr)
+      ref = pr[:number] ? "PR ##{pr[:number]}" : "its PR"
+      green = pr[:head] ? "CI green on #{pr[:head][0, 7]} — merge now" : "the merge's CI is green — carry on"
+      onward = if step.then && b.gate?(step.then)
+                 ", then hand the card to #{b.label(step.then)} with kanban_handoff id=#{c[:id]} column=#{step.then}"
+               elsif step.then
+                 ", then move the card to #{b.label(step.then)} with kanban_move id=#{c[:id]} column=#{step.then}"
+               else
+                 ""
+               end
+      enqueue_ping(c.merge(column_label: b.label(c[:column])), "rebase_cleared", @config.system_author,
+                   "needs rebase cleared on #{ref} of card ##{c[:id]} \"#{c[:title]}\" (#{c[:project_slug]}): " \
+                   "#{green}#{onward}.")
+    end
+
+    # Every open mark asked again (notifier watch pass) → [[card_id, :cleared | "held: <why>"], …].
+    def rebase_watch_pass
+      return [] unless @config.green_ci_gate?
+
+      ids = watches_t.where(kind: REBASE, commented_at: nil).select_map(:card_id).uniq
+      return [] if ids.empty?
+
+      cards.where(id: ids, archived_at: nil).order(:id).all.map do |row|
+        c = card(row[:id])
+        got = begin
+          rebase_cleared(c, board_of(c[:project_slug]), ping: true)
+        rescue Invalid => e # a malformed answer is the port's error: said, the mark kept
+          e.message
+        end
+        [c[:id], got == true ? :cleared : "held: #{got}"]
+      end
     end
 
     # Back from an approval step's target to the gate it came from: the approval is withdrawn (move clears it). Only
@@ -1698,7 +1860,7 @@ module AgentsKanban
                "#{tag} New comment on card ##{c[:id]} \"#{c[:title]}\" (#{b.label(c[:column])}, #{c[:project_slug]}) " \
                "by #{author}:\n\n#{clip}\n\n" \
                "Read the card with kanban_card id=#{c[:id]}, act on it, and reply with kanban_comment."
-             when "ci_idle", "pr_closed", "progress"
+             when "ci_idle", "pr_closed", "progress", "rebase_cleared"
                "#{tag} #{body}"
              when "assigned"
                "#{tag} Card ##{c[:id]} \"#{c[:title]}\" (#{b.label(c[:column])}, #{c[:project_slug]}) " \
@@ -1713,7 +1875,11 @@ module AgentsKanban
                          when CI_FORCED then " #{FORCED_NOTE}"
                          else ""
                          end
-               if step.final
+               rebase = how&.start_with?("#{REBASE}:") ? JSON.parse(how.delete_prefix("#{REBASE}:")) : nil
+               if rebase
+                 "#{tag} #{author} APPROVED card ##{c[:id]} \"#{c[:title]}\" (#{c[:project_slug]}) " \
+                   "— it is in #{b.label(step.to)}, marked needs rebase. #{rebase_instructions(c, b, step, rebase)}"
+               elsif step.final
                  # dragged: the merge waits for green checks (a red or unread one is not merged)
                  merge = unasked.empty? ? "Merge it now" : "Merge it once its checks are green (red: do not merge, say so)"
                  "#{tag} #{author} APPROVED card ##{c[:id]} \"#{c[:title]}\" (#{c[:project_slug]}) " \
@@ -2541,9 +2707,12 @@ module AgentsKanban
     def move_check!(b, c, column, agent:, handoff: false, withdraw: false)
       return if column == c[:column]
 
-      agent_move!(b, c, column, handoff: handoff) if agent
+      agent_move_rules!(b, c, column, handoff: handoff) if agent
       workflow_check!(b, c, column, agent) unless withdraw
       blocked!(b, column, c[:blocked_by], "card ##{c[:id]}")
+      # last (card #497): a move refused by any other rule (the agent rules, the workflow, a block) never asks CI nor
+      # clears a needs-rebase mark, and says its own reason
+      rebase_hold!(b, c, column) if agent
     end
 
     # The workflow's rule for a column change: an edge column → column the actor may take, else refused with the edges
@@ -2581,7 +2750,8 @@ module AgentsKanban
     # The agent rules for a column change: a flagged card stays; a gate is entered with kanban_handoff only; the
     # approval is the operator's; a gate is left only along a named agent transition, once approved; the operator's
     # columns are otherwise closed; the review loop ends at its round limit.
-    def agent_move!(cfg, c, column, handoff:)
+    # (move_check! runs them, then the workflow and the blocks, then rebase_hold! last)
+    def agent_move_rules!(cfg, c, column, handoff:)
       if c[:asked_at]
         raise Denied, "card ##{c[:id]} waits for the operator's answer (needs_operator) — it stays in " \
                       "#{cfg.label(c[:column])} until the operator comments"
@@ -2623,6 +2793,20 @@ module AgentsKanban
       end
       raise Denied, "only the operator moves a card into #{cfg.label(column)}" if cfg.agent_closed?(column) && !handoff
       round_limit!(cfg, c, column)
+    end
+
+    # A card marked needs rebase goes on (any agent move but back to a working column) only once the step's checks,
+    # asked now, are green with no conflict — the mark then clears; otherwise refused with what holds it.
+    def rebase_hold!(b, c, column)
+      mark = c[:needs_rebase] or return
+      return if b.working?(column)
+
+      got = rebase_cleared(c, b)
+      return if got == true
+
+      raise Denied, "card ##{c[:id]} was approved with needs rebase (#{rebase_what(mark['pr'], mark)}) and is held in " \
+                    "#{b.label(c[:column])}: #{got}. Rebase onto #{mark['base']}, re-run CI and merge once it is green " \
+                    "— a conflict you cannot resolve: kanban_ask on the card naming the files"
     end
 
     # ── the review loop (config.review_loop): rounds per review column, the limit, the unresolved label ──
@@ -2917,6 +3101,12 @@ module AgentsKanban
       end
       raise Invalid, "#{what}: card ##{c[:id]} has no PR whose checks could be read#{drag}" if pr.nil?
       if pr[:state] == "success"
+        # card #497: only the APPROVAL accepts a conflicting PR (marked needs rebase); a handoff of one is refused —
+        # the conflict is the author's to resolve before the operator reviews it
+        if handoff && pr[:rebase]
+          raise Invalid, "#{what}: card ##{c[:id]} — #{rebase_what(pr[:number], rebase_of!(c, pr))}: rebase it and " \
+                         "re-run CI; #{wait}"
+        end
         moved = !handoff && hold_from(c, pr) # approving: the PR must still be at the head the handoff saw
         raise Invalid, "#{what}: card ##{c[:id]} — #{moved}; hand it back for review#{drag}" if moved
 
@@ -3079,8 +3269,10 @@ module AgentsKanban
                      .group_by { |r| r[:card_id] }
       boards ||= boards_for(list.map { |c| c[:project_slug] }.uniq)
       holds = gate_holds(list, boards)
+      marks = rebase_marks(ids)
       list.each do |c|
         b = boards[c[:project_slug]]
+        c[:needs_rebase] = marks[c[:id]]
         c[:gate_hold] = holds[c[:id]]
         c[:progress_stale] = progress_stale(c, b)
         c[:waiting] = waits_for_operator?(c, b, c[:gate_hold])

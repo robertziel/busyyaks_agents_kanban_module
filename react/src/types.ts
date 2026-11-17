@@ -258,6 +258,9 @@ export type Card = {
   // the progress watch's last step: why the card waits for the operator ("no progress for 90 min (since 14:02)"); null =
   // it moves, or is not watched
   progress_stale?: string | null;
+  // approved on a PR that conflicts with its base (card 497): the agent rebases onto base (base_sha), re-runs CI and
+  // merges once green; null = not marked
+  needs_rebase?: { pr: number | null; state: string; base: string; base_sha: string; at: string } | null;
   // waits for the operator NOW (the server's one rule, the same the "N waiting for you" count uses): a question open on
   // it, or in a gate and approvable now — the card face is highlighted
   waiting: boolean | null; // required: a Card built without it fails tsc (null = not decorated: no highlight)
