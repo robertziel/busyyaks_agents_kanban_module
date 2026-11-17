@@ -33,7 +33,7 @@ import { CardLinks } from "./CardLinkRow";
 import { KbIcon, type IconName } from "./KbIcon";
 import { MarkdownEditor, UploadChips, type DictateHandle } from "./MarkdownEditor";
 import { matchesCombo, type KeyCombo } from "../lib/shortcut";
-import { approvedNext, approveLabel, approveTitle, operatorMoves, stepAt } from "../lib/workflow";
+import { approvedNext, approveLabel, approveTitle, forceTitle, operatorMoves, stepAt } from "../lib/workflow";
 import { Select } from "./Select";
 
 export type Panel = "labels" | "due" | "members" | "checklist" | "cover" | null;
@@ -1215,15 +1215,35 @@ function CardDetail({
                     </button>
                   </>
                 ) : (
-                  <button
-                    type="button"
-                    className="btn kb-approve-btn"
-                    disabled={busy}
-                    onClick={() => void run(() => api.approve(id, true))}
-                    title={approveTitle(step, colLabel, at?.inPlace)}
-                  >
-                    {approveLabel(step, colLabel, at?.inPlace)}
-                  </button>
+                  // no Force (no green-CI gate): `display: contents` — the Approve button is the block's own grid item as before
+                  <div className={config.approval?.requires_green_ci ? "kb-approve-row" : "kb-approve-solo"}>
+                    <button
+                      type="button"
+                      className="btn kb-approve-btn"
+                      disabled={busy}
+                      onClick={() => void run(() => api.approve(id, true))}
+                      title={approveTitle(step, colLabel, at?.inPlace)}
+                    >
+                      {approveLabel(step, colLabel, at?.inPlace)}
+                    </button>
+                    {/* the same approval without the green-CI gate — only where the gate asks CI; no confirm:
+                        the approval is withdrawn in one click (Withdraw approval) and the agent is told to read CI first */}
+                    {config.approval?.requires_green_ci && (
+                      <button
+                        type="button"
+                        className="btn kb-force-btn"
+                        disabled={busy}
+                        onClick={() => void run(() => api.approve(id, true, true))}
+                        title={forceTitle(step, colLabel)}
+                      >
+                        <KbIcon name="skip" />
+                        <span className="kb-force-txt">
+                          <b>Force</b>
+                          <small>skip CI</small>
+                        </span>
+                      </button>
+                    )}
+                  </div>
                 )}
                 {!c.owner_session && !c.approved && (
                   <p className="muted">no owner session — nobody will be pinged; set one above</p>

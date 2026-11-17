@@ -273,12 +273,17 @@ module AgentsKanban
       end
     end
 
-    # The operator approves (approved: true, the default) or withdraws (false).
+    # The operator approves (approved: true, the default) or withdraws (false). force: true = the Force button: approve
+    # without the green-CI gate (Store#approve); only with approved true.
     def approve(id, b, by:)
       c = card!(id) or return not_found("no card #{id}")
       refusing do
         on = b["approved"].nil? || b["approved"] == true || b["approved"].to_s == "true"
-        on ? @store.approve(c[:id], by: by) : @store.unapprove(c[:id], by: by)
+        force = b["force"]
+        raise Invalid, "force must be true or false (got #{force.inspect})" unless [nil, true, false].include?(force)
+        raise Invalid, "force: true approves; it cannot withdraw (approved: false)" if force && !on
+
+        on ? @store.approve(c[:id], by: by, force: force == true) : @store.unapprove(c[:id], by: by)
         [200, card_body(@store.card(c[:id]))]
       end
     end

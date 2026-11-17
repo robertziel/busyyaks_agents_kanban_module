@@ -195,7 +195,13 @@ host's own ledger records each run. Prefix `""` = the unprefixed table names (a 
   the next step now, then move the card to `then`…"); an ownerless card is left to the spawn rule. The operator's drag
   (a column, or the catch-all edge) is never refused by `approval.requires_green_ci`: it approves, and the `approve`
   entry ends "(dragged: CI not asked)"; an Approve the gate refuses ends ". A drag into <to> approves without asking
-  CI". A move into `to`
+  CI". **Force** (`Store#approve(force: true)`, `Api#approve` body `force: true`, the operator's only — no MCP tool;
+  `Store#move(force:, agent: true)` → `Denied`): the same approval, move (or in-place approval) and ping without the
+  green-CI gate (no CI or PR-state question); every other refusal stays; the `approve` entry ends "(forced: CI not
+  asked)" and the owner's ping says it was approved with Force and CI was not asked — read the PR's checks first, and
+  take the next step (a final step: the merge) only once they are green (a drag along the step pings the same).
+  `force: true` with `approved: false`, not a boolean, or on a host without `approval.requires_green_ci` (its Approve
+  asks no CI) → 422. A move into `to`
   from anywhere else approves nothing — when `to` is itself a GATE (Awaiting merge, Ready to merge: agents never leave
   one unapproved) `Store#approve` approves the card IN PLACE: the step's CI question, `approved_at` / `approved_by`, the
   `approve` entry ending "(approved in <to>)", the same ping, no move (an approved card there: `Invalid` "already
@@ -323,7 +329,10 @@ or note to edit name / from / to / by or delete it, ↑ ↓ for the board order
 phone the graph scrolls and zooms above the lists. A board read refused (422) shows the reason and a reset button. The card dialog's
 "Transition" list = the operator's transitions out of the card's column (`operatorMoves`), sent as `{transition, column}`: one per target, the first declared name — and, on a host with `approval.requires_green_ci`, in a step's `from` BOTH edges into the step's `to`: the step's own (asks CI) and the first other one, labelled "… (CI not asked)" (the free move is never hidden behind the gated one). A card in an approval step's `from` shows the primary approve button (the gate:
 "✓ Approve to merge"; a step: "✓ Approve → <to label>"; the tooltip names `to` and `then` from the board); approved in
-its `to`, who / when + "Withdraw approval"; unapproved in a `to` that is a gate, the same button approving in place ("the card stays in <to>"; `lib/workflow.ts` `stepAt` / `approveLabel` / `approveTitle` / `approvedNext`). A collapsed list is a drop target: a card dropped on its strip lands at the bottom of that column. `view` = `{card, panel, archived}` — the host keeps it
+its `to`, who / when + "Withdraw approval"; beside the approve button, on a host with `approval.requires_green_ci`, a
+**Force · skip CI** button (`kb-force-btn`: a dashed warning-hue pill with a skip icon, never green; `forceTitle`) sends
+`approve(id, true, true)` — no confirm: the approval is withdrawn in one click and the agent is told to wait for green CI;
+unapproved in a `to` that is a gate, the same button approving in place ("the card stays in <to>"; `lib/workflow.ts` `stepAt` / `approveLabel` / `approveTitle` / `approvedNext`). A collapsed list is a drop target: a card dropped on its strip lands at the bottom of that column. `view` = `{card, panel, archived}` — the host keeps it
 (e.g. `?card=&panel=&archived=`). `KanbanApi` (react/src/api.ts) is the full list of calls. `<LaunchBar api slug onLaunched? />` renders one split pill
 per agent type (the type's launchers in its menu) and `running / cap` from `Api#launches`; a pill is greyed with the cap
 it hits (`lib/launch.ts`), the server's 422 shown verbatim. No `innerHTML` except `Html` injecting the server's `*_html`. Styles: `kanban.css` (required) + `base.css` (the `.btn/.tag/.flash/…`
