@@ -1,9 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { activityAnchor, activityAnchorId, cardFaceClass, jumpNeedsDetails, splitCard, TITLE_MAX } from "./card";
+import {
+  activityAnchor,
+  activityAnchorId,
+  cardFaceClass,
+  carriedOnText,
+  jumpNeedsDetails,
+  splitCard,
+  TITLE_MAX,
+} from "./card";
 
 describe("splitCard", () => {
   it("keeps a short line as the title", () => {
-    expect(splitCard("  Fix radar tiles ")).toEqual({ title: "Fix radar tiles", description: "" });
+    expect(splitCard("  Fix radar tiles ")).toEqual({
+      title: "Fix radar tiles",
+      description: "",
+    });
   });
   it("uses the first line as title and the rest as description", () => {
     expect(splitCard("Deploy shop\nthat deploys to shop.example.com (shop branch)\nthen smoke")).toEqual({
@@ -70,5 +81,27 @@ describe("cardFaceClass", () => {
     expect(cardFaceClass({ id: 1, waiting: false }, working)).toBe("kb-card agent-working");
     expect(cardFaceClass({ id: 1, waiting: true }, working)).toBe("kb-card needs-you");
     expect(cardFaceClass({ id: 1, waiting: false }, idle)).toBe("kb-card");
+  });
+});
+
+// an approved gate card its agent carries on — never "needs you", its badge names who and where next
+describe("carriedOnText", () => {
+  it("names the owner and the merge on a final step", () => {
+    expect(
+      carriedOnText({ id: 1, owner_session: "shop_lead" }, { next_column: "done", next_label: "Done", final: true }),
+    ).toBe("approved · shop_lead merging");
+  });
+  it("names the next column otherwise", () => {
+    expect(
+      carriedOnText(
+        { id: 1, owner_session: "shop_lead" },
+        { next_column: "deploy", next_label: "Deploy check", final: false },
+      ),
+    ).toBe("approved · shop_lead → Deploy check");
+  });
+  it("throws on a card nobody owns: the server never carries one on", () => {
+    expect(() =>
+      carriedOnText({ id: 7, owner_session: null }, { next_column: "done", next_label: "Done", final: true }),
+    ).toThrow(/: carried_on without an owner session$/);
   });
 });

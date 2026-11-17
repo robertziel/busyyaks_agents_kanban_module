@@ -120,12 +120,13 @@ module AgentsKanban
           c = counts[p[:slug]] || b.keys.to_h { |k| [k, 0] }
           { project: p[:slug], columns: columns_json(b), columns_order: b.keys, waiting_columns: b.waiting,
             counts: c, total: c.values.sum, waiting: waits.waiting[p[:slug]], held: waits.held[p[:slug]],
-            external: waits.external[p[:slug]], flagged: flagged[p[:slug]] || 0, backlog_md: bm, }
+            external: waits.external[p[:slug]], approved: waits.approved[p[:slug]], flagged: flagged[p[:slug]] || 0,
+            backlog_md: bm, }
         end
         tpl = boards[Board::TEMPLATE]
         [200, { columns: columns_json(tpl), columns_order: tpl.keys, waiting_columns: tpl.waiting,
                 waiting: rows.sum { |b| b[:waiting] }, held: rows.sum { |b| b[:held] },
-                external: rows.sum { |b| b[:external] }, boards: rows.sort_by { |b|
+                external: rows.sum { |b| b[:external] }, approved: rows.sum { |b| b[:approved] }, boards: rows.sort_by { |b|
  [-b[:total], b[:project]] }, },]
       end
     end
@@ -135,7 +136,10 @@ module AgentsKanban
     # {waiting_columns (the template's), total, projects: [{slug, count, waiting_columns, cards: [{id, title, column,
     # column_label, since, needs_operator, blocked, question_first_line, blocked_first_line, handoff_first_line}]}]} —
     # projects with a question first, then most-waiting, cards longest waiting first. Aside, never in total: `held` (gate
-    # cards waiting for CI) and `external` (cards only blocked_external: waiting for the world), [{slug, count, cards}].
+    # cards waiting for CI), `external` (cards only blocked_external: waiting for the world) and `approved` (gate cards
+    # the operator approved that their agent carries on: `carried_on` {next_column, next_label, final}),
+    # [{slug, count, cards}]. Every card carries approved, approved_by, owner_session and carried_on (null when not
+    # carried on).
     # since = when the flag was set, else when the card entered the column; nil when the log does not say. No clock
     # in the body: the rev changes only when the content does.
     def waiting(projects)
@@ -157,7 +161,8 @@ module AgentsKanban
             .sort_by { |g| [-g[:count], g[:slug]] }
         end
         [200, { waiting_columns: boards[Board::TEMPLATE].waiting, total: by_slug.values.sum(&:size), projects: sorted,
-                held: aside.call(w.held), external: aside.call(w.external), launch_failures: @store.launch_failures(slugs),
+                held: aside.call(w.held), external: aside.call(w.external), approved: aside.call(w.approved),
+                launch_failures: @store.launch_failures(slugs),
                 lead_ends: @store.lead_ends(slugs), },]
       end
     end
@@ -177,7 +182,7 @@ module AgentsKanban
         w = @store.waiting_counts([p[:slug]], boards: { p[:slug] => b })
         [200, body.merge(columns_order: b.keys, waiting_columns: b.waiting, listened_columns: b.listened,
                          waiting: w.waiting[p[:slug]], held: w.held[p[:slug]], external: w.external[p[:slug]],
-                         flagged: flagged,
+                         approved: w.approved[p[:slug]], flagged: flagged,
                          priorities: @config.priorities, label_colors: @config.label_colors,
                          lead: lead_json(p[:slug]),
                          **@board_extras.call(p)),]
@@ -678,7 +683,12 @@ module AgentsKanban
         blocked_first_line: c[:blocked_at] ? first_line(c[:blocked_reason]) : nil,
         # what the agent says to check, in a gate
         handoff_first_line: b.gate?(c[:column]) && c[:handoff_at] ? first_line(c[:qa_notes]) : nil,
-        gate_hold: c[:gate_hold], }
+        gate_hold: c[:gate_hold],
+        # who approved it and when (null = not approved), its owner session, and — carried on by its agent
+        # (the one predicate, Store#carried_on_json) — where the agent takes it next; an approved card nobody owns
+        # waits here with carried_on null
+        approved: Store.iso(c[:approved_at]), approved_by: c[:approved_by], owner_session: c[:owner_session],
+        carried_on: @store.carried_on_json(c, b), }
     end
 
     # The question's first non-blank line as plain text (markdown emphasis / code / heading marks dropped), ≤ 160 chars.

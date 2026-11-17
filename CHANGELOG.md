@@ -8,6 +8,10 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Added
 
+- **Approved and carried on**: a gate card the operator approved whose next step is its agent's named transition
+  (Awaiting merge after the final Approve) no longer counts as waiting for the operator. The boards, `Api#waiting` and
+  `Store#waiting_counts` / `#waiting_cards` carry it apart as `approved`; card JSON `carried_on`; `Board#agent_next`;
+  the board header says "N approved · agent on it" and the card face "✓ approved · <owner> merging". SPEC § 9.
 - **Force approve**: the card dialog shows a **Force · skip CI** button (a dashed warning-hue pill with a skip icon)
   beside every approve button on a host with `approval.requires_green_ci` — the same approval without the green-CI
   gate. `Store#approve(force: true)`, `Api#approve` body `force: true` (operator only; no MCP tool; an agent move with

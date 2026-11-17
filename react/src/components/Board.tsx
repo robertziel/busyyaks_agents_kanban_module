@@ -40,7 +40,7 @@ import {
   type Order,
 } from "../lib/board";
 import { edgeBands, edgeScroller, glideTo, nearestStart, stepRoom, stepStart, type EdgeBands } from "../lib/autoscroll";
-import { cardFaceClass, splitCard } from "../lib/card";
+import { cardFaceClass, carriedOnText, splitCard } from "../lib/card";
 import type { DictationApi } from "../lib/dictation";
 import { comboLabel, isMac, type KeyCombo } from "../lib/shortcut";
 import { useFetch } from "../lib/fetch";
@@ -608,6 +608,7 @@ export function Board({
               waitingTitle={waitingTitle}
               held={data.held}
               external={data.external}
+              approved={data.approved}
               showEmpty={showEmpty}
               onShowEmpty={setShowEmpty}
             />
@@ -629,7 +630,7 @@ export function Board({
               <span className={`kb-waiting${waiting === 0 ? " zero" : ""}`} title={waitingTitle}>
                 <b>{waiting}</b> waiting for you
               </span>
-              <HeldPills held={data.held} external={data.external} />
+              <HeldPills held={data.held} external={data.external} approved={data.approved} />
             </div>
           )}
           <span className="spacer" />
@@ -1213,8 +1214,11 @@ function CardItem({
             </span>
           )}
           {c.approved && (
-            <span className="kb-approved" title={`approved by ${c.approved_by ?? "?"} — its agent moves it on`}>
-              ✓ approved
+            <span
+              className="kb-approved"
+              title={`approved by ${c.approved_by ?? "?"} — its agent moves it on${c.carried_on ? ": not waiting for you" : ""}`}
+            >
+              ✓ {c.carried_on ? carriedOnText(c, c.carried_on) : "approved"}
             </span>
           )}
           {c.owner_session && (
@@ -1481,10 +1485,19 @@ function QuickAdd({ api, slug, column, colLabel, open, setOpen, onAdded, onError
   );
 }
 
-// "N waiting for CI" (gate cards whose Approve would not pass now) and "N blocked externally": neither waits for you
-function HeldPills({ held, external }: { held: number; external: number }) {
+// "N waiting for CI" (gate cards whose Approve would not pass now), "N blocked externally" and "N approved · agent on
+// it" (gate cards the operator approved that their agent carries on): none waits for you
+function HeldPills({ held, external, approved }: { held: number; external: number; approved: number }) {
   return (
     <>
+      {approved > 0 && (
+        <span
+          className="kb-held kb-carried"
+          title="gate cards you approved that their agent carries on (merging, deploying): not counted"
+        >
+          <b>{approved}</b> approved · agent on it
+        </span>
+      )}
       {held > 0 && (
         <span
           className="kb-held"
@@ -1514,6 +1527,7 @@ function FoldedSummary({
   waitingTitle,
   held,
   external,
+  approved,
   showEmpty,
   onShowEmpty,
 }: {
@@ -1523,6 +1537,7 @@ function FoldedSummary({
   waitingTitle: string;
   held: number;
   external: number;
+  approved: number;
   showEmpty: boolean;
   onShowEmpty: (v: boolean) => void;
 }) {
@@ -1532,7 +1547,7 @@ function FoldedSummary({
       <span className={`kb-waiting${waiting === 0 ? " zero" : ""}`} title={waitingTitle}>
         <b>{waiting}</b> waiting for you
       </span>
-      <HeldPills held={held} external={external} />
+      <HeldPills held={held} external={external} approved={approved} />
       {showEmpty
         ? cols.map((c) => (
             <span key={c.key} className={`kb-pill kb-c-${c.key}${c.count === 0 ? " zero" : ""}`} title={c.label}>

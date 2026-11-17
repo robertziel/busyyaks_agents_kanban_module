@@ -563,6 +563,21 @@ Newest first; a heading names the `Schema::VERSION` step when the change brought
   `idle watch: CI skipped: <why> on card N`); the other cards are still watched. It used to end the whole pass
   (`idle watch skipped: <why>`); `last_commit_at` raising still does.
 
+### Approved and carried on is not waiting for the operator (no schema step)
+
+- A card in a waiting gate the operator APPROVED (`approved_at`), whose next step is its agent's named transition
+  (`Board#agent_next(column)`: the gate's one agent way on, not back to a work column — Awaiting merge → Merge → Done on
+  `local_v4`), waits for its agent, not for the operator (`Store#carried_on?`): `Api#board` / `#boards` `waiting` and
+  `Api#waiting` `total` / `projects` leave it out and carry it as `approved` (a count on the boards; `[{slug, count,
+  cards}]` in `Api#waiting`; `since` = the approval); `Store#waiting_cards` gains `approved`, `Store#waiting_counts` `approved`; card JSON
+  `carried_on` = `{next_column, next_label, final}` | null, `waiting` false. Every `Api#waiting` card carries
+  `approved`, `approved_by`, `owner_session` and `carried_on` (`Store#carried_on_json`, the one predicate). Precedence:
+  needs_operator (a question) → waiting; blocked_external → `external`; a CI hold → `held`; no owner session → waiting
+  (nobody carries it on: "approved · no agent"); else `approved`. An unapproved card in the same gate still waits (the
+  operator's Approve in place). Leaving the gate (the agent's move, or the operator's withdraw) ends it.
+- React: `Card.carried_on` (a "✓ approved · <owner> merging" / "→ <next>" badge, `carriedOnText`), `BoardData.approved`
+  ("N approved · agent on it" beside "waiting for you").
+
 ### blocked_external is not waiting for the operator (no schema step)
 
 - A card flagged only `blocked_external` waits for the world (another card, CI, a third party), not for the operator:

@@ -119,6 +119,9 @@ module AgentsKanban
     def approval_for(from, to) = @approvals.find { |a| a.from == from && a.to == to }
     def approval_from(column) = @approvals.find { |a| a.from == column }
     def approval_into(column) = @approvals.find { |a| a.to == column }
+    # Where an agent takes an APPROVED card on from this gate: the gate's one named agent way on (not back to
+    # a work column), or nil — a gate with no such way waits for the operator whatever its card's approval.
+    def agent_next(column) = gate?(column) ? next_for_agent(column.to_s) : nil
 
     # May an agent never move a card INTO this column except through a gate? The operator-only columns — but a done
     # column on a board with no gate is open to anyone (that is how a worker finishes a card there).
