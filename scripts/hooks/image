@@ -5,9 +5,10 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-inputs=(ruby/Gemfile ruby/Gemfile.lock react/package.json react/package-lock.json
+inputs=(ruby/Gemfile ruby/Gemfile.lock react/package.json react/package-lock.json react/.npmrc
         scripts/hooks/Dockerfile scripts/hooks/entry scripts/hooks/overcommit.rb scripts/hooks/eslint scripts/hooks/gitleaks
         scripts/hooks/prettier scripts/hooks/shellcheck scripts/lint/shell-files)
+mapfile -t -O "${#inputs[@]}" inputs < <(git ls-files react/vendor)   # the vendored picomatch, file by file
 TAG="agents-kanban-hooks:$(cat "${inputs[@]}" | sha256sum | cut -c1-12)"
 
 if ! docker image inspect "$TAG" >/dev/null 2>&1; then

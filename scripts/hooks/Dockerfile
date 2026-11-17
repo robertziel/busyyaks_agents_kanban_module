@@ -5,7 +5,9 @@
 # scripts/hooks/image tags it by the hash of every input and rebuilds on change; the build context is those inputs alone.
 FROM node:22-slim AS node
 WORKDIR /deps
-COPY react/package.json react/package-lock.json ./
+# vendor/ + .npmrc: the patched picomatch the lockfile pins (react/vendor/picomatch/VENDOR.md)
+COPY react/package.json react/package-lock.json react/.npmrc ./
+COPY react/vendor ./vendor
 RUN npm ci --no-audit --no-fund
 
 FROM zricethezav/gitleaks:v8.30.1 AS gitleaks
