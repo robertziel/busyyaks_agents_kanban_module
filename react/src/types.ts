@@ -258,6 +258,9 @@ export type Card = {
   // waits for the operator NOW (the server's one rule, the same the "N waiting for you" count uses): a question open on
   // it, or in a gate and approvable now — the card face is highlighted
   waiting: boolean | null; // required: a Card built without it fails tsc (null = not decorated: no highlight)
+  // approved by the operator in a gate whose next step is its agent's: not waiting for you — where the
+  // agent takes it next (final = into the done column: it merges); null/absent = not such a card
+  carried_on?: CarriedOn | null;
   question?: string | null;
   question_html?: string | null;
   question_options?: string[] | null;
@@ -443,11 +446,13 @@ export type BoardData = {
   waiting_columns: ColumnKey[];
   listened_columns: ColumnKey[];
   // cards waiting for the operator: the waiting columns' cards that are approvable now (or ask a question) + the
-  // needs_operator cards elsewhere (server-computed); held = the gate cards waiting for CI instead; external = the cards
+  // needs_operator cards elsewhere (server-computed) — never an approved card its agent carries on (approved); held = the gate cards waiting for CI instead; external = the cards
   // only blocked_external (waiting for the world), never counted as waiting for you; flagged = needs_operator elsewhere
   waiting: number;
   held: number;
   external: number;
+  // gate cards the operator approved that their agent carries on: shown apart, never counted as waiting
+  approved: number;
   flagged: number;
   priorities: string[];
   lead?: BoardLead | null;
@@ -477,3 +482,6 @@ export type SessionBoard = {
   cards: Card[];
 };
 export type SessionBoardsData = { idle_hours: number; slug_prefix: string; session_boards: SessionBoard[] };
+
+// Card.carried_on: where its agent takes an approved gate card next (final = into the done column: it merges)
+export type CarriedOn = { next_column: ColumnKey; next_label: string; final: boolean };

@@ -276,7 +276,8 @@ module AgentsKanban
     # {slug => [card]} and the boards read for them (one batch), for the caller to reuse
     # held: {slug => [card]} — the gate cards waiting for CI (gate_hold), not for the operator; external: {slug => [card]}
     # — the cards only blocked_external (waiting for the world: another card, CI, a third party), not for the operator
-    WaitingCards = Struct.new(:by_slug, :boards, :held, :external)
+    # approved: {slug => [card]} — the gate cards the operator approved whose agent carries them on (carried_on?)
+    WaitingCards = Struct.new(:by_slug, :boards, :held, :external, :approved)
 
     # Live cards of these projects waiting for the operator: the ones flagged needs_operator (a question asked, a
     # dialog on the owner's screen) in whatever column they sit, and the cards in their boards' WAITING columns (a
@@ -291,12 +292,14 @@ module AgentsKanban
       picked = rows.select { |c| flagged?(c) || boards[c[:project_slug]].waiting.include?(c[:column]) }
       all = decorate(picked.map { |c| hydrate(c, boards[c[:project_slug]]) }, boards)
       external, rest = all.partition { |c| external?(c) }
-      held, list = rest.partition { |c| c[:gate_hold] && !flagged?(c) }
+      held, rest = rest.partition { |c| c[:gate_hold] && !flagged?(c) }
+      approved, list = rest.partition { |c| carried_on?(c, boards[c[:project_slug]], c[:gate_hold]) }
       acts = activity_t.where(card_id: list.map { |c| c[:id] }, kind: %w[move create])
         .select(:card_id, :body, :created_at)
         .all
         .group_by { |a| a[:card_id] }
       external.each { |c| c[:since] = flag_since(c) }
+      approved.each { |c| c[:since] = c[:approved_at] }
       list.each do |c|
         c[:since] = flag_since(c) ||
                     (acts[c[:id]] || []).select { |a| a[:body].end_with?(c[:column_label]) }.map { |a| a[:created_at] }.max
@@ -305,7 +308,8 @@ module AgentsKanban
         [flagged?(c) ? 0 : 1, boards[c[:project_slug]].waiting.index(c[:column]) || -1, c[:since] || 0, c[:id]]
       end
       WaitingCards.new(sorted.group_by { |c| c[:project_slug] }, boards, held.group_by { |c| c[:project_slug] },
-                       external.sort_by { |c| [c[:since], c[:id]] }.group_by { |c| c[:project_slug] })
+                       external.sort_by { |c| [c[:since], c[:id]] }.group_by { |c| c[:project_slug] },
+                       approved.sort_by { |c| [c[:since], c[:id]] }.group_by { |c| c[:project_slug] })
     end
 
     # The cross-cutting flags (SPEC § 4): a flagged card keeps its column, waits for the operator (or the world) and
@@ -320,7 +324,28 @@ module AgentsKanban
     # The one rule of "waiting for the operator" for a card (its face, the counts): a question open on it wherever it
     # sits, or it sits in a WAITING column (a gate) with nothing held (hold = Store#gate_hold's why, nil = approvable
     # now) and is not only blocked_external (that waits for the world).
-    def waits_for_operator?(c, b, hold) = needs_operator?(c) || (!external?(c) && hold.nil? && b.waiting.include?(c[:column]))
+    def waits_for_operator?(c, b, hold)
+      needs_operator?(c) || (!external?(c) && hold.nil? && !carried_on?(c, b, hold) && b.waiting.include?(c[:column]))
+    end
+
+    # Approved and carried on by its agent: a card in a waiting gate the operator approved, whose next step is
+    # an agent's named transition (Board#agent_next) — e.g. Awaiting merge after the final Approve, while its agent
+    # merges. It waits for the agent, not for the operator: counted apart (`approved`), never hidden. Precedence: a
+    # question open on it waits for the operator (needs_operator wins); blocked_external wins (`external`); a CI hold
+    # wins (`held`: CI red after the Approve says so, hold = Store#gate_hold's why); NO owner session → nobody carries it
+    # on, so it waits for the operator ("approved · no agent" on the waiting list) until a session owns it.
+    def carried_on?(c, b, hold = nil)
+      !c[:approved_at].nil? && !needs_operator?(c) && hold.nil? && !c[:owner_session].to_s.empty? &&
+        b.waiting.include?(c[:column]) && !b.agent_next(c[:column]).nil?
+    end
+
+    # card JSON `carried_on`: {next_column, next_label, final (= into the done column: its agent merges)} | nil
+    def carried_on_json(c, b, hold = c[:gate_hold])
+      return nil unless carried_on?(c, b, hold)
+
+      nxt = b.agent_next(c[:column])
+      { next_column: nxt, next_label: b.label(nxt), final: b.done?(nxt) }
+    end
 
     # The cards each OPEN registration (agent_sessions, ended_at null) on these projects' boards holds since it registered —
     # the column's type says what each is to the session (`finishes` = in the board's done column: that card is finished).
@@ -392,6 +417,9 @@ module AgentsKanban
             needs_operator: !c[:asked_at].nil?,
             gate_hold: c[:gate_hold], # waiting for CI, not for the operator (gate_hold; decorated cards only)
             waiting: c[:waiting], # waits for the operator now (waits_for_operator?: the counts' rule; decorated cards only)
+            # approved and carried on by its agent (carried_on_json: {next_column, next_label, final} | nil;
+            # decorated cards only)
+            carried_on: c[:carried_on],
             blocked: c[:blocked_at] && { reason: c[:blocked_reason], url: c[:blocked_url], by: c[:blocked_author],
                                          at: iso(c[:blocked_at]), },
             review_round: review_rounds(c)[c[:column]],
@@ -1911,7 +1939,8 @@ module AgentsKanban
     # {slug => n}: per project, the cards waiting for the operator — those in the waiting columns that ask or hold
     # nothing (gate_hold), plus the ones asking elsewhere. `held` = {slug => n} of gate cards waiting for CI, `external` =
     # {slug => n} of cards only blocked_external (external?), in any column.
-    WaitingCounts = Struct.new(:waiting, :held, :external)
+    # `approved` = {slug => n} of gate cards the operator approved whose agent carries them on (carried_on?).
+    WaitingCounts = Struct.new(:waiting, :held, :external, :approved)
 
     def waiting_counts(slugs, boards: nil)
       rows = cards.where(archived_at: nil, project_slug: slugs.to_a).all
@@ -1921,6 +1950,7 @@ module AgentsKanban
       waiting = Hash.new(0)
       held = Hash.new(0)
       external = Hash.new(0)
+      approved = Hash.new(0)
       rows.each do |r|
         if waits_for_operator?(r, boards[r[:project_slug]], holds[r[:id]])
           waiting[r[:project_slug]] += 1
@@ -1928,9 +1958,11 @@ module AgentsKanban
           external[r[:project_slug]] += 1
         elsif holds.key?(r[:id])
           held[r[:project_slug]] += 1
+        elsif carried_on?(r, boards[r[:project_slug]])
+          approved[r[:project_slug]] += 1
         end
       end
-      WaitingCounts.new(waiting, held, external)
+      WaitingCounts.new(waiting, held, external, approved)
     end
 
     # ── idle watch (config.idle_watch): CI finished and nobody acted; a live owner gone quiet ─────────────────────
@@ -2839,6 +2871,7 @@ module AgentsKanban
         b = boards[c[:project_slug]]
         c[:gate_hold] = holds[c[:id]]
         c[:waiting] = waits_for_operator?(c, b, c[:gate_hold])
+        c[:carried_on] = carried_on_json(c, b)
         c[:transitions] = b.column?(c[:column]) ? transitions_json(b, c[:column]) : []
         c[:comments] = n[c[:id]] || 0
         c[:attachments] = files[c[:id]] || 0

@@ -201,7 +201,7 @@ describe("Board", () => {
   // card #248: a gate card whose Approve would not pass now is waiting for CI, not for the operator
   it("a held gate card says why and is counted as waiting for CI, not for you", async () => {
     const cards = [
-      card({ id: 1, column: "human_check", title: "Green" }),
+      card({ id: 1, column: "human_check", title: "Green", waiting: true }),
       card({ id: 2, column: "human_check", title: "Pending", gate_hold: "PR #7: CI is still running" }),
     ];
     const api = fakeApi(boardData(coding, cards), cards);
@@ -210,6 +210,30 @@ describe("Board", () => {
     expect(screen.getByText(/waiting for you/).textContent).toMatch(/^1 waiting for you/);
     expect(screen.getByText(/waiting for CI$/).textContent).toBe("1 waiting for CI");
     expect(screen.getByText("⏳ PR #7: CI is still running")).toBeInTheDocument();
+  });
+
+  // an approved gate card its agent carries on (Awaiting merge after the final Approve) is not waiting for you
+  it("an approved gate card its agent carries on is counted apart, its face names who carries it on", async () => {
+    const f = fixture("local_v4");
+    const cards = [
+      card({ id: 1, column: "awaiting_merge", title: "Unapproved", waiting: true }),
+      card({
+        id: 2,
+        column: "awaiting_merge",
+        title: "Approved",
+        approved: "2026-11-17T00:14:40Z",
+        approved_by: "op",
+        owner_session: "shop_lead",
+        carried_on: { next_column: "done", next_label: "Done", final: true },
+        waiting: false,
+      }),
+    ];
+    render(<Host api={fakeApi(boardData(f, cards), cards)} />);
+    await screen.findByText("Approved");
+    expect(screen.getByText(/waiting for you/).textContent).toMatch(/^1 waiting for you/);
+    expect(screen.getByText(/approved · agent on it$/).textContent).toBe("1 approved · agent on it");
+    expect(screen.getByText("✓ approved · shop_lead merging")).toBeInTheDocument(); // the face's one approved badge
+    expect(screen.queryByText("✓ approved")).toBeNull();
   });
 
   // lead-first boards: no lead runs → the board says so (the operator presses Launch); unknown ≠ no lead
@@ -241,7 +265,7 @@ describe("Board", () => {
   it("a blocked_external card is counted as blocked externally, not as waiting for you", async () => {
     const blocked = { reason: "waits for card #3", url: "https://ci/1", by: "lead", at: "2026-11-11T00:00:00Z" };
     const cards = [
-      card({ id: 1, column: "human_check", title: "Green" }),
+      card({ id: 1, column: "human_check", title: "Green", waiting: true }),
       card({ id: 2, column: "doing", title: "Held back", blocked }),
       card({ id: 3, column: "human_check", title: "Gate, blocked", blocked }),
     ];
@@ -263,6 +287,7 @@ describe("Board", () => {
         question: "Which?",
         question_options: ["A", "B"],
         asked_by: "lead",
+        waiting: true,
       }),
     ];
     const api = fakeApi(boardData(coding, cards, { "--ak-ink": "rgb(1, 2, 3)" }), cards);

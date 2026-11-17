@@ -1,10 +1,14 @@
+import type { Card, CarriedOn } from "../types";
 // Quick-add text → a card: a short title plus the rest as the description, so nothing typed or pasted is lost.
 // Multi-line: first line is the title. One long line: its first sentence (or a word-boundary cut) is the title
 // and the whole text becomes the description.
 export const TITLE_MAX = 200; // the engine limit (AgentsKanban::Store::MAX_TITLE)
 const SHORT = 120;
 
-export function splitCard(text: string): { title: string; description: string } {
+export function splitCard(text: string): {
+  title: string;
+  description: string;
+} {
   const t = text.replace(/\r\n?/g, "\n").trim();
   if (!t) return { title: "", description: "" };
   const nl = t.indexOf("\n");
@@ -72,4 +76,13 @@ export function cardFaceClass(
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+// An approved gate card its agent carries on: "approved · <owner> merging" when its next step is the done
+// column, else "approved · <owner> → <next column>". The server sets carried_on only on a card a session owns, so a
+// card without an owner here is a server bug: it throws instead of naming nobody.
+export function carriedOnText(c: Pick<Card, "id" | "owner_session">, on: CarriedOn): string {
+  const who = c.owner_session;
+  if (!who) throw new Error(`card ${c.id}: carried_on without an owner session`);
+  return on.final ? `approved · ${who} merging` : `approved · ${who} → ${on.next_label}`;
 }

@@ -224,13 +224,12 @@ export function boardData(f: Fixture, cards: Card[], theme: Record<string, strin
     columns_order: f.shape.columns.map((c) => c.key),
     waiting_columns: f.board.rules.waiting,
     listened_columns: f.board.rules.listened,
-    waiting: cards.filter(
-      (c) => (f.board.rules.waiting.includes(c.column) && !c.gate_hold && !c.blocked) || c.needs_operator,
-    ).length,
-    held: cards.filter(
-      (c) => f.board.rules.waiting.includes(c.column) && !!c.gate_hold && !c.needs_operator && !c.blocked,
-    ).length,
+    // the counts read each card's own server fields (one predicate — the server's `waiting`, `gate_hold`,
+    // `blocked`, `carried_on` — never a second copy of the rule here)
+    waiting: cards.filter((c) => c.waiting === true).length,
+    held: cards.filter((c) => !!c.gate_hold && c.waiting !== true && !(c.blocked && !c.needs_operator)).length,
     external: cards.filter((c) => !!c.blocked && !c.needs_operator).length,
+    approved: cards.filter((c) => !!c.carried_on).length,
     flagged: cards.filter((c) => !f.board.rules.waiting.includes(c.column) && c.needs_operator).length,
     priorities: cfg.priorities,
     assignees: ["me"],
