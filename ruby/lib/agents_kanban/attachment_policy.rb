@@ -28,6 +28,7 @@ module AgentsKanban
       "application/zip" => [%w[zip], :zip],
       "application/gzip" => [%w[gz tgz], :gzip],
       "video/mp4" => [%w[mp4 m4v], :mp4],
+      "video/webm" => [%w[webm], :webm],
       "text/html" => [%w[html htm], :html],
       "text/plain" => [%w[txt log text], TEXT],
       "text/markdown" => [%w[md markdown], TEXT],
@@ -36,9 +37,18 @@ module AgentsKanban
       "text/yaml" => [%w[yml yaml], TEXT],
       "text/x-diff" => [%w[diff patch], TEXT],
     }.freeze
-    # Served inline (as a picture) — everything else, SVG included, is a download.
+    # Served inline: pictures (shown as an <img>) and videos (played in a <video>) — everything else, SVG included, is a
+    # download.
     INLINE_IMAGES = %w[image/png image/jpeg image/gif image/webp].freeze
+    INLINE_VIDEOS = %w[video/mp4 video/webm].freeze
+    INLINE = (INLINE_IMAGES + INLINE_VIDEOS).freeze
     TEXT_TYPES = KINDS.select { |_, (_, f)| f == TEXT }.keys.freeze
+    # WebM = an EBML header whose DocType element (id 0x4282, size 0x84) says "webm" — Matroska (.mkv) says "matroska".
+    # The header's elements (version, read version, max id / size lengths, DocType…) come in any order and may carry
+    # padding: the DocType is looked for in the first EBML_HEAD bytes.
+    EBML_HEAD = 256
+    EBML = "\x1A\x45\xDF\xA3".b
+    WEBM_DOCTYPE = "\x42\x82\x84webm".b
     MP4_BRANDS = ['isom', 'iso2', 'iso4', 'iso5', 'iso6', 'mp41', 'mp42', 'avc1', 'M4V ', 'M4VP', 'dash'].freeze
 
     SVG = /\A\s*(?:<\?xml[^>]*>\s*)?(?:<!--.*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)?(?:<!--.*?-->\s*)*<svg[\s>]/mi
@@ -138,6 +148,7 @@ module AgentsKanban
       return :zip if b.start_with?("PK\x03\x04".b, "PK\x05\x06".b)
       return :gzip if b.start_with?("\x1F\x8B".b)
       return :mp4 if b[4, 4] == "ftyp" && MP4_BRANDS.include?(b[8, 4])
+      return :webm if b.start_with?(EBML) && b[0, EBML_HEAD].include?(WEBM_DOCTYPE)
       return nil if b.include?("\x00")
 
       t = b.dup.force_encoding(Encoding::UTF_8)

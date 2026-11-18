@@ -180,6 +180,12 @@ host's own ledger records each run. Prefix `""` = the unprefixed table names (a 
 - A card face (`decorate`d card JSON) carries `media` = its newest live picture attachment `{id, filename, url}` (an
   inline image type; newest by created, then id; none → null); the React face shows it under the cover so a card is
   found by its picture.
+- Attachment JSON carries `image` (png / jpeg / gif / webp: an `<img>`) and `video` (`AttachmentPolicy::INLINE_VIDEOS`:
+  mp4 / webm, recognised by their bytes — WebM = an EBML header with DocType `webm`, Matroska is refused): both are
+  served inline (`Api#attachment_file` `inline`, `AttachmentPolicy::INLINE`); every other type only downloads. The
+  React dialog shows a video as a thumbnail (its first frame, `preload="metadata"`) with a play button; a click — or a
+  click on its file chip in rendered markdown — plays it in the lightbox with the browser's controls. The host's page
+  CSP must allow `media-src` its own origin, and the host should answer `Range` requests so the player can seek.
 - A comment claims the author's own unlinked attachments it references; deleting the comment unlinks, never deletes.
 - Pings: one pending per card + session (a burst coalesces); never to the owner's own author; `relay` when a card
   gains an owner (the operator's undelivered comments since the last agent comment).

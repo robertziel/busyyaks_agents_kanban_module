@@ -2867,11 +2867,45 @@
   outline: 2px solid rgba(var(--ak-accent-rgb), 0.7);
   outline-offset: 1px;
 }
-.ak-root .kb-thumb-img img {
+.ak-root .kb-thumb-img img,
+.ak-root .kb-thumb-img video {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+}
+/* a video thumbnail: its first frame under a play button */
+.ak-root .kb-thumb-video {
+  position: relative;
+  cursor: pointer;
+}
+.ak-root .kb-thumb-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.ak-root .kb-thumb-video video {
+  pointer-events: none;
+}
+.ak-root .kb-thumb-play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--ak-ink);
+  background: var(--ak-mat-card);
+  backdrop-filter: var(--ak-mat-blur);
+  -webkit-backdrop-filter: var(--ak-mat-blur);
+  box-shadow: var(--ak-shadow-card);
+}
+.ak-root .kb-thumb-play .ico {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
 }
 .ak-root .kb-thumb-meta {
   display: grid;
@@ -3083,7 +3117,8 @@
   min-width: 0;
   justify-items: center;
 }
-.ak-root .kb-lightbox img {
+.ak-root .kb-lightbox img,
+.ak-root .kb-lightbox video {
   max-width: 100%;
   max-height: calc(100vh - 110px);
   object-fit: contain;

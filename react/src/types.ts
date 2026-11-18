@@ -397,7 +397,8 @@ export type Attachment = {
   content_type: string;
   size: number;
   sha256: string;
-  image: boolean; // png/jpeg/gif/webp: shown inline; anything else only downloads
+  image: boolean; // png/jpeg/gif/webp: shown inline as a picture
+  video: boolean; // mp4/webm: played inline in the browser's player; anything neither image nor video only downloads
   uploaded_by: string;
   created: string;
   url: string;

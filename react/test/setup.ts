@@ -15,6 +15,33 @@ class RO {
   unobserve() {}
 }
 (globalThis as unknown as { ResizeObserver: typeof RO }).ResizeObserver = RO;
+// jsdom has no IntersectionObserver (a video thumbnail loads once it nears the viewport): every observer is kept in
+// `observers`, and a test calls `intersect()` to bring everything it watches into view.
+class IO {
+  static observers = new Set<IO>();
+  private els: Element[] = [];
+  constructor(private cb: IntersectionObserverCallback) {
+    IO.observers.add(this);
+  }
+  observe(el: Element) {
+    this.els.push(el);
+  }
+  unobserve() {}
+  disconnect() {
+    IO.observers.delete(this);
+  }
+  takeRecords() {
+    return [];
+  }
+  fire() {
+    const entries = this.els.map((target) => ({ target, isIntersecting: true }) as IntersectionObserverEntry);
+    this.cb(entries, this as unknown as IntersectionObserver);
+  }
+}
+(globalThis as unknown as { IntersectionObserver: typeof IO }).IntersectionObserver = IO;
+export function intersect() {
+  for (const o of [...IO.observers]) o.fire();
+}
 // jsdom has no PointerEvent (the board editor drags nodes and draws links with pointer events): a MouseEvent with pointerId
 if (!("PointerEvent" in globalThis)) {
   class PE extends MouseEvent {

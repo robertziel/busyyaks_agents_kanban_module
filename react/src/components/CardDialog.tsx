@@ -239,7 +239,7 @@ function CardDetail({
   const [details, setDetails] = useState(true);
   const [uploads, setUploads] = useState<{ key: number; name: string; pct: number; error?: string }[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [lightbox, setLightbox] = useState<{ url: string; name: string; a?: Attachment } | null>(null);
+  const [lightbox, setLightbox] = useState<{ url: string; name: string; a?: Attachment; video?: boolean } | null>(null);
   const picker = useRef<HTMLInputElement>(null);
   // the sticky action block's height, as the dialog's scroll-padding-bottom (kanban.css): a field focused or scrolled into
   // view is placed above the bar, never under it
@@ -383,7 +383,10 @@ function CardDetail({
   const options = c.question_options ?? [];
   const files = c.attachments;
   const pictures = files.filter((a) => a.image);
-  const others = files.filter((a) => !a.image);
+  const videos = files.filter((a) => a.video);
+  const others = files.filter((a) => !a.image && !a.video);
+  // pictures, then videos: one row of thumbnails, each opening the lightbox (a video plays there)
+  const thumbs = [...pictures, ...videos];
   const del = (a: Attachment) => void run(() => api.attachmentDelete(a.id));
   // the gate the card sits in (the handoff box is named after it); elsewhere a past handoff is shown as "Check"
   const handoffCol = gates.handoff?.columns.includes(c.column) ? c.column : null;
@@ -420,8 +423,17 @@ function CardDetail({
       }}
       onClickCapture={(e) => {
         // an attachment picture inside a description / comment opens the lightbox instead of navigating
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+        // a video's file chip plays it in the lightbox instead of downloading it
+        const chip = (e.target as HTMLElement).closest<HTMLAnchorElement>("a.kb-file-chip");
+        const vid = chip && files.find((x) => x.video && String(x.id) === chip.dataset.attachment);
+        if (vid) {
+          e.preventDefault();
+          setLightbox({ url: vid.url, name: vid.filename, a: vid, video: true });
+          return;
+        }
         const a = (e.target as HTMLElement).closest<HTMLAnchorElement>("a.kb-att-img");
-        if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+        if (!a) return;
         e.preventDefault();
         const att = files.find((x) => String(x.id) === a.dataset.attachment);
         setLightbox({
@@ -778,17 +790,26 @@ function CardDetail({
               }
             >
               <UploadChips uploads={uploads} dismiss={(k) => setUploads((u) => u.filter((x) => x.key !== k))} />
-              {pictures.length > 0 && (
+              {thumbs.length > 0 && (
                 <ul className="kb-thumbs">
-                  {pictures.map((a) => (
+                  {thumbs.map((a) => (
                     <li key={a.id} className="kb-thumb" data-attachment={a.id}>
                       <button
                         type="button"
-                        className="kb-thumb-img"
-                        onClick={() => setLightbox({ url: a.url, name: a.filename, a })}
-                        aria-label={`Open ${a.filename}`}
+                        className={`kb-thumb-img${a.video ? " kb-thumb-video" : ""}`}
+                        onClick={() => setLightbox({ url: a.url, name: a.filename, a, video: a.video })}
+                        aria-label={a.video ? `Play ${a.filename}` : `Open ${a.filename}`}
                       >
-                        <img src={a.url} alt={a.filename} loading="lazy" />
+                        {a.video ? (
+                          <>
+                            <VideoThumb url={a.url} />
+                            <span className="kb-thumb-play" aria-hidden="true">
+                              <KbIcon name="play" />
+                            </span>
+                          </>
+                        ) : (
+                          <img src={a.url} alt={a.filename} loading="lazy" />
+                        )}
                       </button>
                       <div className="kb-thumb-meta">
                         <span className="kb-att-name" title={a.filename}>
@@ -1271,7 +1292,45 @@ function CardDetail({
   );
 }
 
-function Lightbox({ url, name, a, onClose }: { url: string; name: string; a?: Attachment; onClose: () => void }) {
+// A video's thumbnail = its own first frame, fetched only once the thumbnail nears the viewport (a picture's
+// loading="lazy" for <video>, which has none): until then an empty box, so a card with several videos fetches none of
+// them on open. `#t=0.1` asks for the frame at 0.1 s, which browsers that paint no frame on preload="metadata" (Safari,
+// iOS) then show instead of a blank box.
+function VideoThumb({ url }: { url: string }) {
+  const box = useRef<HTMLSpanElement>(null);
+  const [near, setNear] = useState(false);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || near) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) setNear(true);
+      },
+      { rootMargin: "200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [near]);
+  return (
+    <span ref={box} className="kb-thumb-frame">
+      {near && <video src={`${url}#t=0.1`} preload="metadata" muted playsInline tabIndex={-1} aria-hidden="true" />}
+    </span>
+  );
+}
+
+function Lightbox({
+  url,
+  name,
+  a,
+  video,
+  onClose,
+}: {
+  url: string;
+  name: string;
+  a?: Attachment;
+  video?: boolean;
+  onClose: () => void;
+}) {
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => close.current?.focus(), []);
   return (
@@ -1291,7 +1350,12 @@ function Lightbox({ url, name, a, onClose }: { url: string; name: string; a?: At
       }}
     >
       <figure>
-        <img src={url} alt={name} />
+        {video ? (
+          // the browser's own player; Esc still closes the lightbox (the figure's key handler)
+          <video src={url} controls autoPlay playsInline aria-label={name} />
+        ) : (
+          <img src={url} alt={name} />
+        )}
         <figcaption>
           <span className="kb-att-name">{name}</span>
           {a && (
@@ -1303,7 +1367,13 @@ function Lightbox({ url, name, a, onClose }: { url: string; name: string; a?: At
           <a className="btn small" href={a ? a.download_url : `${url}/download`} download>
             <KbIcon name="download" /> Download
           </a>
-          <button ref={close} type="button" className="btn small" onClick={onClose} aria-label="Close picture">
+          <button
+            ref={close}
+            type="button"
+            className="btn small"
+            onClick={onClose}
+            aria-label={video ? "Close video" : "Close picture"}
+          >
             ✕
           </button>
         </figcaption>

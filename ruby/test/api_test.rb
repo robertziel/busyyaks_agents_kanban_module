@@ -278,6 +278,18 @@ class ApiTest < Minitest::Test
     assert_match(/was deleted/, @api.attachment_file(aid)[1][:error])
   end
 
+  def test_a_video_is_served_inline
+    policy = AgentsKanban::AttachmentPolicy.new(max_bytes: 200, types: "video/mp4")
+    att = AgentsKanban::Attachments.new(kb, root: @root, policy: policy, clock: -> { @now })
+    api = AgentsKanban::Api.new(store: kb, attachments: att, markdown: md, projects: ->(s) { @projects[s] })
+    id = kb.create(slug: "g/r", title: "T", by: "op")
+    s, j = api.attach(id, filename: "rec.mp4", io: StringIO.new(MP4), by: "op")
+    assert_equal [201, "video/mp4", true, false], [s, *j[:attachment].values_at(:content_type, :video, :image)]
+    aid = j[:attachment][:id]
+    assert api.attachment_file(aid)[1][:inline]
+    refute api.attachment_file(aid, download: true)[1][:inline]
+  end
+
   class FakeLauncher
     attr_reader :started
     attr_accessor :fail
