@@ -194,12 +194,79 @@
 .ak-root .kb-board {
   min-width: 0;
 }
+/* the board header, one grid: every control one height (--kb-ctl) on one row pitch (--kb-ctl + --kb-gap);
+   the summary rows over the filter row, the tools (live · Archived · Workflow · ?) at the filter row's right end */
 .ak-root .kb-head {
+  --kb-ctl: 28px;
+  --kb-gap: 6px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) fit-content(40%);
+  grid-template-areas:
+    "sum sum"
+    "filter tools";
+  gap: var(--kb-gap);
+  align-items: start;
+  margin: 6px 0 10px;
+}
+.ak-root .kb-head > .kb-sum {
+  grid-area: sum;
+}
+.ak-root .kb-head > .kb-filter {
+  grid-area: filter;
+  margin: 0;
+}
+.ak-root .kb-head > .kb-tools {
+  grid-area: tools;
   display: flex;
-  gap: 8px;
-  align-items: center;
   flex-wrap: wrap;
-  margin: 6px 0 6px;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--kb-gap);
+  min-width: 0;
+}
+/* the one control height: summary pills, tools, filter controls */
+.ak-root .kb-head .kb-sum > *,
+.ak-root .kb-head .kb-tools > .btn,
+.ak-root .kb-head .kb-filter > .sel-btn,
+.ak-root .kb-head .kb-filter > input.kb-q,
+.ak-root .kb-head .kb-flabels > .kb-lchip {
+  box-sizing: border-box;
+  height: var(--kb-ctl);
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.ak-root .kb-head .kb-sum > :is(.kb-held, .kb-stale) {
+  line-height: var(--kb-ctl);
+}
+.ak-root .kb-head .kb-tools > .kb-live,
+.ak-root .kb-head .kb-fcount {
+  min-height: var(--kb-ctl);
+  align-items: center;
+}
+/* the square tool: one control wide */
+.ak-root .kb-head .kb-tools > .kb-help {
+  display: inline-flex;
+  align-items: center;
+  width: var(--kb-ctl);
+  padding: 0;
+  justify-content: center;
+}
+/* the Workflow tool: its square chunk of the tree, then its label (the operator: keep the "Workflow" label) */
+.ak-root .kb-head .kb-tools > .kb-wf-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 2px;
+}
+/* narrow: one column in reading order — the summary, the filter, the tools one row at its end */
+@media (max-width: 760px) {
+  .ak-root .kb-head {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "sum"
+      "filter"
+      "tools";
+  }
 }
 .ak-root .kb-head h1 {
   margin: 0;
@@ -5199,4 +5266,28 @@
   .ak-root li.kb-agent-live.leaving {
     display: none;
   }
+}
+
+/* the header's Workflow button: a small square with a chunk of the board's real workflow tree (WorkflowMini) — the
+   editor's own drawing (its kb-be-* classes) through a square window on the start of the flow; lines and outlines
+   keep a visible width at that scale */
+.ak-root .kb-wf-btn {
+  border-radius: var(--ak-radius-ctl-sm);
+}
+.ak-root .kb-wf-mini {
+  display: block;
+  flex: none;
+  pointer-events: none; /* a picture: the button is the one target (no editor grab / pointer cursors) */
+}
+.ak-root .kb-wf-mini .kb-be-edge .kb-be-line,
+.ak-root .kb-wf-mini .kb-be-box,
+.ak-root .kb-wf-mini .kb-be-tile,
+.ak-root .kb-wf-mini .kb-be-junction,
+.ak-root .kb-wf-mini .kb-be-ebox,
+.ak-root .kb-wf-mini .kb-be-bbox {
+  vector-effect: non-scaling-stroke;
+  stroke-width: 0.8;
+}
+.ak-root .kb-wf-mini .kb-be-box {
+  filter: none;
 }

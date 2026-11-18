@@ -80,11 +80,11 @@ const TYPE_ICON: Record<ColumnTypeKey, string> = {
   cancelled: "M8 1.8a6.2 6.2 0 1 0 0.01 0z M5.8 5.8l4.4 4.4 M10.2 5.8l-4.4 4.4",
 };
 // a question mark: the glyph of a type the editor has no icon for
-const UNKNOWN_ICON = "M5.8 6a2.2 2.2 0 1 1 3.2 2c-.7.4-1 .9-1 1.6 M8 12.2v.1";
+export const UNKNOWN_ICON = "M5.8 6a2.2 2.2 0 1 1 3.2 2c-.7.4-1 .9-1 1.6 M8 12.2v.1";
 // the icon a column's type draws; none = a type the engine's fixed set does not have — the card says so (never a blank card)
-const iconOf = (type: string): string | undefined => (TYPE_ICON as Record<string, string | undefined>)[type];
+export const iconOf = (type: string): string | undefined => (TYPE_ICON as Record<string, string | undefined>)[type];
 // the pill a card carries: its type's status, or the error for a type the editor cannot draw
-const cardBadge = (c: BoardColumnDef, t: ColumnType | undefined): string | null =>
+export const cardBadge = (c: BoardColumnDef, t: ColumnType | undefined): string | null =>
   iconOf(c.type) && t ? typeBadge(t) : `unknown type: ${c.type}`;
 
 const clone = (s: BoardShape): BoardShape => ({

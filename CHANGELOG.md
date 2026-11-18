@@ -8,6 +8,11 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Added
 
+- **Workflow miniature**: the board header's Workflow button shows a small square icon (24 px, the button one header
+  control high) before its "Workflow" label: a chunk of the board's real workflow tree, for illustration — the editor's
+  own drawing (`layoutGraph`: the column cards with their type tiles, the arrows) through a square window on the
+  board's first two columns (`miniCrop`); its title gives the counts. `WorkflowMini`, `miniCrop`, `miniLayout`,
+  `MINI_PX` (24) exported.
 - **Approved and carried on**: a gate card the operator approved whose next step is its agent's named transition
   (Awaiting merge after the final Approve) no longer counts as waiting for the operator. The boards, `Api#waiting` and
   `Store#waiting_counts` / `#waiting_cards` carry it apart as `approved`; card JSON `carried_on`; `Board#agent_next`;
@@ -64,6 +69,10 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Changed
 
+- **Board header, one grid**: summary pills, tools and filter controls share one height (28 px) on one row pitch; the
+  summary rows sit over the filter row and the tools (live · Archived · Workflow · ?) end that row. Under 760 px it is
+  one column: summary, filter, tools on one row. DOM (Tab) order = reading order: summary, filter, tools. The filter
+  (`.kb-filter`) and the new `.kb-tools` are children of `.kb-head`; the header's `.spacer` is gone.
 - **The idle watch skips only the card whose PR the `ci:` port cannot answer**: `[id, "CI skipped: <why>"]`
   for that card, the others still pinged — one bad assignment no longer silences the watch for every project.
 
