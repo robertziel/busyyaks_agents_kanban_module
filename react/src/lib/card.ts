@@ -86,3 +86,35 @@ export function carriedOnText(c: Pick<Card, "id" | "owner_session">, on: Carried
   if (!who) throw new Error(`card ${c.id}: carried_on without an owner session`);
   return on.final ? `approved · ${who} merging` : `approved · ${who} → ${on.next_label}`;
 }
+
+// Bring an activity entry into view and focus it (a screen reader hears where it landed): centred, or its top at the
+// top when it is taller than half its scroll box (centring a tall comment hides its header). Instant, never smooth: the
+// lazily loaded pictures of the entries above it load as the dialog scrolls past them and push the target down, so
+// every size change of its list re-aligns it for JUMP_SETTLE_MS — until the reader acts (wheel, touch, a key, a
+// pointer). A picture that loads later than that no longer moves the view. Returns the stop (also run on unmount and
+// before the next jump).
+export const JUMP_SETTLE_MS = 5000;
+const JUMP_STOPS = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+export function jumpTo(el: HTMLElement): () => void {
+  let box: HTMLElement | null = el.parentElement;
+  while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
+  const align = () => {
+    const view = box ? box.clientHeight : window.innerHeight;
+    el.scrollIntoView({
+      block: el.getBoundingClientRect().height > view / 2 ? "start" : "center",
+      behavior: "instant",
+    });
+  };
+  align();
+  el.focus({ preventScroll: true });
+  const ro = new ResizeObserver(align);
+  if (el.parentElement) ro.observe(el.parentElement);
+  const stop = () => {
+    ro.disconnect();
+    clearTimeout(t);
+    for (const k of JUMP_STOPS) window.removeEventListener(k, stop, true);
+  };
+  const t = setTimeout(stop, JUMP_SETTLE_MS);
+  for (const k of JUMP_STOPS) window.addEventListener(k, stop, { capture: true, passive: true });
+  return stop;
+}

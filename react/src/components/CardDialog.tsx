@@ -8,9 +8,9 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type MutableRefObject, type ReactNode } from "react";
 import { errMsg } from "../api";
 import { colLabel as labelOf, useFaceType, useKanbanHost } from "../host";
-import { dragHasFiles, filesOf, formatBytes } from "../lib/attachments";
+import { commentOf, dragHasFiles, eventFiles, filesOf, formatBytes, newestFirst } from "../lib/attachments";
 import { dueLabel, dueState, fromLocalInput, ownerSessionAllowed, toLocalInput } from "../lib/board";
-import { activityAnchor, activityAnchorId, jumpNeedsDetails, SPOKEN } from "../lib/card";
+import { activityAnchor, activityAnchorId, jumpNeedsDetails, jumpTo, SPOKEN } from "../lib/card";
 import { useFetch } from "../lib/fetch";
 import { isoAt } from "../lib/format";
 import { pingLine } from "../lib/listen";
@@ -262,12 +262,13 @@ function CardDetail({
     if (!jump) return;
     const el = document.getElementById(activityAnchorId(jump.id));
     if (!el) return;
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    const stop = jumpTo(el);
     el.classList.remove("kb-glow");
     void el.offsetWidth; // restart the animation on a second click
     el.classList.add("kb-glow");
     const t = window.setTimeout(() => el.classList.remove("kb-glow"), 2200);
     return () => {
+      stop();
       window.clearTimeout(t);
       el.classList.remove("kb-glow");
     };
@@ -362,7 +363,14 @@ function CardDetail({
       () => setCopied("Copy refused by the browser"),
     );
   };
-  const comments = [...data.activity].reverse().filter((e) => details || SPOKEN.has(e.kind));
+  const files = c.attachments;
+  const pictures = files.filter((a) => a.image);
+  // one row of miniatures, the latest first; each file shown in the timeline where it was added: in its comment, or
+  // (in no comment) on its "attached" event, which is then always shown. Declared before `comments`, which reads them.
+  const strip = newestFirst(files);
+  const inComment = commentOf(files, data.activity);
+  const evFiles = eventFiles(files, data.activity, inComment);
+  const comments = [...data.activity].reverse().filter((e) => details || SPOKEN.has(e.kind) || evFiles.has(e.id));
   const liveSessions = live.value?.sessions;
   const dots = liveDots(
     comments.filter((e) => e.kind === "comment"),
@@ -381,12 +389,6 @@ function CardDetail({
   const assigneeHere = present.find((p) => p.agent === c.assignee);
   const press = (key: string) => void run(() => api.dialogAnswer(id, key));
   const options = c.question_options ?? [];
-  const files = c.attachments;
-  const pictures = files.filter((a) => a.image);
-  const videos = files.filter((a) => a.video);
-  const others = files.filter((a) => !a.image && !a.video);
-  // pictures, then videos: one row of thumbnails, each opening the lightbox (a video plays there)
-  const thumbs = [...pictures, ...videos];
   const del = (a: Attachment) => void run(() => api.attachmentDelete(a.id));
   // the gate the card sits in (the handoff box is named after it); elsewhere a past handoff is shown as "Check"
   const handoffCol = gates.handoff?.columns.includes(c.column) ? c.column : null;
@@ -790,78 +792,18 @@ function CardDetail({
               }
             >
               <UploadChips uploads={uploads} dismiss={(k) => setUploads((u) => u.filter((x) => x.key !== k))} />
-              {thumbs.length > 0 && (
-                <ul className="kb-thumbs">
-                  {thumbs.map((a) => (
-                    <li key={a.id} className="kb-thumb" data-attachment={a.id}>
-                      <button
-                        type="button"
-                        className={`kb-thumb-img${a.video ? " kb-thumb-video" : ""}`}
-                        onClick={() => setLightbox({ url: a.url, name: a.filename, a, video: a.video })}
-                        aria-label={a.video ? `Play ${a.filename}` : `Open ${a.filename}`}
-                      >
-                        {a.video ? (
-                          <>
-                            <VideoThumb url={a.url} />
-                            <span className="kb-thumb-play" aria-hidden="true">
-                              <KbIcon name="play" />
-                            </span>
-                          </>
-                        ) : (
-                          <img src={a.url} alt={a.filename} loading="lazy" />
-                        )}
-                      </button>
-                      <div className="kb-thumb-meta">
-                        <span className="kb-att-name" title={a.filename}>
-                          {a.filename}
-                        </span>
-                        <span className="muted">
-                          {formatBytes(a.size)} · {a.uploaded_by} · {isoAt(a.created)}
-                        </span>
-                        <span className="kb-att-acts">
-                          <a href={a.download_url} download className="linklike">
-                            Download
-                          </a>
-                          <span aria-hidden="true">·</span>
-                          <ConfirmButton label="Delete" confirm="Delete?" onConfirm={() => del(a)} />
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {others.length > 0 && (
-                <ul className="kb-files">
-                  {others.map((a) => (
-                    <li key={a.id} data-attachment={a.id}>
-                      <span className="kb-file-ico" aria-hidden="true">
-                        <KbIcon name="file" />
-                        <b>{a.filename.split(".").pop()?.slice(0, 4)}</b>
-                      </span>
-                      <span className="kb-file-main">
-                        <a href={a.download_url} download className="kb-att-name" title={a.filename}>
-                          {a.filename}
-                        </a>
-                        <span className="muted">
-                          {formatBytes(a.size)} · {a.uploaded_by} · {isoAt(a.created)}
-                        </span>
-                      </span>
-                      <span className="kb-att-acts">
-                        <a
-                          href={a.download_url}
-                          download
-                          className="btn small kb-ico-btn"
-                          aria-label={`Download ${a.filename}`}
-                          title="Download"
-                        >
-                          <KbIcon name="download" />
-                        </a>
-                        <ConfirmButton label="Delete" confirm="Delete?" onConfirm={() => del(a)} />
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <ul className="kb-att-row" aria-label="Attachments, newest first">
+                {strip.map((a, i) => (
+                  <AttachmentTile
+                    key={a.id}
+                    a={a}
+                    latest={i === 0}
+                    comment={inComment.get(a.id)}
+                    open={() => setLightbox({ url: a.url, name: a.filename, a, video: a.video })}
+                    del={() => del(a)}
+                  />
+                ))}
+              </ul>
             </Section>
           )}
 
@@ -953,6 +895,7 @@ function CardDetail({
                     className={`c q${e.kind === "answer" ? " a" : ""}`}
                     key={e.id}
                     id={activityAnchorId(e.id)}
+                    tabIndex={-1}
                     data-question={e.id}
                   >
                     <Avatar name={e.author} email={e.author} type={typeOf(e.author)} mood={moods.get(e.id)} />
@@ -969,7 +912,7 @@ function CardDetail({
                     </div>
                   </li>
                 ) : e.kind === "comment" ? (
-                  <li className="c" key={e.id} id={activityAnchorId(e.id)} data-comment={e.id}>
+                  <li className="c" key={e.id} id={activityAnchorId(e.id)} tabIndex={-1} data-comment={e.id}>
                     <Avatar name={e.author} email={e.author} type={typeOf(e.author)} mood={moods.get(e.id)} />
                     <div className="kb-cbody">
                       <div className="kb-ameta">
@@ -1044,8 +987,26 @@ function CardDetail({
                       )}
                     </div>
                   </li>
+                ) : evFiles.has(e.id) ? (
+                  <li className="ev" key={e.id} id={activityAnchorId(e.id)} tabIndex={-1} data-attachment-event={e.id}>
+                    <Avatar name={e.author} email={e.author} type={typeOf(e.author)} />
+                    <span>
+                      <b>{e.author}</b> <span className="kb-ev">{e.kind}</span> {e.body}{" "}
+                      <span className="muted">{isoAt(e.at)}</span>
+                    </span>
+                    <ul className="kb-att-row kb-att-row-ev">
+                      <AttachmentTile
+                        a={evFiles.get(e.id)!}
+                        open={() => {
+                          const a = evFiles.get(e.id)!;
+                          setLightbox({ url: a.url, name: a.filename, a, video: a.video });
+                        }}
+                        del={() => del(evFiles.get(e.id)!)}
+                      />
+                    </ul>
+                  </li>
                 ) : (
-                  <li className="ev" key={e.id} id={activityAnchorId(e.id)}>
+                  <li className="ev" key={e.id} id={activityAnchorId(e.id)} tabIndex={-1}>
                     <Avatar name={e.author} email={e.author} type={typeOf(e.author)} />
                     <span>
                       <b>{e.author}</b> <span className="kb-ev">{e.kind}</span> {e.body}{" "}
@@ -1287,8 +1248,89 @@ function CardDetail({
           </div>
         </aside>
       </div>
-      {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} />}
+      {lightbox && (
+        <Lightbox
+          {...lightbox}
+          onClose={() => setLightbox(null)}
+          deleteConfirm={deleteConfirm(lightbox.a && inComment.get(lightbox.a.id))}
+          onDelete={
+            lightbox.a && files.some((x) => x.id === lightbox.a?.id)
+              ? () => {
+                  const a = lightbox.a;
+                  setLightbox(null);
+                  if (a) del(a);
+                }
+              : undefined
+          }
+        />
+      )}
     </article>
+  );
+}
+
+// One miniature of the attachments strip: a picture or a video opens the lightbox (a video plays there; Download /
+// Delete there), a file downloads.
+// The caption names the file (cut to the tile's width; the whole name in the hover and the accessible names), says when
+// it came and links the comment that shows it (a jump in this dialog).
+function AttachmentTile({
+  a,
+  latest,
+  comment,
+  open,
+  del,
+}: {
+  a: Attachment;
+  latest?: boolean;
+  comment?: number;
+  open: () => void;
+  del: () => void;
+}) {
+  const meta = `${a.filename} · ${formatBytes(a.size)} · ${a.uploaded_by} · ${isoAt(a.created)}`;
+  return (
+    <li className={`kb-tile${latest ? " latest" : ""}`} data-attachment={a.id} title={meta}>
+      {a.image ? (
+        <button type="button" className="kb-tile-img" onClick={open} aria-label={`Open ${a.filename}`}>
+          <img src={a.url} alt={a.filename} loading="lazy" />
+        </button>
+      ) : a.video ? (
+        <button type="button" className="kb-tile-img kb-tile-video" onClick={open} aria-label={`Play ${a.filename}`}>
+          <VideoThumb url={a.url} />
+          <span className="kb-tile-play" aria-hidden="true">
+            <KbIcon name="play" />
+          </span>
+        </button>
+      ) : (
+        <a href={a.download_url} download className="kb-tile-img kb-tile-file" aria-label={`Download ${a.filename}`}>
+          <KbIcon name="file" />
+          <b>{a.filename.split(".").pop()?.slice(0, 4)}</b>
+        </a>
+      )}
+      <span className="kb-tile-cap">
+        <span className="kb-tile-name">{a.filename}</span>
+        <span className="mono">{isoAt(a.created).slice(5)}</span>
+        <span className="kb-tile-acts">
+          {latest && <span className="kb-tile-new">latest</span>}
+          {comment != null && (
+            <a
+              href={`#${activityAnchorId(comment)}`}
+              className="linklike"
+              title={`comment #${comment}`}
+              aria-label={`Show comment ${comment} for ${a.filename}`}
+            >
+              comment
+            </a>
+          )}
+          {!a.image && !a.video && (
+            <ConfirmButton
+              label="✕"
+              ariaLabel={`Delete ${a.filename}`}
+              confirm={deleteConfirm(comment)}
+              onConfirm={del}
+            />
+          )}
+        </span>
+      </span>
+    </li>
   );
 }
 
@@ -1312,10 +1354,15 @@ function VideoThumb({ url }: { url: string }) {
     return () => io.disconnect();
   }, [near]);
   return (
-    <span ref={box} className="kb-thumb-frame">
+    <span ref={box} className="kb-tile-frame">
       {near && <video src={`${url}#t=0.1`} preload="metadata" muted playsInline tabIndex={-1} aria-hidden="true" />}
     </span>
   );
+}
+
+// The delete confirm: a comment that shows the file keeps its markdown, so it shows a broken picture / link after — say so.
+function deleteConfirm(comment: number | undefined): string {
+  return comment == null ? "Delete?" : `Delete? comment #${comment} keeps a broken link`;
 }
 
 function Lightbox({
@@ -1324,12 +1371,16 @@ function Lightbox({
   a,
   video,
   onClose,
+  onDelete,
+  deleteConfirm: confirmText = "Delete?",
 }: {
   url: string;
   name: string;
   a?: Attachment;
   video?: boolean;
   onClose: () => void;
+  onDelete?: () => void;
+  deleteConfirm?: string;
 }) {
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => close.current?.focus(), []);
@@ -1367,6 +1418,7 @@ function Lightbox({
           <a className="btn small" href={a ? a.download_url : `${url}/download`} download>
             <KbIcon name="download" /> Download
           </a>
+          {onDelete && <ConfirmButton label="Delete" confirm={confirmText} onConfirm={onDelete} />}
           <button
             ref={close}
             type="button"
@@ -1391,11 +1443,21 @@ function SideBtn({ icon, label, on, onClick }: { icon: IconName; label: string; 
   );
 }
 
-function ConfirmButton({ label, confirm, onConfirm }: { label: string; confirm: string; onConfirm: () => void }) {
+function ConfirmButton({
+  label,
+  ariaLabel,
+  confirm,
+  onConfirm,
+}: {
+  label: string;
+  ariaLabel?: string;
+  confirm: string;
+  onConfirm: () => void;
+}) {
   const [ask, setAsk] = useState(false);
   if (!ask)
     return (
-      <button type="button" className="linklike" onClick={() => setAsk(true)}>
+      <button type="button" className="linklike" aria-label={ariaLabel} onClick={() => setAsk(true)}>
         {label}
       </button>
     );

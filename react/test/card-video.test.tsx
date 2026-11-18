@@ -112,7 +112,10 @@ describe("video attachments", () => {
     expect(v?.getAttribute("src")).toBe("/api/attachments/2#t=0.1");
     expect(v?.getAttribute("preload")).toBe("metadata");
     expect(screen.getByLabelText("Open shot.png")).toBeInTheDocument();
-    expect(document.querySelectorAll(".kb-files > li")).toHaveLength(1); // build.log only
+    // only build.log is a download tile; the video plays, it is no download link
+    expect(screen.getByLabelText("Download build.log")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Download rec.webm")).toBeNull();
+    expect(document.querySelectorAll(".kb-att-row a[download]")).toHaveLength(1);
   });
 
   it("clicking the thumbnail plays it in the lightbox with controls; Esc closes it", async () => {

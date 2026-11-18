@@ -43,13 +43,18 @@ module AgentsKanban
       @attachment_url_prefix = attachment_url_prefix
       @att_src = %r{\A#{Regexp.escape(attachment_url_prefix)}/(\d+)\z}
       @file_link = %r{<a href="#{Regexp.escape(attachment_url_prefix)}/(\d+)/download"(?:\s+title="[^"]*")?>}
+      @pic = %r{<a class="kb-att-img" href="[^"]*" data-attachment="\d+"><img [^>]*></a>}
+      gap = %r{(?:\s|<br\s*/?>)*}
+      pic_para = %r{<p>#{gap}(?:#{@pic}#{gap})+</p>}
+      @pic_paras = %r{#{pic_para}(?:\s*#{pic_para})+}
+      @pic_run = %r{#{@pic}(?:#{gap}#{@pic})*}
     end
 
     # Kanban descriptions and comments: render + @name mentions wrapped in <span class="mention"> (not inside code/pre/a),
     # attachment pictures and file chips, wide tables zoomed out.
     def card(md)
       head, rest = comment_head(md.to_s)
-      dense_tables(mentions(attachments(head + render(slack_fences(rest)))))
+      dense_tables(mentions(strips(attachments(head + render(slack_fences(rest))))))
     end
 
     # [header html, the markdown after it]: "" and md itself when md does not open with a review header.
@@ -151,6 +156,17 @@ module AgentsKanban
         id = Regexp.last_match(1)
         %(<a class="kb-file-chip" href="#{p}/#{id}/download" data-attachment="#{id}" download>)
       end
+    end
+
+    # A run of attachment pictures (two or more, one per line or one per paragraph: an agent's screenshots) becomes ONE
+    # row of miniatures, <span class="kb-att-strip">, which the dialog scrolls sideways; a lone picture stays a preview.
+    # Image-only paragraphs next to each other are merged first, so a picture per paragraph is one run too.
+    def strips(html)
+      html.gsub(@pic_paras) { "<p>#{Regexp.last_match(0).scan(@pic).join("\n")}</p>" }
+          .gsub(@pic_run) do |run|
+            pics = run.scan(@pic)
+            pics.size < 2 ? run : %(<span class="kb-att-strip">#{pics.join}</span>)
+          end
     end
 
     def mentions(html)
