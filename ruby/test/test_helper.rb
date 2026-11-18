@@ -87,6 +87,10 @@ module KanbanTest
 end
 
 PNG = "\x89PNG\r\n\x1A\n\x00\x00\x00\rIHDR".b + ("\x00".b * 40)
+MP4 = "\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2".b + ("\x00".b * 40)
+# an EBML header with DocType "webm" (MKV = the same header saying "matroska")
+WEBM = "\x1A\x45\xDF\xA3\x9F\x42\x86\x81\x01\x42\xF7\x81\x01\x42\x82\x84webm\x42\x87\x81\x04".b + ("\x00".b * 40)
+MKV = "\x1A\x45\xDF\xA3\xA3\x42\x86\x81\x01\x42\xF7\x81\x01\x42\x82\x88matroska\x42\x87\x81\x04".b + ("\x00".b * 40)
 JPEG = "\xFF\xD8\xFF\xE0\x00\x10JFIF".b + ("\x00".b * 20)
 
 # The Store's approval-gate port: answers every approval step with `answer` (green by default); `down` raises Unavailable.

@@ -567,13 +567,13 @@ module AgentsKanban
       end
     end
 
-    # The bytes to serve: [200, {path:, row:, inline:}] (inline = a picture may render in the browser) or 404.
+    # The bytes to serve: [200, {path:, row:, inline:}] (inline = a picture or a video may render in the browser) or 404.
     def attachment_file(id, download: false)
       a = @attachments.find(id) or return not_found("no attachment #{id}")
       return not_found("attachment #{a[:id]} was deleted") if a[:deleted_at]
 
       path = @attachments.path!(a)
-      [200, { path: path, row: a, inline: !download && AttachmentPolicy::INLINE_IMAGES.include?(a[:content_type]) }]
+      [200, { path: path, row: a, inline: !download && AttachmentPolicy::INLINE.include?(a[:content_type]) }]
     rescue Invalid => e
       not_found(e.message)
     end

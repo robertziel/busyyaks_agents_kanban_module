@@ -8,6 +8,11 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Added
 
+- **Video player in attachments**: mp4 and webm attachments (`video/webm` is a new allowlist type, recognised by its
+  EBML header's `webm` DocType; Matroska is refused) carry `video: true` in the attachment JSON and are served inline
+  (`AttachmentPolicy::INLINE_VIDEOS`, `INLINE`). The card dialog shows each as a first-frame thumbnail with a play
+  button; a click, or a click on its file chip in a comment, plays it in the lightbox with the browser's controls. A
+  host's page CSP needs `media-src 'self'`; answering `Range` lets the player seek.
 - **Workflow miniature**: the board header's Workflow button shows a small square icon (24 px, the button one header
   control high) before its "Workflow" label: a chunk of the board's real workflow tree, for illustration — the editor's
   own drawing (`layoutGraph`: the column cards with their type tiles, the arrows) through a square window on the

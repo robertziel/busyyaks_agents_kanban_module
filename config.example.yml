@@ -17,7 +17,7 @@ priorities: [high, medium, low]
 label_colors: [green, yellow, orange, red, purple, blue, teal, pink, gray]
 # who signs the engine's own activity entries ("session dialog", "watchdog", "ping") and prefixes its pings: "[<system_author>] …"
 system_author: kanban
-# the host's route that serves attachment bytes: "<prefix>/<id>" (a picture, inline) and "<prefix>/<id>/download"
+# the host's route that serves attachment bytes: "<prefix>/<id>" (a picture or a video, inline) and "<prefix>/<id>/download"
 attachment_url_prefix: /api/attachments
 # the commands that START an agent session. `command` = a program, or a bash function of the host's profile run
 # through `bash -ic` when via_shell. `kind` = the CLI family the command is (Launch::KINDS), which decides how the

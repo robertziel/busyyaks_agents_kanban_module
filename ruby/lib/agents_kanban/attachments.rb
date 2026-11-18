@@ -30,12 +30,14 @@ module AgentsKanban
       raise KeyError, "attachments root is empty" if @root.strip.empty?
     end
 
-    # The one JSON shape (API + MCP). url = the inline view (images) / the file; download_url always downloads.
+    # The one JSON shape (API + MCP). url = the inline view (images, videos) / the file; download_url always downloads.
+    # image: shown as a picture; video: played in the browser's own player.
     def self.json(a, prefix:)
       image = AttachmentPolicy::INLINE_IMAGES.include?(a[:content_type])
+      video = AttachmentPolicy::INLINE_VIDEOS.include?(a[:content_type])
       created = a[:created_at] && Time.at(a[:created_at]).iso8601
       { id: a[:id], card_id: a[:card_id], comment_id: a[:activity_id], filename: a[:filename], content_type: a[:content_type],
-        size: a[:size], sha256: a[:sha256], image: image, uploaded_by: a[:uploaded_by], created: created,
+        size: a[:size], sha256: a[:sha256], image: image, video: video, uploaded_by: a[:uploaded_by], created: created,
         url: "#{prefix}/#{a[:id]}", download_url: "#{prefix}/#{a[:id]}/download", markdown: snippet(a, prefix: prefix), }
     end
 

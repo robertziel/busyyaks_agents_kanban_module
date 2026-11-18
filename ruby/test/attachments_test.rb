@@ -24,6 +24,21 @@ class AttachmentPolicyTest < Minitest::Test
     assert_nil P.detect("\x00\x01\x02binary".b)
   end
 
+  def test_videos_are_recognised_by_their_bytes
+    p = policy("video/mp4,video/webm")
+    assert_equal "video/mp4", p.check!("rec.mp4", MP4)
+    assert_equal "video/webm", p.check!("rec.webm", WEBM)
+    assert_nil P.detect(MKV), "a Matroska file is no WebM"
+    late = "\x1A\x45\xDF\xA3".b + ("\xEC\x80".b * 60) + "\x42\x82\x84webm".b # Void padding before the DocType
+    assert_operator late.index("webm"), :>, 64
+    assert_equal :webm, P.detect(late)
+    assert_nil P.detect("\x1A\x45\xDF\xA3".b + ("\x00".b * 300) + "\x42\x82\x84webm".b), "past the header: no WebM"
+    assert_match "the bytes are video/mp4, the name says video/webm", refused("x.webm", MP4, p)
+    assert_match "not a recognised file type", refused("x.webm", MKV, p)
+    assert_equal %w[video/mp4 video/webm], P::INLINE_VIDEOS
+    assert_equal P::INLINE_IMAGES + P::INLINE_VIDEOS, P::INLINE
+  end
+
   def test_a_name_that_lies_about_the_bytes_is_refused
     assert_match "the bytes are image/jpeg, the name says image/png", refused("x.png", JPEG)
     assert_match "the bytes are text, the name says image/png", refused("x.png", "hello")
@@ -86,6 +101,17 @@ class AttachmentsTest < Minitest::Test
     refute @att.json(@att.add(@card, filename: "i.svg", bytes: "<svg></svg>", by: "op"))[:image]
     assert_equal 3, kb.card(@card)[:attachments]
     assert_equal 3, kb.card_json(kb.board("g/r")["backlog"].first)[:attachments]
+    refute j[:video]
+  end
+
+  def test_a_video_is_marked_video_not_image_and_is_not_the_face
+    policy = AgentsKanban::AttachmentPolicy.new(max_bytes: 1000, types: "video/mp4,video/webm")
+    att = AgentsKanban::Attachments.new(kb, root: @root, policy: policy, clock: -> { @now })
+    v = att.json(att.add(@card, filename: "rec.webm", bytes: WEBM, by: "op"))
+    assert_equal ["video/webm", true, false], v.values_at(:content_type, :video, :image)
+    assert_equal "/api/attachments/#{v[:id]}", v[:url]
+    assert_equal "[rec.webm](/api/attachments/#{v[:id]}/download)", v[:markdown]
+    assert_nil kb.card_json(kb.board("g/r")["backlog"].first)[:media], "a video is no picture on the face"
   end
 
   def test_the_face_carries_the_newest_live_picture
