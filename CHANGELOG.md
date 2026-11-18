@@ -8,6 +8,16 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Added
 
+- **Attachments as one row of miniatures**: the card dialog's Attachments section is one sideways-scrolling row of
+  tiles, newest first (`newestFirst`), the newest marked "latest"; each tile's caption has its file name, time and a
+  link to the comment that shows it (`commentOf`); deleting a file a comment shows says that comment keeps a broken
+  link. Pictures and videos open the lightbox, which now has a Delete (a picture or video
+  tile has no delete of its own); any other file downloads and keeps a ✕ on its tile. An "attached" event whose file no
+  comment shows keeps the tile in the timeline, also with details hidden (`eventFiles`). Runs of pictures in markdown
+  render as one row (`kb-att-strip`, `AgentsKanban::Markdown#strips`). A tile's comment link (and every comment
+  reference) lands on the entry: an instant scroll, top-aligned when the entry is taller than half its scroll box, the
+  entry focused; re-aligned while the pictures above it load, for `JUMP_SETTLE_MS` (5 s) or until the reader scrolls,
+  taps or types (`jumpTo`, `lib/card.ts`) — a picture loading later no longer moves the view.
 - **Video player in attachments**: mp4 and webm attachments (`video/webm` is a new allowlist type, recognised by its
   EBML header's `webm` DocType; Matroska is refused) carry `video: true` in the attachment JSON and are served inline
   (`AttachmentPolicy::INLINE_VIDEOS`, `INLINE`). The card dialog shows each as a first-frame thumbnail with a play

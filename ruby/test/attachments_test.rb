@@ -227,4 +227,29 @@ class AttachmentsTest < Minitest::Test
     other = AgentsKanban::Markdown.new(attachment_url_prefix: "/kanban/attachments")
     assert_equal 0, other.card(@att.snippet(a)).scan("<img").size, "another host's prefix is not ours"
   end
+
+  def test_a_run_of_pictures_is_one_row_of_miniatures
+    a, b, c = %w[a b c].map { |n| @att.add(@card, filename: "#{n}.png", bytes: PNG, by: "op") }
+    strip = ->(html) { html.scan(%r{<span class="kb-att-strip">(.*?)</span>}m).map { |(x)| x.scan("<img").size } }
+    lines = md.card("Shots:\n\n#{@att.snippet(a)}\n#{@att.snippet(b)}\n#{@att.snippet(c)}\n\nafter")
+    assert_equal [3], strip.call(lines), "one per line"
+    assert_includes lines, "<p>Shots:</p>"
+    assert_includes lines, "<p>after</p>"
+    paras = md.card("#{@att.snippet(a)}\n\n#{@att.snippet(b)}\n\n#{@att.snippet(c)}")
+    assert_equal [3], strip.call(paras), "one per paragraph: merged into one row"
+    assert_equal 1, paras.scan("<p>").size
+    inline = md.card("see #{@att.snippet(a)} #{@att.snippet(b)} then text #{@att.snippet(c)}")
+    assert_equal [2], strip.call(inline), "text splits a run; the lone picture after it stays a preview"
+    breaks = md.card("#{@att.snippet(a)}  \n#{@att.snippet(b)}")
+    assert_equal [2], strip.call(breaks), "a hard break between pictures is still one run"
+    refute_includes breaks, "<br"
+    listed = md.card("- #{@att.snippet(a)}\n- #{@att.snippet(b)}")
+    assert_empty strip.call(listed), "one picture per list item: each stays a preview"
+    coded = md.card("```\n#{@att.snippet(a)}\n#{@att.snippet(b)}\n```")
+    assert_empty strip.call(coded)
+    refute_includes coded, "<img"
+    lone = md.card("one #{@att.snippet(a)}")
+    assert_empty strip.call(lone)
+    assert_includes lone, %(<a class="kb-att-img")
+  end
 end
