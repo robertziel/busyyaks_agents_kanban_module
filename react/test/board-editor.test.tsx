@@ -7,7 +7,18 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { Board, KanbanApiError, layoutGraph, MIN_TEXT_ZOOM, typeBadge, type KanbanApi } from "../src";
+import {
+  Board,
+  KanbanApiError,
+  layoutGraph,
+  MIN_TEXT_ZOOM,
+  MINI_PX,
+  miniCrop,
+  miniLayout,
+  typeBadge,
+  WorkflowMini,
+  type KanbanApi,
+} from "../src";
 import type { BoardShape, BoardShapeData, Card } from "../src/types";
 import { boardData, fixture, TYPES } from "./fixtures";
 
@@ -89,6 +100,110 @@ async function open(a: KanbanApi) {
   fireEvent.click(await screen.findByRole("button", { name: "Workflow" }));
   return screen.findByRole("dialog", { name: "Board editor" });
 }
+
+describe("the Workflow button's miniature", () => {
+  it("is a square chunk of the board's real workflow tree: the editor's drawing through a window on its first two columns", async () => {
+    render(host(api()));
+    const btn = await screen.findByRole("button", { name: "Workflow" });
+    expect(btn.title).toMatch(/^Workflow: 7 columns · \d+ transitions — /);
+    // the chunk, then the visible label (the operator: keep the "Workflow" label)
+    expect([...btn.childNodes].map((n) => n.nodeName)).toEqual(["svg", "#text"]);
+    expect(btn.lastChild!.textContent).toBe("Workflow");
+    const svg = btn.querySelector("svg.kb-wf-mini")!;
+    expect(svg.getAttribute("aria-hidden")).toBe("true");
+    expect(svg.getAttribute("width")).toBe(String(MINI_PX));
+    expect(svg.getAttribute("height")).toBe(String(MINI_PX));
+    expect(MINI_PX).toBe(24);
+    const want = miniLayout(coding.board);
+    const crop = miniCrop(want, coding.shape.columns);
+    // a square window, not the whole tree
+    expect(svg.getAttribute("viewBox")).toBe(`${crop.x} ${crop.y} ${crop.side} ${crop.side}`);
+    expect(svg.getAttribute("preserveAspectRatio")).toBe("xMidYMid meet");
+    expect(crop.side).toBeLessThan(want.h);
+    // the first two columns' cards lie whole inside it, with the arrow between them; the third column outside
+    const [first, second, third] = coding.shape.columns.map((c) => want.nodes[c.key]!);
+    for (const b of [first!, second!]) {
+      expect(b.x).toBeGreaterThanOrEqual(crop.x);
+      expect(b.y).toBeGreaterThanOrEqual(crop.y);
+      expect(b.x + b.w).toBeLessThanOrEqual(crop.x + crop.side);
+      expect(b.y + b.h).toBeLessThanOrEqual(crop.y + crop.side);
+    }
+    expect(third!.y).toBeGreaterThan(crop.y + crop.side);
+    const between = want.routes.find((r) => r.from === coding.shape.columns[0]!.key && r.kind === "arrow")!;
+    for (const pt of between.points) {
+      expect(pt.x).toBeGreaterThan(crop.x);
+      expect(pt.x).toBeLessThan(crop.x + crop.side);
+      expect(pt.y).toBeGreaterThan(crop.y);
+      expect(pt.y).toBeLessThan(crop.y + crop.side);
+    }
+    // centred on the two cards: the same air on both sides
+    expect(first!.x - crop.x).toBeCloseTo(crop.x + crop.side - (first!.x + first!.w), 5);
+    // the editor's own drawing: a card per column (its type and label), an arrow per route
+    const nodes = [...svg.querySelectorAll("g.kb-be-node")];
+    expect(nodes.map((n) => n.getAttribute("class"))).toEqual(
+      coding.shape.columns.map((c) => `kb-be-node type-${c.type}`),
+    );
+    expect(svg.querySelectorAll("path.kb-be-line")).toHaveLength(want.routes.length);
+    // nothing in it is focusable or named: the button is the one control
+    expect(svg.querySelectorAll("[tabindex], [role]")).toHaveLength(0);
+    expect(within(btn).queryByRole("button", { name: /^Column / })).toBeNull();
+  });
+
+  it("sits in the tools row, in reading order (= Tab order): summary, filter, tools (live · Archived · Workflow · ?)", async () => {
+    render(host(api()));
+    const btn = await screen.findByRole("button", { name: "Workflow" });
+    const toolsEl = btn.parentElement!;
+    expect(toolsEl.className).toBe("kb-tools");
+    expect([...toolsEl.children].map((e) => e.className)).toEqual([
+      "kb-live",
+      "btn small",
+      "btn small kb-wf-btn",
+      "btn small kb-help",
+    ]);
+    const head = toolsEl.parentElement!;
+    expect(head.className).toBe("kb-head");
+    expect([...head.children].map((e) => e.className)).toEqual(["kb-sum", "kb-filter", "kb-tools"]);
+    const tools = within(toolsEl);
+    expect(tools.getByTitle(/^live: polls/)).toHaveClass("kb-live");
+    expect(tools.getByRole("button", { name: /^Archived/ })).toHaveAttribute("aria-pressed", "false");
+    expect(tools.getByRole("button", { name: "Keyboard shortcuts" })).toHaveClass("kb-help");
+    const filter = head.querySelector(".kb-filter")!;
+    expect(filter.getAttribute("role")).toBe("search");
+    expect(within(filter as HTMLElement).getByRole("searchbox", { name: "Filter cards" })).toBeInTheDocument();
+  });
+
+  it("the local-repo board's chunk (15 columns, bundles) is the same window on its first two columns", async () => {
+    const v4 = fixture("local_v4");
+    render(host(api(v4)));
+    const svg = (await screen.findByRole("button", { name: "Workflow" })).querySelector("svg")!;
+    const want = miniLayout(v4.board);
+    const crop = miniCrop(want, v4.shape.columns);
+    expect(svg.getAttribute("viewBox")).toBe(`${crop.x} ${crop.y} ${crop.side} ${crop.side}`);
+    expect(svg.querySelectorAll("g.kb-be-node")).toHaveLength(v4.shape.columns.length);
+  });
+
+  it("the window: one column → around that card; a column the layout did not place, or no column → throws", () => {
+    const want = miniLayout(coding.board);
+    const [first] = coding.shape.columns;
+    const b = want.nodes[first!.key]!;
+    const one = miniCrop(want, [first!]);
+    expect(one.side).toBe(Math.max(b.w, b.h) + 16);
+    expect(one.x + one.side / 2).toBeCloseTo(b.x + b.w / 2, 5);
+    expect(one.y + one.side / 2).toBeCloseTo(b.y + b.h / 2, 5);
+    expect(() => miniCrop(want, [])).toThrow(/no columns/);
+    expect(() => miniCrop(want, [{ ...first!, key: "nowhere" }])).toThrow(/column nowhere was not laid out/);
+  });
+
+  it("draws only a saved board's named transitions: an unnamed one throws, never a stand-in name", () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    const ti = coding.board.transitions.findIndex((t) => t.from !== "*" && t.to !== "*");
+    const transitions = coding.board.transitions.map((t, i) => (i === ti ? { ...t, name: "" } : t));
+    expect(() => render(<WorkflowMini shape={{ ...coding.board, transitions }} />)).toThrow(
+      new RegExp(`transition ${ti} has no name`),
+    );
+    quiet.mockRestore();
+  });
+});
 
 describe("BoardEditor", () => {
   it("draws the columns as typed nodes and the transitions as arrows; wildcard ones are listed, not drawn", async () => {

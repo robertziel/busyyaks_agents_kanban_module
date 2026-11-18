@@ -66,6 +66,7 @@ import type {
 import { Avatar, ErrorState, Loading } from "./Bits";
 import { HereNow } from "./Faces";
 import { BoardEditor } from "./BoardEditor";
+import { WorkflowMini } from "./WorkflowMini";
 import { CardDialog, PANELS, type Panel } from "./CardDialog";
 import { KbIcon } from "./KbIcon";
 import { Select } from "./Select";
@@ -633,122 +634,126 @@ export function Board({
               <HeldPills held={data.held} external={data.external} approved={data.approved} />
             </div>
           )}
-          <span className="spacer" />
-          <span
-            className={`kb-live${live.error ? " bad" : ""}`}
-            title={live.error ? `live updates failing: ${live.error}` : "live: polls every 3 s, refreshes on change"}
-          >
-            <i /> {live.error ? "live · error" : "live"}
-          </span>
-          {agentsLive.error && (
-            <span
-              className="kb-live bad kb-agents-err"
-              role="status"
-              title={`agent status failing: ${agentsLive.error}`}
-            >
-              <i /> agents · {agentsLive.error.slice(0, 80)}
-            </span>
-          )}
-          {presence.error && (
-            <span className="kb-live bad" title={`who is at work on each card: ${presence.error}`}>
-              <i /> agents at work · error
-            </span>
-          )}
-          <button
-            type="button"
-            className="btn small"
-            aria-pressed={showArchived}
-            onClick={() => onView({ archived: !showArchived })}
-          >
-            Archived{data.archived ? ` · ${data.archived.length}` : ""}
-          </button>
-          <button
-            type="button"
-            className="btn small"
-            onClick={() => setWorkflowOpen(true)}
-            title="This project's board: its columns (with their types) and the named transitions a card may take"
-          >
-            Workflow
-          </button>
-          <button
-            type="button"
-            className="btn small"
-            aria-label="Keyboard shortcuts"
-            title="Keyboard shortcuts (?)"
-            onClick={() => setHelp(true)}
-          >
-            ?
-          </button>
-        </div>
-
-        <div className="kb-filter" role="search">
-          <input
-            ref={filterRef}
-            type="search"
-            className="kb-q"
-            placeholder="Filter cards  (f)"
-            aria-label="Filter cards"
-            value={filter.text}
-            onChange={(e) => setFilter({ ...filter, text: e.target.value })}
-            onKeyDown={(e) => e.key === "Escape" && (e.currentTarget.blur(), setFilter({ ...filter, text: "" }))}
-          />
-          <Select
-            ariaLabel="Member"
-            options={[
-              { value: "", label: "Any member" },
-              { value: me, label: "Me (q)" },
-              { value: "-", label: "Unassigned" },
-              ...members.filter((m) => m !== me).map((m) => ({ value: m, label: m })),
-            ]}
-            value={filter.member}
-            onChange={(v) => setFilter({ ...filter, member: v })}
-          />
-          <Select
-            ariaLabel="Due"
-            options={dueOpts}
-            value={filter.due}
-            onChange={(v) => setFilter({ ...filter, due: v as DueFilter })}
-          />
-          <Select
-            ariaLabel="Order"
-            options={[
-              { value: "updated", label: "Last modified" },
-              { value: "position", label: "List order" },
-              { value: "due", label: "By due date" },
-            ]}
-            value={order}
-            onChange={(v) => setOrder(v as Order)}
-          />
-          {data.labels.length > 0 && (
-            <div className="kb-flabels" role="group" aria-label="Filter by label">
-              {data.labels.map((l) => (
-                <button
-                  type="button"
-                  key={l.id}
-                  className={`kb-lchip lc-${l.color}`}
-                  aria-pressed={filter.labels.includes(l.name)}
-                  onClick={() =>
-                    setFilter({
-                      ...filter,
-                      labels: filter.labels.includes(l.name)
-                        ? filter.labels.filter((x) => x !== l.name)
-                        : [...filter.labels, l.name],
-                    })
-                  }
-                >
-                  {l.name}
+          {/* one grid (kanban.css .kb-head): the summary rows over the filter row, the tools (live · Archived ·
+              Workflow · ?) at that row's end; under 760 px one column. DOM order = reading order at every width
+              (summary → filter → tools), so Tab follows what the eye reads */}
+          <div className="kb-filter" role="search">
+            <input
+              ref={filterRef}
+              type="search"
+              className="kb-q"
+              placeholder="Filter cards  (f)"
+              aria-label="Filter cards"
+              value={filter.text}
+              onChange={(e) => setFilter({ ...filter, text: e.target.value })}
+              onKeyDown={(e) => e.key === "Escape" && (e.currentTarget.blur(), setFilter({ ...filter, text: "" }))}
+            />
+            <Select
+              ariaLabel="Member"
+              options={[
+                { value: "", label: "Any member" },
+                { value: me, label: "Me (q)" },
+                { value: "-", label: "Unassigned" },
+                ...members.filter((m) => m !== me).map((m) => ({ value: m, label: m })),
+              ]}
+              value={filter.member}
+              onChange={(v) => setFilter({ ...filter, member: v })}
+            />
+            <Select
+              ariaLabel="Due"
+              options={dueOpts}
+              value={filter.due}
+              onChange={(v) => setFilter({ ...filter, due: v as DueFilter })}
+            />
+            <Select
+              ariaLabel="Order"
+              options={[
+                { value: "updated", label: "Last modified" },
+                { value: "position", label: "List order" },
+                { value: "due", label: "By due date" },
+              ]}
+              value={order}
+              onChange={(v) => setOrder(v as Order)}
+            />
+            {data.labels.length > 0 && (
+              <div className="kb-flabels" role="group" aria-label="Filter by label">
+                {data.labels.map((l) => (
+                  <button
+                    type="button"
+                    key={l.id}
+                    className={`kb-lchip lc-${l.color}`}
+                    aria-pressed={filter.labels.includes(l.name)}
+                    onClick={() =>
+                      setFilter({
+                        ...filter,
+                        labels: filter.labels.includes(l.name)
+                          ? filter.labels.filter((x) => x !== l.name)
+                          : [...filter.labels, l.name],
+                      })
+                    }
+                  >
+                    {l.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            {filtering && (
+              <span className="kb-fcount">
+                <b>{shownTotal}</b>/{total}
+                <button type="button" className="linklike" onClick={() => setFilter(EMPTY_FILTER)}>
+                  clear
                 </button>
-              ))}
-            </div>
-          )}
-          {filtering && (
-            <span className="kb-fcount">
-              <b>{shownTotal}</b>/{total}
-              <button type="button" className="linklike" onClick={() => setFilter(EMPTY_FILTER)}>
-                clear
-              </button>
+              </span>
+            )}
+          </div>
+          <div className="kb-tools">
+            <span
+              className={`kb-live${live.error ? " bad" : ""}`}
+              title={live.error ? `live updates failing: ${live.error}` : "live: polls every 3 s, refreshes on change"}
+            >
+              <i /> {live.error ? "live · error" : "live"}
             </span>
-          )}
+            {agentsLive.error && (
+              <span
+                className="kb-live bad kb-agents-err"
+                role="status"
+                title={`agent status failing: ${agentsLive.error}`}
+              >
+                <i /> agents · {agentsLive.error.slice(0, 80)}
+              </span>
+            )}
+            {presence.error && (
+              <span className="kb-live bad" title={`who is at work on each card: ${presence.error}`}>
+                <i /> agents at work · error
+              </span>
+            )}
+            <button
+              type="button"
+              className="btn small"
+              aria-pressed={showArchived}
+              onClick={() => onView({ archived: !showArchived })}
+            >
+              Archived{data.archived ? ` · ${data.archived.length}` : ""}
+            </button>
+            <button
+              type="button"
+              className="btn small kb-wf-btn"
+              onClick={() => setWorkflowOpen(true)}
+              title={`Workflow: ${board.columns.length} columns · ${board.transitions.length} transitions — this project's board: its columns (with their types) and the named transitions a card may take`}
+            >
+              <WorkflowMini shape={board} />
+              Workflow
+            </button>
+            <button
+              type="button"
+              className="btn small kb-help"
+              aria-label="Keyboard shortcuts"
+              title="Keyboard shortcuts (?)"
+              onClick={() => setHelp(true)}
+            >
+              ?
+            </button>
+          </div>
         </div>
 
         {err && (
