@@ -26,6 +26,7 @@ code disagree, `ruby/` + `fixtures/` win and the fix starts there.
 | board working glow | — | optional `api.boardLive(slug)` → `{sessions: {name → SessionLive}}` (`BoardLive`: no `present` — who is at work on a card is `boardPresence`), ONE answer for the whole board (at least each card's owner session): the board polls it every 3 s (`useLivePoll`); a card whose owner session is `working` with a `phase` glows blue (`.kb-card.agent-working`, token `--ak-working`); the answer is keyed on the slug (a board switch drops it at once) and dropped after 2 polls with no newer one ("live state unknown"); absent = no glow |
 | checkout (git) | `git:` on `CardLinks.build` (required, no default — the engine runs no git): `branches(project)` → Set of branch names (local + remote-tracking, remote dropped), `default_ref(project)` → the checked-out branch ("HEAD" when detached / unborn), `files_at(project, refs, files)` → `{file => first ref that has it}` (paths with `..` are never asked); a port that cannot read the checkout raises | — |
 | navigation | `card_path:` on `CardLinks::Refs`; `card_url: ->(slug, id) { absolute URL }` on Tools (required): every card a tool returns carries it as `url` | `navigate`, `projectHref`, `cardHref` props; `view` / `onView` own the URL |
+| PR roles | `prs:` on Store (**required**, `ArgumentError` without it; a host whose cards carry no PRs answers `{}`): `pr_roles(card)` → `{role => {repos: ["owner/name", …] \| nil, required: bool, error: nil \| "why"}}` (`repos` = every repo a PR of that role may be on — a card may change several repos, e.g. a host and an engine it vendors; `nil` = any; `error` = the role takes no PR now: an assignment under it is refused with it) (raises `Delivery::Unavailable` with the reason when the host cannot say) — the roles `kanban_pr_assign` takes on that card, and the ones an agent must have at least one PR of before it moves the card out of a working column into review / a gate / done | `CardLink.group` (a sub-section of the rail: a PR's role) |
 | launch plan | `AgentsKanban::Launch.plan(config, type:, session:, slug:, launcher:, cards:)` → `{argv, agent, prompt_template, vars, model}`; `Launch.render` | — |
 
 ## 2. Boards (in the database) and the host config (`config.example.yml`; `HostConfig`)
@@ -139,13 +140,13 @@ cards returned to the column of their last move into it, flagged; handoff / appr
 | `dependencies` | `true` = parent dependencies are ENFORCED on every board (`Board#rules.dependencies`); `false` = parents are recorded and shown only |
 | `flags` | `{reminder_hours}`: a card flagged `needs_operator` / `blocked_external` that long gets ONE reminder comment by `system_author` (+ a ping to its owner) per flag (`Store#flag_reminders`, the notifier's watch pass) |
 | `review_loop` | `null` or `{max_rounds, unresolved_label, unresolved_color, columns}`: `columns` = the LOOP columns (review column keys; any other review column — a coding board's QA — counts no rounds and has no limit). Entering a loop column from a work column or a gate counts a ROUND for it (`cards.review_rounds`; entering a work column by any move other than a named agent edge of the REVIEW column left — Rework out of a review column or a gate, Deploy failed, Start work (also after the operator parked a card at the limit in To do / Backlog) — starts over); at `max_rounds` an agent's loop move (loop → work, work → loop) is `Denied` naming the gate to hand the card to, and a handoff out of the loop column must give `review_summary` — the reviewer's SUMMARY counts `{fixed, resolved_by_argument, needs_human, open}`, integers ≥ 0, exactly those keys (missing or malformed → `Invalid`): it puts `unresolved_label` on the card (created on the board with `unresolved_color` when missing) only when `needs_human + open` is above 0, and the handoff line names the counts. The operator's move from a gate into the work column a loop column feeds by a named agent edge (Changes requested) allows exactly ONE more round of that loop (`review_rounds._rereview`), then the card goes back to the gate without the label; so does the operator's drag from the loop column itself into that work column once the rounds are used up (no gate is reachable from the work column: the limit would leave the author no move) — below the limit that drag changes nothing. The "0 open threads" exit is the agents' rule (the host's prompts): the engine counts rounds, it reads no review threads. `null` = every review column counts rounds, nothing limited |
-| `session_boards` | `null` or `{slug_prefix, idle_hours, board}`: a board of ONE agent session, attached to no project. `slug_prefix` `[a-z][a-z0-9_-]*:` (e.g. `session:`); the board's slug = prefix + the tmux session name (`Store::SESSION`); a host project slug starting with the prefix is shadowed. `board` = its shape `{columns, transitions}`, validated as a Board when the Store starts (`ConfigError`; a gate column refused: nobody but its session acts on it). MCP `kanban_session_board(tmux_session, author)` (listed only when configured; the session must be live) → `Store#session_board!` creates it from `board` on the first call (never from the project template: `BoardRepo`'s `known` refuses a session slug), brings an archived one back (its cards stay archived) or touches it → the `kanban_board` JSON + `session`, `state` (`created` \| `restored` \| `touched`). Every tool touching a session board through ANY field (`project`, `id`, `parent`, `comment_id`, `checklist_id`, `item_id`, `attachment_id` — each record read by its own id) is `Denied` unless the caller IS the session: `tmux_session` = it, verified live (the `sessions` port), else `author` = the agent name (or session name) of its OPEN registration — a bare author string names nobody. Both given and `author` is the agent of ANOTHER open registration → `Denied` (one call names one caller); `kanban_session_board` opens only the caller's own board by the same rule. Identity stays what every kanban tool trusts (one MCP bearer): this keeps sessions apart, it is no defence against a hostile agent. `kanban_register` / `kanban_pr_assign` / `kanban_ask` / `kanban_block` / `kanban_unblock` on one → `Invalid` (nobody but its session acts there); the operator's `Api` is READ-ONLY on its records (`Api::SESSION_READ_ONLY`: every card / comment / checklist / item / attachment / label mutation → 422); its shape is not saved / reset (`Invalid`). The watchdog, the intake, the idle watch, a failed launch's release and the dialog question's card choice skip session boards (`Store#project_cards`): their cards stay their session's. Activity = the `boards` row's `updated_at` (created / restored / opened) and any activity entry on its cards NOT by `system_author` (pings, reminders, archive lines are the engine's, not the session's); flag reminders skip session cards; the pass re-reads the activity inside its transaction (a touch in between keeps the board); `idle_hours` without any → `Store#session_boards_expire_pass` (the notifier's watch pass) archives every live card (an `archive` entry by `system_author`) and sets `boards.archived_at` — nothing is deleted; a card tool on it then says it was archived and how to open it again. Operator: `Api#session_boards(archived:)` → `{idle_hours, slug_prefix, session_boards: [{slug, session, archived, last_activity, expires, columns, cards}]}` (404 when off); React `SessionBoards` draws it read-only (`focus: {session, card}` marks a board and a card and scrolls the card into view: a session card's link) |
+| `session_boards` | `null` or `{slug_prefix, idle_hours, board}`: a board of ONE agent session, attached to no project. `slug_prefix` `[a-z][a-z0-9_-]*:` (e.g. `session:`); the board's slug = prefix + the tmux session name (`Store::SESSION`); a host project slug starting with the prefix is shadowed. `board` = its shape `{columns, transitions}`, validated as a Board when the Store starts (`ConfigError`; a gate column refused: nobody but its session acts on it). MCP `kanban_session_board(tmux_session, author)` (listed only when configured; the session must be live) → `Store#session_board!` creates it from `board` on the first call (never from the project template: `BoardRepo`'s `known` refuses a session slug), brings an archived one back (its cards stay archived) or touches it → the `kanban_board` JSON + `session`, `state` (`created` \| `restored` \| `touched`). Every tool touching a session board through ANY field (`project`, `id`, `parent`, `comment_id`, `checklist_id`, `item_id`, `attachment_id` — each record read by its own id) is `Denied` unless the caller IS the session: `tmux_session` = it, verified live (the `sessions` port), else `author` = the agent name (or session name) of its OPEN registration — a bare author string names nobody. Both given and `author` is the agent of ANOTHER open registration → `Denied` (one call names one caller); `kanban_session_board` opens only the caller's own board by the same rule. Identity stays what every kanban tool trusts (one MCP bearer): this keeps sessions apart, it is no defence against a hostile agent. `kanban_register` / `kanban_pr_assign` / `kanban_pr_unassign` / `kanban_ask` / `kanban_block` / `kanban_unblock` on one → `Invalid` (nobody but its session acts there); the operator's `Api` is READ-ONLY on its records (`Api::SESSION_READ_ONLY`: every card / comment / checklist / item / attachment / label mutation → 422); its shape is not saved / reset (`Invalid`). The watchdog, the intake, the idle watch, a failed launch's release and the dialog question's card choice skip session boards (`Store#project_cards`): their cards stay their session's. Activity = the `boards` row's `updated_at` (created / restored / opened) and any activity entry on its cards NOT by `system_author` (pings, reminders, archive lines are the engine's, not the session's); flag reminders skip session cards; the pass re-reads the activity inside its transaction (a touch in between keeps the board); `idle_hours` without any → `Store#session_boards_expire_pass` (the notifier's watch pass) archives every live card (an `archive` entry by `system_author`) and sets `boards.archived_at` — nothing is deleted; a card tool on it then says it was archived and how to open it again. Operator: `Api#session_boards(archived:)` → `{idle_hours, slug_prefix, session_boards: [{slug, session, archived, last_activity, expires, columns, cards}]}` (404 when off); React `SessionBoards` draws it read-only (`focus: {session, card}` marks a board and a card and scrolls the card into view: a session card's link) |
 | `table_prefix` | `""` or `[a-z][a-z0-9_]*_`; the engine's tables are `<prefix>cards` … |
 | `theme` | `{"--ak-*": value}` (an allowlist of CSS value characters, quotes paired, parentheses balanced, no `/*`; refused at load) applied as inline custom properties on the board's `.ak-root` and copied onto every Select menu from its trigger; `--ak-board-height` fixes the board's height; `--ak-step-overhang` (default 12px) = how far the left / right step buttons hang outside the lists, `0px` for a host with no gutter beside the board |
 
 `HostConfig#digest` = sha256 of the canonical JSON the client receives (`to_h`); a host may pin it.
 
-## 3. Tables (`Schema`, v13)
+## 3. Tables (`Schema`, v14)
 
 `cards` (+ `parent_id`, `metadata` JSON text since v2), `card_activity`, `board_labels`, `checklists`,
 `checklist_items`, `card_pings`, `card_attachments`, `session_dialogs`, `agent_sessions` (v3: `session`, `socket`,
@@ -157,7 +158,7 @@ template; v7 adds `board_columns.hide_after_hours`, null = the type's default; v
 nothing about it is stored); v10 adds `cards.gate_head` (the approval PR's head the handoff's green answer carried) and
 `cards.gate_state` (the last watch pass's view of the card's gate: `ready` or its hold); v11 adds `boards.archived_at` (a session board hidden after `session_boards.idle_hours` idle, § 2b); v12 adds
 `agent_sessions.lead_id` (the lead registration a session runs under), `needs_lead` (0/1: its type is `under` a lead),
-`lead_key_digest` (a lead's key, SHA-256 hex) and the CHECK `needs_lead = 0 OR lead_id IS NOT NULL`; v13 adds the progress watch's stretch on the card — `cards.progress_at`, `progress_marks` (JSON `{kind => {key, text, at}}`), `progress_pinged_at`, `progress_commented_at`, `progress_stale_at`, `progress_error`; v5's `workflows` is carried over and dropped by `BoardRepo#seed!`) — epochs as integers. `migrate!(db, prefix:,
+`lead_key_digest` (a lead's key, SHA-256 hex) and the CHECK `needs_lead = 0 OR lead_id IS NOT NULL`; v13 adds the progress watch's stretch on the card — `cards.progress_at`, `progress_marks` (JSON `{kind => {key, text, at}}`), `progress_pinged_at`, `progress_commented_at`, `progress_stale_at`, `progress_error`; v14 is a data step (no DDL): `cards.metadata.prs` becomes a list (§ 9 v14); v5's `workflows` is carried over and dropped by `BoardRepo#seed!`) — epochs as integers. `migrate!(db, prefix:,
 to: VERSION)`: a host migration is PINNED to the step it introduced (`to: 5` still creates `workflows`, `to: 6` the
 boards tables), so a fresh DB replays the host's migrations step by step and a rollback lands on that version's shape, JSON as text, done flags 0/1, portable DDL (`text: true` where > 255 chars may occur). `migrate!` is idempotent by introspection; the
 host's own ledger records each run. Prefix `""` = the unprefixed table names (a host whose tables already carry them needs no data move).
@@ -407,6 +408,71 @@ primitives, for a host without its own).
 
 Newest first; a heading names the `Schema::VERSION` step when the change brought one.
 
+### Schema v14 — a card's PRs are a list (kanban_pr_assign adds, kanban_pr_unassign removes)
+
+- `kanban_pr_assign(id, pr_url, role, author)` → `Store#assign_pr(id, url:, role:, by:)`: the agent that opened a PR
+  assigns it to its card. The card's metadata `prs` is a **list** `[{url, repo, number, role, by, at}]` (oldest first),
+  any number per role and per repo; assigning ADDS — the same URL under the same role (any case) is a no-op, nothing is
+  replaced or dropped. Logged as an `update` line `PR <role>: <url>`. `pr_url` must be
+  `https://github.com/<owner>/<repo>/pull/<n>`, `role` a lowercase word (`a-z 0-9 _ -`, ≤ 32). The MCP `instructions`
+  tell agents to assign every PR, on every repo the card changes, at once. A host reads a card's PRs from this list only,
+  never from branch names or PR numbers in text.
+- Refused (`Invalid`), nothing written: a role the `prs:` port does not list for the card ("role … is not one this
+  project reads (<roles>)"); a PR whose `owner/name` (any case) is in none of the role's `repos` ("a <role> PR is on
+  <repos>, not on <other>"); the role's `error`; the URL already on this card under another role ("kanban_pr_unassign it
+  first"); the URL already a PR of another unarchived card whose column is not of type `cancelled` (naming that card: a
+  PR belongs to one card); the port raising ("the PR roles of card #N cannot be read: <why>"); the metadata growing past
+  `MAX_METADATA` ("… with its PRs — unassign the PRs that are not this card's"). Every check runs inside the writer's
+  transaction (a refusal rolls back, then raises).
+- `kanban_pr_unassign(id, pr_url, author, reason)` → `Store#unassign_pr(id, url:, by:, reason:, agent: true)`, and the
+  operator's `Api#pr_unassign(id, {pr_url, reason}, by:)` (`agent: false`): the ONLY way a PR leaves a card. `reason`
+  required (≤ 500). The entry moves to metadata `prs_removed` (`+ removed_by, removed_at, reason`), logged
+  `PR <role> unassigned: <url> — <reason>`. An agent unassigns only a PR whose `by` is itself, or any on a card whose
+  assignee it is (`Denied` otherwise, naming who may); the operator any. Not on a session board (`PROJECT_ONLY`).
+- An agent move (`kanban_move`, `kanban_handoff`) from a `working` column into a `review` / `gate` / `done` one is
+  `Denied` while a `required` role has no PR in the list ("card #N has no <role> PR assigned — … kanban_pr_assign(…)
+  before it leaves <column>"); a PR of any of the role's repos counts. The operator's drag is never refused by it — its
+  move line says what it skipped (`In progress → QA (dragged: no local PR)`, or `(dragged: PR roles unknown — <why>)`).
+- Metadata `prs` / `prs_removed` (and the never-released `prs_replaced`) are written only by these two: `Store#create` /
+  `#update` with any of them → `Invalid` (agents and the operator alike); an update that replaces the metadata keeps the
+  card's own PR keys (`metadata: null` clears everything else). A `prs` in the pre-list `{role => url}` shape, or that
+  is not a list of `{url, role}`, is refused with what it is (never read as empty).
+- Data step (no DDL): `Schema.migrate!(db, prefix:, to: 14, prs:)` runs `Schema.prs_to_lists!` (`prs:` = the Store's
+  PR roles port, required once a card holds the old shape) — each `{role => value}` becomes one entry per PR the value
+  names: a full PR URL, or text naming several (every full PR URL, and a bare `/pull/N` after one = the same repo; the
+  remaining prose dropped only when it holds no other `github.com` / `/pull/` / `http` link, else raise); a role the
+  port does not list for that card (an old `engine` / `mirror` key) is mapped to the ONE port role whose `repos` holds
+  that PR's repo (several → raise naming the card, the value and the candidates; none → raise, unless the port answers
+  the optional `unread_reason(card, role, repo)` with a reason: then the PR becomes a `prs_removed` entry, removed_by
+  `migration`, that reason, and the card gets an `update` line "PR <role> removed by the v14 migration: <url> —
+  <reason>" — kept and visible, never active; `migrate!(…, now:)` dates it). Then `by` / `at` = the author / time of the card's newest `PR <role>: <url>` line (`null` when none
+  says: never guessed); a `prs_replaced` entry becomes a `prs_removed` one (reason "replaced under the one-PR-per-role
+  rule"); idempotent; a value that is no PR URL raises and no card is written. The host's rollback:
+  `Schema.prs_to_roles!` — an entry whose role `up` mapped (an old `engine` key, `local` on a plain project that reads
+  only `pr`; the same PR under several old keys is ONE entry) carries `from_roles` = the old keys and goes back under
+  them exactly — refused (`ArgumentError` naming the cards, nothing written) while a card would hold two PRs under one
+  key or holds any `prs_removed`.
+- `Store#unassigned_pr_mentions` → `[{card, project, column, url, seen}]`: a report for a human to confirm, never acted
+  on — the PR URLs each open card (not archived, not done / cancelled, not a session board) names in its `pr_url`,
+  description, comments and handoffs that are not in its `prs` (`seen` = where first named). Reads only.
+- The `ci:` port's answer `head` may name several PRs' heads joined by `+` (one per PR, the host's order); a hold says
+  each shortened to 7.
+- React: `CardLink.unassign` (a row the host marks as an assigned PR) + the optional `KanbanApi.prUnassign(id, prUrl,
+  reason)` → the rail's row gets an "×" (`Unassign <label>`, `aria-expanded`) that opens ONE line IN the row: the
+  reason box (required: blank → Unassign disabled, nothing sent) + Unassign; Enter sends the trimmed reason, Escape or
+  the × again closes it (Escape never reaches the dialog; neither while a request runs); the call's refusal is said
+  under the box (`role="alert"`), the form stays, the caret back in the box (read-only while sent, the × disabled);
+  done → the card reloads and the focus goes to the rail. No browser prompt / confirm. No `prUnassign` on the port =
+  no action. `CardLinks`' `onUnassign(link, reason)` resolves to `null` (done) or the refusal's text.
+- React: `CardLink.group` — the Links rail lists a link with a group in its own sub-section of its family's, named by
+  the family's short name ("PRs · local", "PRs · public"), in first-seen order; a grouped row leaves out the tag that
+  only repeats its group (`rowTags`; never its only tag); `LinkGroup.fold` — the PR sections never fold behind
+  "+N more" (every PR of the card is listed).
+- React: a PR row's label `#N <repo>` is drawn as the number (strong) + the repo, which wraps at `_ - . /` instead of
+  ending in an ellipsis (`prLabelParts`; the link's accessible name stays the whole label). `CardLink.struck` — history (a PR
+  taken off the card): the label struck through, on one line. Chip text = its tone mixed 70 % towards the ink (≥ 4.5:1
+  on its tint). On a phone the grouped rail spans the dialog's side columns.
+
 ### Schema v13 — the progress watch
 
 - New REQUIRED host config key `progress_watch: {stale_minutes: N | null}` (null = off; a missing key, a missing or extra
@@ -475,18 +541,19 @@ Newest first; a heading names the `Schema::VERSION` step when the change brought
 
 ### No schema step — the PR watch
 
-- The `ci:` port on Store may answer `closed_prs(card)` → `[{role:, number:, closed_at: epoch, why: String} |
-  {error: String}]`: the PRs assigned to the card that are closed WITHOUT merging, `why` = the host's words (e.g.
-  `base deleted`, `head deleted`, `by <login>`), and one `{error:}` per assigned PR it could not read — said next to the
-  closes, so a closed PR never hides another PR's failed read; asking also keeps every PR assigned to the card watched
-  by the host. It raises `Delivery::Unavailable` / `Refused` when it cannot say at all. A port without it → no PR
-  watch. A close whose `closed_at` is not a positive Integer, whose `why` is blank, or with no `role` / `number` is
+- The `ci:` port on Store may answer `closed_prs(card)` → `[{role:, number:, repo: (optional), closed_at: epoch, why:
+  String} | {error: String}]`: the PRs assigned to the card that are closed WITHOUT merging, `why` = the host's words
+  (e.g. `base deleted`, `head deleted`, `by <login>`), and one `{error:}` per assigned PR it could not read — said next
+  to the closes, so a closed PR never hides another PR's failed read; asking also keeps every PR assigned to the card
+  watched by the host. It raises `Delivery::Unavailable` / `Refused` when it cannot say at all. A port without it → no
+  PR watch. A close whose `closed_at` is not a positive Integer, whose `why` is blank, or with no `role` / `number` is
   refused as the port's error (logged like an `{error:}`), never told: a host that does not know a close's time or
   reason yet answers nothing for that PR until it does.
 - `Notifier#watch` step 3d (`Store#pr_watch_pass` → `[[id, :closed | :closed_nobody | "unavailable: <why>"]]`): every
   unarchived project card outside its board's terminal columns is asked. Each close is told ONCE (`ci_watches` kind
-  `pr_closed:<role>`, ref = `closed_at`: a reopened PR closed again is a new close): a `comment` by `system_author`
-  "PR #N (<role>) closed without merging (<why>) — pinged <owner>" (or "no owner session to ping") and a `pr_closed`
+  `pr_closed:<role>:<repo>#<n>` — a card holds several PRs per role —, ref = `closed_at`: a reopened PR
+  closed again is a new close; one recorded under the older `pr_closed:<role>` key is not told again): a `comment` by
+  `system_author` "PR <repo>#N (<role>) closed without merging (<why>) — pinged <owner>" (or "no owner session to ping") and a `pr_closed`
   ping to the owner session. A close told while the card had no owner session is not pinged when an owner adopts the
   card later (the comment stays on the card; the relay carries only the operator's comments). A card the port cannot
   read is logged once per change of reason (`pr watch: card N: <why>`, every reason of the card in one line), the other
@@ -597,15 +664,8 @@ Newest first; a heading names the `Schema::VERSION` step when the change brought
 - The `card_url` port is called with a session board's slug too (`<prefix><session>`): the host links it to its own
   page for session boards.
 
-### PRs assigned to cards: kanban_pr_assign (no schema step)
+### PRs assigned to cards: the idle watch (no schema step)
 
-- New MCP tool `kanban_pr_assign(id, pr_url, role, author)` → `Store#assign_pr(id, url:, role:, by:)`: the agent that
-  opened a PR assigns it to its card; stored as the card's metadata `prs.<role>` = the PR URL, merged (the other
-  metadata keys stay), logged as an `update` line `PR <role>: <url>`. `pr_url` must be
-  `https://github.com/<owner>/<repo>/pull/<n>`, `role` a lowercase word (`a-z 0-9 _ -`, ≤ 32) — the HOST names the roles
-  (e.g. `local` · `public`) and reads them back; assigning a role again replaces its PR, the same URL is a no-op, a
-  `prs` that is not an object is refused. The MCP `instructions` tell agents to call it at once after opening a PR. A
-  host reads a card's PRs from these assignments, never from branch names or PR numbers in text.
 - `Store#idle_watch_pass`: a card whose PR the `ci:` port cannot answer (`pr_checks` raising `Delivery::Unavailable` /
   `Refused`, e.g. a bad assignment) is skipped and returned as `[id, "CI skipped: <why>"]` (the notifier logs
   `idle watch: CI skipped: <why> on card N`); the other cards are still watched. It used to end the whole pass

@@ -843,11 +843,13 @@ class StoreTest < Minitest::Test
 
   def test_a_store_with_the_green_ci_gate_needs_the_port
     e = assert_raises(AgentsKanban::ConfigError) do
-      AgentsKanban::Store.new(db, config: config, markdown: KanbanTest.markdown(config), boards: ->(_s) { true })
+      AgentsKanban::Store.new(db, config: config, markdown: KanbanTest.markdown(config), boards: ->(_s) { true },
+                                  prs: pr_roles)
     end
     assert_match(/approval.requires_green_ci but the Store got no ci: port/, e.message)
     content = KanbanTest.config("content")
-    assert AgentsKanban::Store.new(db, config: content, markdown: KanbanTest.markdown(content), boards: ->(_s) { true })
+    assert AgentsKanban::Store.new(db, config: content, markdown: KanbanTest.markdown(content), boards: ->(_s) { true },
+                                   prs: pr_roles)
   end
 
   # ── pings + watchdog ─────────────────────────────────────────────────────────────────────────

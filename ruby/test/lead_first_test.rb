@@ -424,7 +424,7 @@ class LeadFirstTest < Minitest::Test
     @now += AgentsKanban::Store::LAUNCH_FAILURE_WINDOW_S + 1
     assert_empty kb.lead_ends(["g/r"])
     assert_empty AgentsKanban::Store.new(db, config: KanbanTest.config("content"), markdown: md,
-                                         boards: ->(_) { true }, clock: -> { @now }).lead_ends(["g/r"])
+                                         boards: ->(_) { true }, clock: -> { @now }, prs: PrRoles.new).lead_ends(["g/r"])
   end
 
   # review round 1: EVERY lead end alerts but the operator's stop — the watchdog's, an agent's, a host's, gone; a failed

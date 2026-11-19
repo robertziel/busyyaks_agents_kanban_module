@@ -23,6 +23,7 @@ import type {
   BoardLabel,
   CardData,
   CardFull,
+  CardLink,
   Checklist,
   MentionPart,
   PresentAgent,
@@ -316,6 +317,18 @@ function CardDetail({
     }
   };
   const patch = (body: Parameters<typeof api.update>[1]) => run(() => api.update(id, body));
+  // the operator takes an assigned PR off the card, with the reason typed into the rail row's form (logged on the
+  // card) → null, or the refusal's text for the form to show
+  const unassignPr = async (l: CardLink, reason: string): Promise<string | null> => {
+    try {
+      await api.prUnassign!(id, l.url, reason);
+    } catch (e) {
+      return errMsg(e);
+    }
+    await reload();
+    onChanged();
+    return null;
+  };
   // a comment (or an answer option): the server says who it pings — shown under the box, never silent
   const sendComment = (body: string, clear: boolean) =>
     run(async () => {
@@ -1024,7 +1037,7 @@ function CardDetail({
             {data.links && data.links.length > 0 && (
               <>
                 <h4>Links · {data.links.length}</h4>
-                <CardLinks links={data.links} />
+                <CardLinks links={data.links} onUnassign={api.prUnassign ? unassignPr : undefined} />
               </>
             )}
             <h4>Owner session</h4>

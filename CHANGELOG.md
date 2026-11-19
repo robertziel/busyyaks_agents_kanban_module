@@ -86,6 +86,26 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
   card — metadata `prs.<role>` = the URL, merged into the card's metadata (`Store#assign_pr`). The MCP instructions
   tell agents to call it at once after opening a PR; a host reads a card's PRs from it, never from branch names or text.
 
+- **PR roles port**: `Store.new(prs:)` → `pr_roles(card)` → `{role => {repos:, required:, error:}}`;
+  `kanban_pr_assign` refuses a role the host does not read, a PR on a repo its role does not take, a PR already on
+  another card; an agent cannot move a card out of a working column into review / a gate / done while a required role
+  has no PR (an operator drag is never refused: its move line says `(dragged: no <role> PR)`). SPEC § 1, § 9 (v14).
+- **The PR watch keys each PR**: `closed_prs` may name a PR's `repo`; the watch key is
+  `pr_closed:<role>:<repo>#<n>` (several PRs of one role are several closes), a close recorded under the older
+  `pr_closed:<role>` key is not told again.
+- **`kanban_pr_unassign(id, pr_url, author, reason)`** + `Api#pr_unassign`: the only way a PR leaves
+  a card; the reason is logged and the entry kept in metadata `prs_removed`. An agent unassigns its own assignment or
+  any on a card it is the assignee of; the operator any.
+- `Store#unassigned_pr_mentions`: the PR URLs open cards name in their own text but do not hold —
+  a read-only report for a human to confirm (a PR is never assigned from text).
+- React `CardLink.unassign` + optional `KanbanApi.prUnassign(id, prUrl, reason)`: the operator's
+  unassign action on an assigned PR's rail row — the "×" opens one line in the row, reason + Unassign (Enter sends,
+  Escape cancels, a refusal is said under the box); no browser prompt / confirm.
+- React `CardLink.group` + `LinkGroup.fold`: the rail lists PRs per role ("PRs · local", the tag
+  repeating the role left out) and never folds them; a PR row's `#N <repo>` label wraps at `_ - . /` instead of being
+  cut; `CardLink.struck` draws history (a removed PR struck through, one line); chip
+  text reads ≥ 4.5:1 on its tint; on a phone the rail spans the dialog's side columns.
+
 ### Changed
 
 - **Board header, one grid**: summary pills, tools and filter controls share one height (28 px) on one row pitch; the
@@ -96,6 +116,19 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
   for that card, the others still pinged — one bad assignment no longer silences the watch for every project.
 
 ### Changed (breaking for hosts)
+
+- **BREAKING: `Store.new` requires `prs:`** — the PR roles port, `pr_roles(card)` →
+  `{role => {repos:, required:, error:}}`; without it the Store raises `ArgumentError` at construction. Migration: pass
+  `prs:` (a host whose cards carry no PRs passes an object whose `pr_roles` answers `{}`). A host that wrote
+  `metadata.prs` itself moves to `kanban_pr_assign` / `Store#assign_pr`.
+- **BREAKING: a card's PRs are a list — Schema v14** (a card changes several repos and every
+  PR must show). Metadata `prs` was `{role => url}` (one PR per role, re-assigning replaced it); it is now
+  `[{url, repo, number, role, by, at}]` and `kanban_pr_assign` ADDS (it never replaces). A host that reads
+  `metadata.prs.<role>` reads the list instead (every entry of the role). Migration: a host migration
+  `Schema.migrate!(db, prefix:, to: 14, prs: <the Store's PR roles port>)` (= `Schema.prs_to_lists!`: text naming several
+  PRs → one entry each, a role key the host does not read → the one host role whose repos hold the PR's repo, a PR in no
+  role → `prs_removed` only when the port's optional `unread_reason` says why, anything else raises; rollback `Schema.prs_to_roles!`, refused while a card
+  holds what v12 cannot); a `{role => url}` left unconverted is refused on read.
 
 - **`face_roles` and `avatar_url` are required host-config keys** (null allowed; a bad value fails at load):
   `face_roles` = null or `{role: [name globs]}` (a subagent whose name matches wears that role's colour);

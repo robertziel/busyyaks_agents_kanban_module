@@ -113,6 +113,22 @@ class PrWatchTest < Minitest::Test
     assert_equal 1, comments(b).size
   end
 
+  # two PRs of one role closed at one second are two closes; the repo names each; a close the older
+  # per-role key recorded is not told again
+  def test_two_prs_of_one_role_are_two_closes_and_the_old_key_is_respected
+    id = card
+    a = { role: "local", number: 7, repo: "o/r_local", closed_at: 6_000, why: "base deleted" }
+    approval_ci.closed = { id => [a, a.merge(number: 91, repo: "o/eng_local")] }
+    assert_equal [[id, :closed], [id, :closed]], @m.pr_watch_pass
+    assert_equal ["PR o/r_local#7", "PR o/eng_local#91"], comments(id).map { |b| b[/\APR \S+/] }
+    old = card
+    db[:"#{KanbanTest::PREFIX}ci_watches"].insert(card_id: old, kind: "pr_closed:local", ref: 6_000, pr: 7, state: "closed",
+                                                  created_at: 1)
+    approval_ci.closed = { old => [a] }
+    assert_empty @m.pr_watch_pass
+    assert_empty comments(old)
+  end
+
   def test_a_failed_read_of_one_pr_is_said_while_another_pr_of_the_card_stays_closed
     id = card
     approval_ci.closed = { id => [CLOSED, { error: "local PR #7 on o/r: GitHub read failed: 500" }] }

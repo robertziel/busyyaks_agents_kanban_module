@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "json"
 require "sequel"
 
 module AgentsKanban
@@ -34,8 +35,11 @@ module AgentsKanban
     # 13 = the progress watch's stretch on the card (Store#progress_watch_pass): cards.progress_at (the last progress the
     # watch saw), progress_marks (JSON {kind => {key, text, at}}: the ci: port's evidence as last seen, at = when it
     # changed), progress_pinged_at / progress_commented_at / progress_stale_at (the stretch's escalation steps),
-    # progress_error (why the last pass could not read the card's evidence)
-    VERSION = 13
+    # progress_error (why the last pass could not read the card's evidence);
+    # 14 = a card's PRs are a LIST (no DDL, a data step): metadata `prs` {role => url} → [{url, repo, number, role, by,
+    # at}] (by / at read off the card's "PR <role>: <url>" activity line, null when none says), the never-released
+    # `prs_replaced` → `prs_removed` entries (prs_to_lists!; prs_to_roles! is the host's rollback)
+    VERSION = 14
     TABLES = %i[cards card_activity board_labels checklists checklist_items card_pings card_attachments session_dialogs
                 agent_sessions ci_watches boards board_columns board_transitions].freeze
 
@@ -50,7 +54,8 @@ module AgentsKanban
     # (busyyaks: 20261112 → 2, 20261113 → 3, 20261114 → 4, 20261115 → 5, 20261116 → 6, 20261120 → 7, 20261122 → 8,
     # 20261124 → 9, 20261125 → 10).
     # Default: the current version.
-    def migrate!(db, prefix: "", to: VERSION)
+    # prs: the host's PR roles port (Store.new's), needed by step 13 once a card holds PRs in the old shape
+    def migrate!(db, prefix: "", to: VERSION, prs: nil, now: Time.now.to_i)
       raise ArgumentError, "to must be 1..#{VERSION} (got #{to.inspect})" unless to.is_a?(Integer) && (1..VERSION).cover?(to)
 
       t = tables(prefix)
@@ -84,7 +89,191 @@ module AgentsKanban
                       [:progress_error, String, { text: true }],
                     ])
       end
+      prs_to_lists!(db, prefix: prefix, prs: prs, now: now) if to >= 14
       t
+    end
+
+    PR_URL = %r{\Ahttps://github\.com/([\w.-]+/[\w.-]+)/pull/([1-9]\d*)\z}
+
+    # v14 (idempotent: a card whose `prs` is already a list is left as it is): every card's metadata `prs`
+    # {role => value} becomes [{url, repo, number, role, by, at}], role order kept, then the order each value names its
+    # PRs. A value is one PR URL, or text naming several: every full PR URL in it, and a bare "/pull/N" after one (= the
+    # same repo), each its own entry; the rest of the text (prose: "(merged: 3f4863a)") is dropped only when it names no
+    # other PR link — a value that starts with no PR URL, or keeps a "github.com" / "/pull/" / "http" the parse did not
+    # read, raises naming the card and the value. A role the host does not read on that card (`prs:` = the Store's
+    # port, pr_roles(card)) is mapped by its PR's repo: the one host role whose `repos` holds it (an old `engine` key
+    # naming the public engine repo → `public`); none or several → raise naming the card, the value and the candidates.
+    # `by` / `at` = the author and time of the card's newest activity line "PR <role>: <value>" (null when no line
+    # says: never guessed). A `prs_replaced` entry ({role, url, by, at}: the one-PR-per-role history that never shipped
+    # in a release) becomes a `prs_removed` entry with reason "replaced under the one-PR-per-role rule". Any raise →
+    # nothing is written. `prs:` is required once a card holds the {role => value} shape (a fresh DB needs none).
+    # A PR in no role at all is kept off the list only when the port says why (optional `unread_reason(card, role,
+    # repo)` → a reason, or nil = raise): it becomes a `prs_removed` entry (removed_by "migration", that reason) and
+    # the card gets an activity line "PR <role> removed by the v14 migration: <url> — <reason>" (at `now`).
+    def prs_to_lists!(db, prefix: "", prs: nil, now: Time.now.to_i)
+      t = tables(prefix)
+      lines = []
+      each_pr_card(db, t) do |row, meta|
+        id = row[:id]
+        old_prs = meta["prs"]
+        next nil unless old_prs.is_a?(Hash) || meta.key?("prs_replaced")
+
+        out = meta.except("prs", "prs_replaced")
+        removed = []
+        out["prs"] = old_prs.is_a?(Hash) ? list_of(db, t, row, old_prs, prs, removed) : old_prs
+        removed.each do |e|
+          out["prs_removed"] = (out["prs_removed"] || []) +
+                               [e.merge("removed_by" => "migration", "removed_at" => now)]
+          lines << { card_id: id, kind: "update", author: "migration", created_at: now,
+                     body: "PR #{e['role']} removed by the v14 migration: #{e['url']} — #{e['reason']}", }
+        end
+        old = meta["prs_replaced"]
+        if old
+          raise ArgumentError, "card #{id} metadata prs_replaced is not a list" unless old.is_a?(Array)
+
+          out["prs_removed"] = (meta["prs_removed"] || []) + old.map do |r|
+            pr_entry(db, t, id, r["role"], r["url"], by: r["by"], at: r["at"])
+              .merge("removed_by" => r["by"], "removed_at" => r["at"], "reason" => "replaced under the one-PR-per-role rule")
+          end
+        end
+        out
+      end
+      lines.each { |l| db[t[:card_activity]].insert(l) }
+    end
+
+    # one card's {role => value} → its list (see prs_to_lists!); removed collects the PRs in no role the port explains
+    def list_of(db, t, row, old_prs, port, removed = [])
+      id = row[:id]
+      unless port.respond_to?(:pr_roles)
+        raise ArgumentError, "card #{id} holds PRs in the {role => url} shape: migrate!(…, prs:) needs the host's PR " \
+                             "roles port to map them"
+      end
+
+      roles = begin
+        port.pr_roles(row)
+      rescue StandardError => e
+        raise ArgumentError, "card #{id}: its PR roles cannot be read (#{e.message}), so its prs cannot be mapped"
+      end
+      seen = {} # url → its entry: the same PR under two old keys mapped to one role is one entry naming both keys
+      list = old_prs.flat_map do |role, value|
+        pr_urls(id, role, value).filter_map do |url, repo|
+          to = roles.key?(role) ? role : legacy_role(id, role, value, repo, roles, port, row)
+          if to.is_a?(Hash) # in no role, explained by the port: kept as removed
+            removed << pr_entry(db, t, id, role, url, said: value).merge("reason" => to[:reason])
+            next nil
+          end
+          had = seen[url.downcase]
+          if had
+            unless had["role"] == to
+              raise ArgumentError, "card #{id}: #{url} is named under two roles (#{had['role']}, #{to}) in its prs"
+            end
+
+            had["from_roles"] << role
+            next nil
+          end
+          seen[url.downcase] = pr_entry(db, t, id, role, url, said: value).merge("role" => to, "from_roles" => [role])
+        end
+      end
+      # from_roles: the old keys an entry came from, kept only when they differ from its role (prs_to_roles! restores
+      # them exactly)
+      list.each { |e| e.delete("from_roles") if e["from_roles"] == [e["role"]] }
+    end
+
+    PR_TOKEN = %r{https://github\.com/(?<repo>[\w.-]+/[\w.-]+)/pull/(?<n>[1-9]\d*)(?![\w/])|(?<![\w/])/pull/(?<bn>[1-9]\d*)(?![\w/])}
+
+    # every PR a {role => value} value names → [[url, repo], …] in order (see prs_to_lists!)
+    def pr_urls(id, role, value)
+      text = value.is_a?(String) ? value.strip : nil
+      if text.nil? || !text.match?(%r{\Ahttps://github\.com/[\w.-]+/[\w.-]+/pull/[1-9]\d*(?![\w/])})
+        raise ArgumentError, "card #{id} metadata prs.#{role} is not a GitHub PR URL: #{value.to_s[0, 200].inspect}"
+      end
+
+      repo = nil
+      out = []
+      text.scan(PR_TOKEN) do
+        m = Regexp.last_match
+        repo = m[:repo] if m[:repo]
+        out << ["https://github.com/#{repo}/pull/#{m[:n] || m[:bn]}", repo]
+      end
+      rest = text.gsub(PR_TOKEN, "")
+      # a PR named some other way ("pull/2", "a/c#3") is a PR the parse did not read: never dropped silently
+      if rest.match?(%r{github\.com|/pull/|https?:|\bpull/\d|#\d}i)
+        raise ArgumentError, "card #{id} metadata prs.#{role} names a PR link the migration cannot read: " \
+                             "#{value[0, 200].inspect}"
+      end
+
+      out
+    end
+
+    # the one host role whose repos hold this PR's repo, for a role key the host does not read
+    # (or {reason:} when it fits no role and the port's unread_reason explains it)
+    def legacy_role(id, role, value, repo, roles, port = nil, row = nil)
+      hits = roles.select { |_, s| s.is_a?(Hash) && (s[:repos].nil? || s[:repos].any? { |r| r.casecmp?(repo) }) }.keys
+      return hits.first if hits.size == 1
+
+      why = hits.empty? && port.respond_to?(:unread_reason) ? port.unread_reason(row, role, repo) : nil
+      return { reason: why } if why
+
+      raise ArgumentError, "card #{id} metadata prs.#{role} (#{value.to_s[0, 200].inspect}): role #{role.inspect} is not " \
+                           "one the host reads (#{roles.keys.join(', ')}) and #{repo} is in " \
+                           "#{hits.empty? ? 'no role' : "several (#{hits.join(', ')})"}'s repos"
+    end
+
+    # The host's rollback of v14: each card's `prs` list → {role => url}; an entry up mapped (an old `engine` key, `local`
+    # on a plain project that reads only `pr`) carries `from_roles` and goes back under those exact keys.
+    # Refused (ArgumentError naming the cards, nothing written) when a card holds two PRs of one role or has PRs
+    # unassigned (`prs_removed`): v12 can hold neither.
+    def prs_to_roles!(db, prefix: "")
+      t = tables(prefix)
+      bad = []
+      each_pr_card(db, t, write: false) do |row, meta|
+        id = row[:id]
+        prs = meta["prs"]
+        many = prs.is_a?(Array) && prs.flat_map { |p| p["from_roles"] || [p["role"]] }.tally.any? { |_, n| n > 1 }
+        bad << id if many || meta.key?("prs_removed")
+        nil
+      end
+      unless bad.empty?
+        raise ArgumentError, "cards #{bad.join(', ')} hold several PRs of one role or unassigned PRs, which the " \
+                             "{role => url} shape cannot hold: restore the backup taken before the migration"
+      end
+
+      each_pr_card(db, t) do |_, meta|
+        prs = meta["prs"]
+        next nil unless prs.is_a?(Array)
+
+        # each entry back under the old key(s) it came from (from_roles), else its role
+        meta.merge("prs" => prs.flat_map { |p| (p["from_roles"] || [p["role"]]).map { |r| [r, p["url"]] } }.to_h)
+      end
+    end
+
+    # yields (card row {id, project_slug, metadata}, metadata Hash) for every card whose metadata names prs; the
+    # non-nil block values are written back
+    # once every card has been read (a raise for one card writes none)
+    def each_pr_card(db, t, write: true)
+      rows = db[t[:cards]].exclude(metadata: nil).where(Sequel.like(:metadata, "%prs%"))
+                          .select(:id, :project_slug, :metadata).all
+      out = rows.filter_map do |r|
+        meta = JSON.parse(r[:metadata])
+        next unless meta.is_a?(Hash)
+
+        changed = yield(r, meta)
+        changed && [r[:id], changed]
+      end
+      out.each { |id, meta| db[t[:cards]].where(id: id).update(metadata: JSON.generate(meta)) } if write
+    end
+
+    # said: the old value the activity line named (a free-text value names several PRs; default: the URL)
+    def pr_entry(db, t, id, role, url, by: nil, at: nil, said: url)
+      m = url.to_s.match(PR_URL)
+      raise ArgumentError, "card #{id} metadata prs.#{role} is not a GitHub PR URL: #{url.to_s[0, 200].inspect}" unless m
+
+      said = "PR #{role}: #{said}"
+      line = db[t[:card_activity]].where(card_id: id, kind: "update").order(Sequel.desc(:id))
+                                  .select(:body, :author, :created_at).all
+                                  .find { |a| a[:body] == said || a[:body].start_with?("#{said} ") }
+      { "url" => url, "repo" => m[1], "number" => m[2].to_i, "role" => role,
+        "by" => by || line&.fetch(:author), "at" => at || line&.fetch(:created_at), }
     end
 
     # v9: the graph positions go (guarded: a second run changes nothing).

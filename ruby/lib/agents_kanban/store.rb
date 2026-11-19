@@ -62,8 +62,16 @@ module AgentsKanban
 
     # boards: ->(slug) { true | false } — the host says which boards exist (busyyaks: its projects table); a card is
     # never written for a slug the host does not know.
-    def initialize(db, config:, markdown:, boards:, clock: -> { Time.now.to_i }, ci: nil)
+    # prs: the host's PR roles port — pr_roles(card) → {role => {repos: ["owner/name", …] | nil (any repo),
+    # required: bool, error: nil | "why this role takes no PR now" (an assignment under it is refused with that)}}
+    # (Delivery::Unavailable with the reason when the host cannot say): the roles kanban_pr_assign takes on that card,
+    # the repos a PR of each one may be on (a card may change several repos), and which roles an agent must have at
+    # least one PR of before it moves the card out of a working column into review / a gate / done. Required: a host
+    # whose cards carry no PRs answers {} (every role refused, none required) — said by the host, never assumed by
+    # the engine.
+    def initialize(db, config:, markdown:, boards:, prs:, clock: -> { Time.now.to_i }, ci: nil)
       raise ArgumentError, "config must be an AgentsKanban::HostConfig" unless config.is_a?(HostConfig)
+      raise ArgumentError, "prs: must answer pr_roles(card) (the host's PR roles port)" unless prs.respond_to?(:pr_roles)
       if config.green_ci_gate? && !ci.respond_to?(:approval_checks)
         raise ConfigError, "host config has approval.requires_green_ci but the Store got no ci: port answering " \
                            "approval_checks(card, step)"
@@ -82,6 +90,7 @@ module AgentsKanban
       @boards = boards
       @clock = clock
       @ci = ci
+      @prs = prs
       @tables = Schema.tables(config.table_prefix)
       # a session board is never instantiated from the project template: only session_board! creates one
       @repo = BoardRepo.new(db, tables: @tables, host: config, clock: clock,
@@ -537,7 +546,7 @@ module AgentsKanban
               labels: JSON.generate(labels!(labels, slug)),
               assignee: owner ? by : assignee!(assignee), priority: priority!(priority), due_at: due!(due),
               created_by: by, created_at: now, updated_at: now,
-              parent_id: pid, metadata: metadata.nil? ? nil : JSON.generate(metadata!(metadata)),
+              parent_id: pid, metadata: metadata.nil? ? nil : JSON.generate(metadata!(no_pr_keys!(metadata))),
               owner_session: owner, owner_socket: owner && owner_socket.to_s, }
       blocked!(b, column, unfinished([pid].compact), "card")
       @db.transaction do
@@ -570,7 +579,7 @@ module AgentsKanban
       set[:due_done] = bool!(a[:due_done], "due_done") if a.key?(:due_done)
       set[:cover] = color!(a[:cover], nullable: true) if a.key?(:cover)
       set[:parent_id] = parent!(a[:parent], c[:project_slug], c[:id]) if a.key?(:parent)
-      set[:metadata] = a[:metadata].nil? ? nil : JSON.generate(metadata!(a[:metadata])) if a.key?(:metadata)
+      set[:metadata] = metadata_update(c, a[:metadata]) if a.key?(:metadata)
       changed = set.reject { |k, v| c[k] == v }
       return c if changed.empty?
 
@@ -585,43 +594,268 @@ module AgentsKanban
       card(id)
     end
 
-    PR_URL = %r{\Ahttps://github\.com/[\w.-]+/[\w.-]+/pull/[1-9]\d*\z}
+    PR_URL = %r{\Ahttps://github\.com/([\w.-]+/[\w.-]+)/pull/([1-9]\d*)\z}
     PR_ROLE = /\A[a-z][a-z0-9_-]{0,31}\z/
+    MAX_PR_REASON = 500
 
-    # The agent that opened a PR assigns it to its card: metadata `prs.<role>` = the PR URL (the host names the roles,
-    # e.g. local · public, and reads them back; nothing is derived from branch names or text). Merged into the card's
-    # metadata in one transaction — the other keys stay. Re-assigning a role replaces its PR; the same URL again is a
-    # no-op. Logged as an `update` line "PR <role>: <url>".
+    # The agent that opened a PR assigns it to its card: metadata `prs` is a LIST of assigned PRs
+    # ([{url, repo, number, role, by, at}], oldest first) — any number per role and per repo (a card may change several
+    # repos). The host names the roles and the repos each one takes through the prs: port and reads the list back;
+    # nothing is derived from branch names or text. Assigning ADDS: the same URL under the same role again is a no-op,
+    # nothing is ever replaced or dropped (a PR leaves the list only through unassign_pr). Refused: a role the host does
+    # not read on this card, a PR on a repo its role does not take, the URL already on this card under another role, and
+    # a PR already assigned to another card (a PR belongs to one card; a card in a cancelled column gives its PRs up).
+    # Logged as an `update` line "PR <role>: <url>".
     def assign_pr(id, url:, role:, by:)
       url = url.to_s.strip
-      unless url.match?(PR_URL)
-        raise Invalid, "pr_url must be a GitHub pull request URL (https://github.com/<owner>/<repo>/pull/<n>)"
-      end
+      m = url.match(PR_URL)
+      raise Invalid, "pr_url must be a GitHub pull request URL (https://github.com/<owner>/<repo>/pull/<n>)" unless m
       unless role.to_s.match?(PR_ROLE)
         raise Invalid, "role must be a lowercase word (a-z 0-9 _ -, at most 32): #{role.to_s[0, 40].inspect}"
       end
 
       by = who!(by)
-      prs = card_prs!(card!(id)) # refused before the transaction: a raise inside one reaches the host wrapped
-      return card(id) if prs[role] == url
+      return card(id) if same_pr!(card!(id), url, role)
 
+      # Every check runs INSIDE the transaction (the host serialises writers: SQLite BEGIN IMMEDIATE, PostgreSQL an
+      # advisory lock), so two agents assigning one PR to two cards cannot both pass. A raise inside a transaction
+      # reaches the caller wrapped by some hosts, so a refusal rolls back and is raised after it.
+      refusal = nil
       @db.transaction do
-        c = card!(id) # read again inside: the host serialises writers (SQLite BEGIN IMMEDIATE, PostgreSQL lock)
-        meta = c[:metadata] ? JSON.parse(JSON.generate(c[:metadata])) : {}
-        meta["prs"] = card_prs!(c).merge(role => url)
-        cards.where(id: c[:id]).update(metadata: JSON.generate(metadata!(meta)), updated_at: @clock.call)
+        c = card!(id)
+        begin
+          next if same_pr!(c, url, role) # assigned in between: still a no-op
+
+          removed_prs!(c)
+          pr_role_check!(c, role, m[1])
+          pr_elsewhere!(c, url)
+          meta = c[:metadata] ? JSON.parse(JSON.generate(c[:metadata])) : {}
+          entry = { "url" => url, "repo" => m[1], "number" => m[2].to_i, "role" => role, "by" => by, "at" => @clock.call }
+          meta["prs"] = card_prs!(c) + [entry]
+          json = JSON.generate(pr_metadata!(c, meta))
+        rescue Invalid => e
+          refusal = e
+          raise Sequel::Rollback
+        end
+        cards.where(id: c[:id]).update(metadata: json, updated_at: @clock.call)
         log(c[:id], "update", "PR #{role}: #{url}", by)
       end
+      raise refusal if refusal
+
       card(id)
     end
 
-    # the card's metadata prs ({} when none); anything but an object is refused with what it is
+    # Takes one PR off the card's list (`prs`) — the only way a PR leaves it — and keeps it in metadata `prs_removed`
+    # ([{url, repo, number, role, by, at, removed_by, removed_at, reason}], oldest first). `reason` is required.
+    # An agent (agent: true) unassigns only a PR it assigned itself (`by`) or one on a card it is the assignee of; the
+    # operator any. Logged as an `update` line "PR <role> unassigned: <url> — <reason>".
+    def unassign_pr(id, url:, by:, reason:, agent:)
+      url = url.to_s.strip
+      reason = reason.to_s.strip
+      raise Invalid, "reason is required: why this PR is not the card's" if reason.empty?
+      raise Invalid, "reason is longer than #{MAX_PR_REASON} characters" if reason.length > MAX_PR_REASON
+
+      by = who!(by)
+      card!(id) # no such card: refused before the transaction (a raise inside one reaches the host wrapped)
+      refusal = nil
+      @db.transaction do
+        c = card!(id)
+        begin
+          prs = card_prs!(c)
+          entry = prs.find { |p| p["url"].casecmp?(url) }
+          unless entry
+            have = prs.empty? ? "none" : prs.map { |p| "#{p['role']} #{p['url']}" }.join(", ")
+            raise Invalid, "#{url} is not assigned to card ##{c[:id]} (its PRs: #{have})"
+          end
+          if agent && entry["by"] != by && c[:assignee] != by
+            raise Denied, "#{url} was assigned by #{entry['by'] || 'nobody recorded'}: only that agent, the card's " \
+                          "assignee (#{c[:assignee] || 'none'}) or the operator unassigns it"
+          end
+
+          meta = JSON.parse(JSON.generate(c[:metadata]))
+          meta["prs"] = prs.reject { |p| p.equal?(entry) }
+          gone = entry.merge("removed_by" => by, "removed_at" => @clock.call, "reason" => reason)
+          meta["prs_removed"] = removed_prs!(c) + [gone]
+          json = JSON.generate(pr_metadata!(c, meta))
+        rescue Invalid => e
+          refusal = e
+          raise Sequel::Rollback
+        end
+        cards.where(id: c[:id]).update(metadata: json, updated_at: @clock.call)
+        log(c[:id], "update", "PR #{entry['role']} unassigned: #{entry['url']} — #{reason}", by)
+      end
+      raise refusal if refusal
+
+      card(id)
+    end
+
+    PR_MENTION = %r{https://github\.com/[\w.-]+/[\w.-]+/pull/[1-9]\d*}
+
+    # A report for a human to confirm, never acted on: every PR URL an open card (not archived, its column not of type
+    # done / cancelled, not on a session board) names in its own text — its handoff `pr_url`, its description, its
+    # comments and handoffs — that is not in its `prs` list → [{card:, project:, column: (label), url:, seen:}]
+    # (`seen` = where it is first named: "pr_url", "description", "<kind> <activity id>"), one row per card and URL
+    # (any case), in card order. Reads only: a PR is assigned by the agent that opened it (kanban_pr_assign), never
+    # derived from text. A card whose `prs` cannot be read → Invalid naming it.
+    def unassigned_pr_mentions
+      open = cards.where(archived_at: nil).order(:id).all.reject do |c|
+        session_slug?(c[:project_slug]) || %w[done cancelled].include?(board_of(c[:project_slug]).type_of(c[:column]).key)
+      end
+      acts = activity_t.where(card_id: open.map { |c| c[:id] }, kind: %w[comment handoff]).order(:id)
+                       .select(:card_id, :id, :kind, :body).all.group_by { |a| a[:card_id] }
+      open.flat_map do |row|
+        c = hydrate(row)
+        # assigned, or taken off on purpose (an unassign, the v14 migration): neither is "named but not assigned"
+        have = (card_prs!(c) + removed_prs!(c)).map { |p| p["url"].downcase }
+        named = [["pr_url", c[:pr_url].to_s], ["description", c[:notes].to_s]] +
+                acts.fetch(c[:id], []).map { |a| ["#{a[:kind]} #{a[:id]}", a[:body].to_s] }
+        seen = {}
+        named.each do |where, text|
+          text.scan(PR_MENTION).each { |u| seen[u.downcase] ||= [u, where] unless have.include?(u.downcase) }
+        end
+        seen.values.map do |url, where|
+          { card: c[:id], project: c[:project_slug], column: board_of(c[:project_slug]).label(c[:column]), url: url,
+            seen: where, }
+        end
+      end
+    end
+
+    # true = the URL is already this card's PR under `role` (a no-op); under another role → Invalid
+    def same_pr!(c, url, role)
+      had = card_prs!(c).find { |p| p["url"].casecmp?(url) }
+      return false unless had
+      return true if had["role"] == role
+
+      raise Invalid, "#{url} is already the #{had['role']} PR of card ##{c[:id]}: kanban_pr_unassign it first to " \
+                     "assign it as #{role}"
+    end
+
+    # metadata! with the size cap said for PRs: the list is what grew
+    def pr_metadata!(c, meta)
+      metadata!(meta)
+    rescue Invalid => e
+      raise Invalid, "card ##{c[:id]}: #{e.message} with its PRs — unassign the PRs that are not this card's"
+    end
+
+    # the card's metadata prs_removed ([] when none); anything but a list of {role, url} objects is refused
+    def removed_prs!(c)
+      list = c[:metadata].is_a?(Hash) ? c[:metadata]["prs_removed"] : nil
+      return [] if list.nil?
+
+      ok = list.is_a?(Array) && list.all? { |r| r.is_a?(Hash) && r["role"].is_a?(String) && r["url"].is_a?(String) }
+      return list if ok
+
+      raise Invalid, "card ##{c[:id]} metadata prs_removed is not a list of {role, url}: #{JSON.generate(list)[0, 200]}"
+    end
+
+    # The host's PR roles for this card ({role => {repos:, required:, error:}}); the host cannot say → Invalid.
+    def pr_roles!(c)
+      roles = @prs.pr_roles(c)
+      unless roles.is_a?(Hash)
+        raise Invalid, "the host's prs: port answered #{roles.class}, not {role => {repos:, required:}}"
+      end
+
+      roles
+    rescue Delivery::Unavailable, Delivery::Refused => e
+      raise Invalid, "the PR roles of card ##{c[:id]} cannot be read: #{e.message}"
+    end
+
+    def pr_role_check!(c, role, repo)
+      roles = pr_roles!(c)
+      spec = roles[role]
+      unless spec
+        raise Invalid, "role #{role.inspect} is not one this project reads (#{roles.keys.join(', ')}): " \
+                       "kanban_pr_assign with one of those"
+      end
+      raise Invalid, "a #{role} PR cannot be assigned on card ##{c[:id]} now: #{spec[:error]}" if spec[:error]
+
+      want = spec[:repos]
+      return if want.nil? || want.any? { |r| r.casecmp?(repo) } # GitHub owner/name: any case
+
+      raise Invalid, "a #{role} PR is on #{want.empty? ? 'no repo the host knows' : want.join(' / ')}, not on " \
+                     "#{repo}: assign this PR under the role of its repo"
+    end
+
+    # the same PR (any case) assigned to another live card that is not cancelled → Invalid naming it
+    def pr_elsewhere!(c, url)
+      number = url[%r{/pull/(\d+)\z}, 1]
+      cards.exclude(id: c[:id]).where(archived_at: nil).where(Sequel.like(:metadata, "%/pull/#{number}%")).all.each do |o|
+        meta = JSON.parse(o[:metadata])
+        prs = meta.is_a?(Hash) && meta["prs"].is_a?(Array) ? meta["prs"] : []
+        had = prs.find { |p| p.is_a?(Hash) && p["url"].is_a?(String) && p["url"].casecmp?(url) }
+        next unless had
+        next if board_of(o[:project_slug]).type_of(o[:column]).key == "cancelled"
+
+        raise Invalid, "#{url} is already the #{had['role']} PR of card ##{o[:id]} (#{o[:project_slug]}): a PR belongs " \
+                       "to one card — open a PR for this card, or work on card ##{o[:id]}"
+      end
+    end
+
+    # The agent moving a card out of a working column into review, a gate or done must have the PRs the host requires
+    # assigned (a session board has no project: nothing asked).
+    def required_prs!(b, c, column)
+      return unless b.working?(c[:column]) && %w[review gate done].include?(b.type_of(column).key)
+      return if session_slug?(c[:project_slug])
+
+      missing = missing_prs(c)
+      return if missing.empty?
+
+      raise Denied, "card ##{c[:id]} has no #{missing.join(' / ')} PR assigned — open the PR and " \
+                    "kanban_pr_assign(#{c[:id]}, pr_url, #{missing.first.inspect}, author) before it leaves " \
+                    "#{b.label(c[:column])}"
+    end
+
+    # the roles the host requires on this card that have no PR assigned
+    def missing_prs(c) = pr_roles!(c).select { |_, s| s[:required] }.keys - card_prs!(c).map { |p| p["role"] }
+
+    # The operator's drag is never refused by the required-PR rule (like the CI gates): its move line says what it
+    # skipped — " (dragged: no local PR)" — or why the roles could not be read. nil = nothing missing / not that move.
+    def drag_pr_note(b, c, column)
+      return nil unless b.working?(c[:column]) && %w[review gate done].include?(b.type_of(column).key)
+      return nil if session_slug?(c[:project_slug])
+
+      missing = missing_prs(c)
+      missing.empty? ? nil : " (dragged: no #{missing.join(' / ')} PR)"
+    rescue Invalid => e
+      " (dragged: PR roles unknown — #{e.message})"
+    end
+
+    # The metadata keys only kanban_pr_assign / kanban_pr_unassign write: refused in create / update (by anyone: agents
+    # through the tools, the operator through the Api), and kept as they are when an update replaces the rest of the
+    # metadata. `prs_replaced` = the pre-list history key (never written now, never accepted).
+    PR_KEYS = %w[prs prs_removed prs_replaced].freeze
+
+    def no_pr_keys!(v)
+      keys = v.is_a?(Hash) ? v.keys.map(&:to_s) & PR_KEYS : []
+      return v if keys.empty?
+
+      raise Invalid, "metadata #{keys.join(' / ')} is written only by kanban_pr_assign / kanban_pr_unassign (their " \
+                     "role, repo and one-card checks): leave #{keys.size == 1 ? 'it' : 'them'} out"
+    end
+
+    # the update's metadata JSON: the given object (no PR keys) + the card's own PR keys; nil clears everything else
+    def metadata_update(c, given)
+      kept = c[:metadata].is_a?(Hash) ? c[:metadata].slice(*PR_KEYS) : {}
+      return nil if given.nil? && kept.empty?
+
+      meta = given.nil? ? {} : metadata!(no_pr_keys!(given))
+      JSON.generate(metadata!(meta.merge(kept)))
+    end
+
+    # The card's assigned PRs (metadata `prs`, [] when none), each {url, repo, number, role, by, at}. The pre-list shape
+    # ({role => url}, Schema step 13 converts it) or anything else that is not a list of PR entries is refused with
+    # what it is — never read as an empty list.
     def card_prs!(c)
       prs = c[:metadata].is_a?(Hash) ? c[:metadata]["prs"] : nil
-      return {} if prs.nil?
-      raise Invalid, "card ##{c[:id]} metadata prs is not an object: #{JSON.generate(prs)[0, 200]}" unless prs.is_a?(Hash)
+      return [] if prs.nil?
+      if prs.is_a?(Hash)
+        raise Invalid, "card ##{c[:id]} metadata prs is the pre-list {role => url} shape: run the host's migration " \
+                       "to engine schema 13 (Schema.prs_to_lists!)"
+      end
+      ok = prs.is_a?(Array) && prs.all? { |p| p.is_a?(Hash) && p["url"].is_a?(String) && p["role"].is_a?(String) }
+      return prs if ok
 
-      prs
+      raise Invalid, "card ##{c[:id]} metadata prs is not a list of {url, role}: #{JSON.generate(prs)[0, 200]}"
     end
 
     # To column at position (0-based; nil or past the end = last). Both columns are renumbered.
@@ -661,11 +895,13 @@ module AgentsKanban
                 (approval || (named && transition.to_s.strip.casecmp?(step.name)))
       green = checked ? green_ci!(c, b, step) : nil
       rebase = green && rebase_of!(c, green)
+      pr_note = !agent && c[:column] != column ? drag_pr_note(b, c, column) : nil
       rounds = c[:column] != column ? review_rounds_after(b, c, column, agent) : nil
       @db.transaction do
         place(c, column, pos)
         if c[:column] != column
-          log(c[:id], "move", "#{b.label(c[:column])} → #{b.label(column)}#{' (approval withdrawn)' if withdraw}", by)
+          log(c[:id], "move", "#{b.label(c[:column])} → #{b.label(column)}#{' (approval withdrawn)' if withdraw}#{pr_note}",
+              by)
           cards.where(id: c[:id]).update(review_rounds: JSON.generate(rounds)) if rounds != review_rounds(c)
           # the gate's head / last view belong to the handoff that brought the card in: any other move ends them (a
           # drag into another gate starts with nothing recorded — its hold is read live)
@@ -2028,15 +2264,16 @@ module AgentsKanban
 
     # ── PR watch: a PR assigned to a live card closed without merging ───────────────────────────────────────────
     #
-    # The host's ci: port may answer closed_prs(card) → [{role:, number:, closed_at: epoch, why: String} |
+    # The host's ci: port may answer closed_prs(card) → [{role:, number:, repo: optional, closed_at: epoch, why: String} |
     # {error: String}, …]: the PRs assigned to the card that are closed WITHOUT merging (why = the host's words, e.g.
     # "base deleted"), and one {error:} per assigned PR it could not read — said beside the closes, never hidden by them;
     # asking it also keeps every PR assigned to the card watched. It raises Delivery::Unavailable when it cannot say at
     # all. Every unarchived project card outside its board's terminal columns is asked on each notifier watch pass. Each
-    # close is told ONCE (ci_watches kind "pr_closed:<role>", ref = closed_at — a reopened PR closed again is a new
-    # close): a comment by system_author on the card and a "pr_closed" ping to the owner session. A close with no
-    # positive closed_at or a blank why is refused as the port's error, never told. A port without closed_prs → no PR
-    # watch. → [[card_id, :closed | :closed_nobody | "unavailable: <why>"], …]
+    # close is told ONCE (ci_watches kind "pr_closed:<role>:<repo>#<n>", ref = closed_at — a reopened PR closed again is
+    # a new close; one recorded under the older "pr_closed:<role>" key is not told again): a comment by system_author on
+    # the card and a "pr_closed" ping to the owner session. A close with no positive closed_at or a blank why is refused
+    # as the port's error, never told. A port without closed_prs → no PR watch.
+    # → [[card_id, :closed | :closed_nobody | "unavailable: <why>"], …]
     def pr_watch_pass
       return [] unless @ci.respond_to?(:closed_prs)
 
@@ -2089,8 +2326,12 @@ module AgentsKanban
       head = c[:gate_head]
       return nil unless head && pr[:head] && pr[:head] != head
 
-      "new commits since the handoff (#{head[0, 7]} → #{pr[:head][0, 7]}): the reviewer has not seen them"
+      "new commits since the handoff (#{short_heads(head)} → #{short_heads(pr[:head])}): the reviewer has not seen them"
     end
+
+    # A head the ci: port gave: one sha, or several joined by "+" (a card with several PRs: one per PR, in the host's
+    # order) — each shortened to 7.
+    def short_heads(head) = head.split("+").map { |h| h[0, 7] }.join("+")
 
     # {card id => hold} for the given rows (only the held ones)
     def gate_holds(rows, boards)
@@ -2792,6 +3033,7 @@ module AgentsKanban
         raise Denied, "only an approved card in #{from} can be moved to #{cfg.label(column)}; agents stop at the gate"
       end
       raise Denied, "only the operator moves a card into #{cfg.label(column)}" if cfg.agent_closed?(column) && !handoff
+      required_prs!(cfg, c, column)
       round_limit!(cfg, c, column)
     end
 
@@ -3030,18 +3272,22 @@ module AgentsKanban
     def positive?(value) = value.is_a?(Integer) && value.positive?
 
     # One closed_prs answer told once (pr_watch_pass) → [id, :closed | :closed_nobody] | nil (told before).
+    # A card holds any number of PRs per role: the watch key names the PR (role + optional repo + number);
+    # a close recorded under the older per-role key ("pr_closed:<role>", same closed_at) is not told again.
     def pr_closed!(c, b, pr)
-      kind = "pr_closed:#{pr.fetch(:role)}"
+      name = pr[:repo] ? "#{pr[:repo]}##{pr.fetch(:number)}" : "##{pr.fetch(:number)}"
+      kind = "pr_closed:#{pr.fetch(:role)}:#{name}"
       ref = pr.fetch(:closed_at)
       sys = @config.system_author
       @db.transaction do
-        next nil if watches_t.where(card_id: c[:id], kind: kind, ref: ref).any?
+        next nil if watches_t.where(card_id: c[:id], kind: [kind, "pr_closed:#{pr.fetch(:role)}"], ref: ref).any?
 
         owner = c[:owner_session]
         now = @clock.call
         watches_t.insert(card_id: c[:id], kind: kind, ref: ref, pr: pr.fetch(:number), state: "closed",
                          pinged_at: owner && now, created_at: now)
-        what = "PR ##{pr.fetch(:number)} (#{pr.fetch(:role)}) closed without merging (#{pr.fetch(:why)})"
+        what = "PR #{pr[:repo] ? name : "##{pr.fetch(:number)}"} (#{pr.fetch(:role)}) closed without merging " \
+               "(#{pr.fetch(:why)})"
         text = "#{what} while card ##{c[:id]} \"#{c[:title]}\" is in #{b.label(c[:column])} — open a new PR and " \
                "assign it (kanban_pr_assign), or say on the card why this one is gone."
         enqueue_ping(c.merge(column_label: b.label(c[:column])), "pr_closed", sys, text) if owner

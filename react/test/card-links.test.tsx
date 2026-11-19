@@ -1,7 +1,7 @@
 // The Links rail's rows in jsdom: a plain link is the row it always was (kind · label, title = url); a tagged link shows
 // tone chips on the same line and, with detail, a popover on mouse hover, on keyboard focus and pinned by a tap on the chips.
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { CardLinkRow, CardLinks } from "../src";
 import type { CardLink } from "../src/types";
 
@@ -177,5 +177,165 @@ describe("CardLinkRow", () => {
     expect(commitRows()).toBe(5);
     fireEvent.click(screen.getByRole("button", { name: "Show less" }));
     expect(commitRows()).toBe(3);
+  });
+
+  it("CardLinks: every PR is listed (a PR section never folds), one section per PR group (role) in first-seen order", () => {
+    const prs: CardLink[] = [1, 2, 3, 4, 5].map((n) => ({
+      kind: "pr",
+      label: `#${n}`,
+      url: `https://github.com/o/r_local/pull/${n}`,
+      group: n === 3 ? "public" : "local",
+    }));
+    const { container } = render(<CardLinks links={[...prs, { kind: "pr", label: "#9", url: "https://x/p/9" }]} />);
+    const sections = Array.from(container.querySelectorAll("section.kb-link-group"));
+    expect(sections.map((s) => [s.querySelector("h5")!.textContent, s.querySelectorAll("li").length])).toEqual([
+      ["PRs · local 4", 4],
+      ["PRs · public 1", 1],
+      ["Pull requests 1", 1],
+    ]);
+    expect(screen.queryByRole("button", { name: /more/ })).toBeNull();
+    expect(sections[0]!.className).toContain("g-pr-local");
+  });
+
+  it("a grouped PR row: number and repo apart (the repo breaks at _), the section's own tag left out, the label's text whole", () => {
+    const link: CardLink = {
+      kind: "pr",
+      label: "#91 busy_kanban_mirror",
+      url: "https://github.com/o/busy_kanban_mirror/pull/91",
+      group: "local",
+      tags: [
+        { text: "local", tone: "info" },
+        { text: "open", tone: "ok" },
+      ],
+    };
+    const { container } = render(<CardLinks links={[link]} />);
+    expect(container.querySelector("h5")!.textContent).toBe("PRs · local 1");
+    expect(container.querySelector(".kb-link-ref")!.textContent).toBe("#91");
+    expect(container.querySelector(".kb-link-name")!.textContent).toBe("busy_kanban_mirror");
+    expect(container.querySelectorAll(".kb-link-name wbr").length).toBe(2);
+    expect(screen.getByRole("link", { name: "#91 busy_kanban_mirror" })).toBeTruthy();
+    expect(Array.from(container.querySelectorAll(".kb-link-tag")).map((x) => x.textContent)).toEqual(["open"]);
+    expect(container.querySelector("li")!.className).toBe("kb-link-row");
+  });
+
+  it("history: a struck link — the row marked struck, its chip and popover as any row's, no unassign", () => {
+    const gone: CardLink = {
+      kind: "pr",
+      label: "#88 r_local",
+      url: "https://github.com/o/r_local/pull/88",
+      group: "removed",
+      struck: true,
+      tags: [{ text: "11-16", tone: "muted" }],
+      detail: [{ label: "Why", value: "replaced by #91" }],
+    };
+    const { container } = render(
+      <CardLinks links={[gone, { ...gone, url: "u2", tags: undefined, detail: undefined }]} />,
+    );
+    const rows = Array.from(container.querySelectorAll("li"));
+    expect(rows.map((r) => r.className)).toEqual(["kb-link-row struck", "kb-link-row struck"]);
+    expect(rows[0]!.querySelector(".kb-link-tag")!.textContent).toBe("11-16");
+    expect(container.querySelector("h5")!.textContent).toBe("PRs · removed 2");
+    expect(screen.queryByRole("button", { name: /Unassign/ })).toBeNull();
+  });
+
+  describe("the unassign form", () => {
+    const assigned: CardLink = { ...pr, label: "#5 r_local", unassign: true };
+    const open = (onUnassign: (l: CardLink, reason: string) => Promise<string | null>) => {
+      const view = render(<CardLinks links={[assigned]} onUnassign={onUnassign} />);
+      const x = screen.getByRole<HTMLButtonElement>("button", { name: "Unassign #5 r_local" });
+      fireEvent.click(x);
+      const box = screen.getByRole<HTMLInputElement>("textbox", { name: /Why #5 r_local is not this card's PR/ });
+      return { ...view, x, box, go: screen.getByRole<HTMLButtonElement>("button", { name: "Unassign" }) };
+    };
+
+    it("× opens it in the row with the caret in the reason box; no reason = nothing to send; Enter sends it trimmed", async () => {
+      const sent: string[] = [];
+      const { container, x, box, go } = open((l, reason) => {
+        sent.push(`${l.url} ${reason}`);
+        return Promise.resolve(null);
+      });
+      expect(container.querySelector("li")!.className).toBe("kb-link-row has-unassign asking");
+      expect(x.getAttribute("aria-expanded")).toBe("true");
+      expect(document.activeElement).toBe(box);
+      expect(go.disabled).toBe(true);
+      fireEvent.change(box, { target: { value: "   " } });
+      expect(go.disabled).toBe(true);
+      fireEvent.submit(box.form!);
+      expect(sent).toEqual([]);
+      fireEvent.change(box, { target: { value: " opened for card 12 " } });
+      expect(go.disabled).toBe(false);
+      fireEvent.submit(box.form!);
+      await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull()); // done: the form closes
+      expect(sent).toEqual(["https://github.com/o/r_local/pull/5 opened for card 12"]);
+      expect(document.activeElement).toBe(container.querySelector(".kb-link-groups")); // the focus: the rail, not the page
+    });
+
+    it("Escape and a second × close it without sending; Escape stays in the form (the dialog's keys never see it)", () => {
+      const onUnassign = vi.fn(() => Promise.resolve(null));
+      const outer = vi.fn();
+      document.addEventListener("keydown", outer);
+      const { x, box } = open(onUnassign);
+      fireEvent.change(box, { target: { value: "typed" } });
+      const esc = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+      act(() => void box.dispatchEvent(esc));
+      expect(esc.defaultPrevented).toBe(true); // a <dialog> around it does not close
+      expect(outer).not.toHaveBeenCalled();
+      expect(screen.queryByRole("textbox")).toBeNull();
+      expect(document.activeElement).toBe(x); // focus back on the ×
+      fireEvent.click(x);
+      expect(screen.getByRole<HTMLInputElement>("textbox").value).toBe(""); // a fresh form, not the old text
+      fireEvent.click(x); // the × again closes it
+      expect(screen.queryByRole("textbox")).toBeNull();
+      fireEvent.click(x);
+      const onX = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+      act(() => void x.dispatchEvent(onX)); // Escape with the focus on the ×: the form, never the dialog
+      expect(onX.defaultPrevented).toBe(true);
+      expect(screen.queryByRole("textbox")).toBeNull();
+      expect(onUnassign).not.toHaveBeenCalled();
+      document.removeEventListener("keydown", outer);
+    });
+
+    it("a refusal is said under the box and the form stays with the reason; busy while it is sent", async () => {
+      let answer: (v: string | null) => void = () => {};
+      const { box, go, x } = open(() => new Promise((r) => (answer = r)));
+      fireEvent.change(box, { target: { value: "not ours" } });
+      fireEvent.submit(box.form!);
+      expect(go.disabled).toBe(true);
+      expect([go.textContent, go.getAttribute("aria-busy")]).toEqual(["Unassign", "true"]);
+      expect([box.readOnly, box.disabled]).toEqual([true, false]); // read-only, not disabled: the focus stays in it
+      expect(x.disabled).toBe(true); // one request per form: no second × while it runs
+      expect(document.activeElement).toBe(box);
+      act(() => answer("PR is not assigned to card #2"));
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toBe("PR is not assigned to card #2");
+      expect(box.value).toBe("not ours");
+      expect(box.getAttribute("aria-invalid")).toBe("true");
+      expect(box.getAttribute("aria-describedby")).toBe(alert.id);
+      expect(go.disabled).toBe(false);
+      expect([box.readOnly, x.disabled]).toEqual([false, false]);
+      expect(document.activeElement).toBe(box); // the caret is where the reason is fixed
+    });
+
+    it("sent from its button: Escape does nothing while it is sent, and a refusal brings the caret back to the box", async () => {
+      let answer: (v: string | null) => void = () => {};
+      const { box, go } = open(() => new Promise((r) => (answer = r)));
+      fireEvent.change(box, { target: { value: "not ours" } });
+      go.focus();
+      fireEvent.click(go);
+      expect(go.disabled).toBe(true);
+      go.blur(); // the browser drops the focus of a button that gets disabled
+      fireEvent.keyDown(box.form!, { key: "Escape" });
+      expect(screen.getByRole("textbox")).toBe(box); // still open: the answer has a form to land in
+      expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull(); // two controls: the box and Unassign
+      act(() => answer("refused"));
+      expect((await screen.findByRole("alert")).textContent).toBe("refused");
+      expect(document.activeElement).toBe(box);
+    });
+
+    it("while it is open the row's detail popover stays shut", () => {
+      const { container } = open(() => Promise.resolve(null));
+      fireEvent.pointerEnter(container.querySelector("li")!, { pointerType: "mouse" });
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
   });
 });

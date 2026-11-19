@@ -2349,6 +2349,7 @@
     padding: 10px var(--kb-gutter) 12px;
   }
   .ak-root .kb-side h4,
+  .ak-root .kb-side .kb-link-groups,
   .ak-root .kb-side .kb-panel,
   .ak-root .kb-side-meta,
   .ak-root .kb-side .kb-owner-panel {
@@ -2570,36 +2571,59 @@
   outline: 2px solid rgba(var(--ak-accent-rgb), 0.6);
   outline-offset: 1px;
 }
-/* a row with the host's tags: label and chips on ONE line while they fit (the label gives way); when they do not, the
-   chips go under the label, and when they are wider than the row they wrap among themselves and a chip longer than the
-   row ends in an ellipsis — never wider than the rail (the popover has the full text). The whole row is the hover /
-   focus target of the detail popover */
+/* a row with the host's tags: label and chips on ONE line while they fit (the label gives way, wrapping — never cut:
+   two repos that differ only at their end must both be readable); when the label would get under 14ch, the chips go
+   under it, and when they are wider than the row they wrap among themselves and a chip longer than the row ends in an
+   ellipsis — never wider than the rail (the popover has the full text). The whole row is the hover / focus target of
+   the detail popover */
 .ak-root .kb-links li.kb-link-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
+  align-items: flex-start;
+  gap: 0 4px;
   padding-right: 6px;
   border-radius: var(--ak-radius-ctl-sm);
   background: var(--ak-mat-fill-2);
 }
-/* the label keeps room for a short id (#5, a sha) — when kind + that + the chips do not fit, the chips wrap under it */
+/* the label takes what the chips leave on the line; under 14ch (+ the kind chip) the chips wrap under it instead */
 .ak-root .kb-links li.kb-link-row > a {
-  flex: 1 1 auto;
-  min-width: min(100%, calc(52px + 7ch));
+  flex: 1 1 0;
+  min-width: min(100%, calc(52px + 14ch));
   background: none;
 }
 .ak-root .kb-links li.kb-link-row > a.kb-link-bare {
-  min-width: min(100%, 7ch);
+  min-width: min(100%, 14ch);
 }
 .ak-root .kb-links li.kb-link-row > .kb-link-tags {
   margin: 0 0 0 auto;
-  padding: 2px 0;
+  padding: 5px 0 4px;
 }
 .ak-root .kb-links li.kb-link-row > a .kb-link-label {
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+/* a PR's label: the number strong, its repo beside it in the quieter ink */
+.ak-root .kb-link-ref {
+  font-weight: 700;
+}
+.ak-root .kb-link-name {
+  color: var(--ak-ink-dim);
+}
+/* history (CardLink.struck): no longer the card's — struck through, quiet, ONE line (the popover has the whole name) */
+.ak-root .kb-links li.kb-link-row.struck > a .kb-link-label {
+  display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-decoration: line-through;
+  text-decoration-color: var(--ak-ink-faint);
+  color: var(--ak-ink-dim);
+}
+.ak-root .kb-links li.kb-link-row.struck .kb-link-ref {
+  font-weight: 600;
+}
+.ak-root .kb-links li.kb-link-row.struck .kb-link-name wbr {
+  display: none; /* a <wbr> breaks even under nowrap */
 }
 .ak-root .kb-links li.kb-link-row:hover,
 .ak-root .kb-links li.kb-link-row.open,
@@ -2627,6 +2651,9 @@
   outline-offset: 2px;
 }
 .ak-root .kb-link-tag {
+  /* --tag: the tone; the text is the tone mixed towards the ink (a pure tone on its own 13 % tint reads under 4.5:1
+     for some skins' done / bad / warn), the tint stays the pure tone */
+  --tag: var(--ak-ink-faint);
   font: 600 10px/15px var(--ak-sans);
   letter-spacing: 0.02em;
   padding: 0 6px;
@@ -2636,26 +2663,26 @@
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--ak-ink-faint);
-  background: color-mix(in srgb, currentColor 13%, transparent);
+  color: color-mix(in srgb, var(--tag) 70%, var(--ak-ink));
+  background: color-mix(in srgb, var(--tag) 13%, transparent);
 }
 .ak-root .kb-link-tag.t-ok {
-  color: var(--ak-ok);
+  --tag: var(--ak-ok);
 }
 .ak-root .kb-link-tag.t-warn {
-  color: var(--ak-warn);
+  --tag: var(--ak-warn);
 }
 .ak-root .kb-link-tag.t-bad {
-  color: var(--ak-bad);
+  --tag: var(--ak-bad);
 }
 .ak-root .kb-link-tag.t-done {
-  color: var(--ak-done);
+  --tag: var(--ak-done);
 }
 .ak-root .kb-link-tag.t-info {
-  color: var(--ak-accent);
+  --tag: var(--ak-accent);
 }
 .ak-root .kb-link-tag.t-muted {
-  color: var(--ak-ink-faint);
+  --tag: var(--ak-ink-faint);
 }
 /* the detail popover: fixed (escapes the rail's and the dialog's scroll clipping), placed by lib/links.ts — left of the row
    on a wide screen, under it on a phone; key / value rows, long values wrap, the url last */
@@ -5295,6 +5322,101 @@
   .ak-root li.kb-agent-live.leaving {
     display: none;
   }
+}
+/* an assigned PR's unassign action (the operator's; KanbanApi.prUnassign): the × in the row's top right corner — the
+   row keeps room for it, however the chips wrap — and the reason form it opens under the row's first line */
+.ak-root .kb-links li.kb-link-row.has-unassign {
+  position: relative;
+  padding-right: 28px;
+}
+.ak-root .kb-links li.kb-link-row > .kb-link-unassign {
+  all: unset;
+  box-sizing: border-box;
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  width: 24px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--ak-radius-ctl-sm);
+  color: var(--ak-ink-faint);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+.ak-root .kb-links li.kb-link-row > .kb-link-unassign:hover:not(:disabled),
+.ak-root .kb-links li.kb-link-row > .kb-link-unassign[aria-expanded="true"] {
+  color: color-mix(in srgb, var(--ak-bad) 70%, var(--ak-ink));
+  background: rgba(var(--ak-bad-rgb), 0.12);
+}
+.ak-root .kb-links li.kb-link-row > .kb-link-unassign:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.ak-root .kb-link-groups:focus {
+  outline: none; /* focused by code only (tabindex -1), after an unassign */
+}
+.ak-root .kb-links li.kb-link-row > .kb-link-unassign:focus-visible {
+  color: color-mix(in srgb, var(--ak-bad) 70%, var(--ak-ink));
+  outline: 2px solid rgba(var(--ak-accent-rgb), 0.6);
+  outline-offset: -2px;
+}
+.ak-root .kb-links li.kb-link-row.asking {
+  background: var(--ak-surface-3);
+  box-shadow: inset 2px 0 0 var(--ak-bad);
+}
+.ak-root .kb-unassign-form {
+  flex: 1 0 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  margin-right: -22px; /* under the ×: the form takes the row's whole width */
+  padding: 1px 0 6px 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.ak-root .kb-unassign-form input {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 12.5px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: var(--ak-radius-ctl-sm);
+  color: var(--ak-ink);
+  background: var(--ak-mat-card);
+  box-shadow: inset 0 0 0 0.5px var(--ak-line-strong);
+}
+.ak-root .kb-unassign-form input::placeholder {
+  color: var(--ak-ink-faint); /* the form's only label: never the browser's grey */
+  opacity: 1;
+}
+.ak-root .kb-unassign-form input:focus-visible {
+  outline: 2px solid rgba(var(--ak-accent-rgb), 0.6);
+  outline-offset: 0;
+}
+.ak-root .kb-unassign-form input[aria-invalid="true"] {
+  box-shadow: inset 0 0 0 1px var(--ak-bad);
+}
+/* Unassign: its own red tint (a host's .btn fill may equal the open row's) and the tone mixed towards the ink (dark
+   skins: the pure tone is < 4.5:1) */
+.ak-root .kb-unassign-form .btn.danger {
+  color: color-mix(in srgb, var(--ak-bad) 70%, var(--ak-ink));
+  background: rgba(var(--ak-bad-rgb), 0.12);
+}
+.ak-root .kb-unassign-form .btn.danger:hover:not(:disabled) {
+  background: rgba(var(--ak-bad-rgb), 0.2);
+}
+.ak-root .kb-unassign-err {
+  flex: 1 0 100%;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--ak-bad) 70%, var(--ak-ink));
+  overflow-wrap: anywhere;
 }
 
 /* the header's Workflow button: a small square with a chunk of the board's real workflow tree (WorkflowMini) — the

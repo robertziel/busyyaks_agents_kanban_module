@@ -34,7 +34,7 @@ module AgentsKanban
     # session slug (404).
     SESSION_READ_ONLY = {
       update: :card, move: :card, assign: :card, archive: :card, owner: :card, approve: :card,
-      dialog_answer: :card, comment: :card, checklist_create: :card, attach: :card,
+      dialog_answer: :card, comment: :card, pr_unassign: :card, checklist_create: :card, attach: :card,
       comment_update: :comment, comment_delete: :comment,
       checklist_update: :checklist, checklist_delete: :checklist, item_create: :checklist,
       item_update: :item, item_delete: :item, item_convert: :item,
@@ -396,6 +396,16 @@ module AgentsKanban
     end
 
     # ── comments ─────────────────────────────────────────────────────────────────────────────────
+
+    # POST /cards/:id/pr-unassign {pr_url, reason} — the operator takes one PR off the card's list (any PR; logged with
+    # the reason, kept in metadata prs_removed). The operator assigns none: PRs are assigned by the agents that open them.
+    def pr_unassign(id, b, by:)
+      c = card!(id) or return not_found("no card #{id}")
+      refusing do
+        only!(b, %w[pr_url reason])
+        [200, card_body(@store.unassign_pr(c[:id], url: b["pr_url"], reason: b["reason"], by: by, agent: false))]
+      end
+    end
 
     # 201 {card, activity, delivered} — on an ask-gate card the operator's comment is the answer.
     def comment(id, b, by:)
