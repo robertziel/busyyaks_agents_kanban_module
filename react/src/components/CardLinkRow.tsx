@@ -2,7 +2,20 @@
 // gets a popover (key / value rows + the url) on hover and keyboard focus; on touch a tap on the chips pins it open
 // (the label itself navigates). The popover is position: fixed and placed by lib/links.ts so neither the rail's nor
 // the dialog's scroll box clips it. A link without tags / detail is the plain row it always was.
-import { useEffect, useId, useLayoutEffect, useRef, useState, type FocusEvent, type PointerEvent } from "react";
+// An assigned PR (`unassign`) carries a "×" that opens a one-line form IN the row: the reason (required) + Unassign —
+// Enter sends, Escape or the × again cancels (only the form, not the dialog); a refusal is said under it, the form stays.
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FocusEvent,
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent,
+} from "react";
 import {
   GROUP_FOLD,
   groupLinks,
@@ -10,7 +23,10 @@ import {
   hasTags,
   linkTitle,
   placePopover,
+  prLabelParts,
+  rowTags,
   toneClass,
+  unassignReason,
   type Placement,
 } from "../lib/links";
 import type { CardLink } from "../types";
@@ -27,17 +43,46 @@ export const LINK_KIND: Record<string, string> = {
 };
 
 // grouped: the row sits under its section's header (CardLinks), which names the kind — the kind chip is left out.
-export function CardLinkRow({ link: l, grouped = false }: { link: CardLink; grouped?: boolean }) {
+// onUnassign: a row the host marks `unassign` (an assigned PR) gets the "×" and its reason form; it resolves to null
+// once the PR is off the card, or to the refusal's text.
+export type Unassign = (l: CardLink, reason: string) => Promise<string | null>;
+export function CardLinkRow({
+  link: l,
+  grouped = false,
+  onUnassign,
+}: {
+  link: CardLink;
+  grouped?: boolean;
+  onUnassign?: Unassign;
+}) {
   const popId = useId();
+  const formId = useId();
   const detail = hasDetail(l);
   const tags = hasTags(l);
   const [hover, setHover] = useState(false);
   const [pinned, setPinned] = useState(false);
-  const open = detail && (hover || pinned);
+  // the unassign form: null = closed, else the reason being typed
+  const [reason, setReason] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
+  const asking = reason !== null;
+  const dropBtn = useRef<HTMLButtonElement>(null);
+  const reasonBox = useRef<HTMLInputElement>(null);
+  const open = detail && (hover || pinned) && !asking; // the form has the row: no popover over it
   const row = useRef<HTMLLIElement>(null);
   const pop = useRef<HTMLDListElement>(null);
   const [at, setAt] = useState<Placement | null>(null);
 
+  const parts = prLabelParts(l);
+  // the form opens with the caret in its reason box
+  useEffect(() => {
+    if (asking) reasonBox.current?.focus();
+  }, [asking]);
+  // a refusal puts the caret back in the box, wherever the form was sent from (its button is disabled while it is
+  // sent, which drops the focus to the page) — the reason is what there is to fix
+  useEffect(() => {
+    if (refused !== null) reasonBox.current?.focus();
+  }, [refused]);
   const close = () => {
     setHover(false);
     setPinned(false);
@@ -108,17 +153,118 @@ export function CardLinkRow({ link: l, grouped = false }: { link: CardLink; grou
       target={l.url.startsWith("/") ? undefined : "_blank"}
       rel="noopener"
       title={linkTitle(l)}
+      aria-label={parts ? l.label : undefined /* the split label reads as the one label it is */}
       aria-describedby={open ? popId : undefined}
       onFocus={detail ? focusIn : undefined}
       onBlur={detail ? blur : undefined}
     >
       {!grouped && <span className={`kb-link-kind k-${l.kind}`}>{LINK_KIND[l.kind]}</span>}
-      <span className="kb-link-label">{l.label}</span>
+      <span className="kb-link-label">
+        {parts ? (
+          <>
+            <b className="kb-link-ref">{parts.ref}</b>{" "}
+            <span className="kb-link-name">
+              {parts.name.map((piece, i) => (
+                <Fragment key={i}>
+                  {i > 0 && <wbr />}
+                  {piece}
+                </Fragment>
+              ))}
+            </span>
+          </>
+        ) : (
+          l.label
+        )}
+      </span>
     </a>
   );
-  if (!tags && !detail) return <li>{anchor}</li>;
+  const ask = () => {
+    close();
+    setRefused(null);
+    setReason("");
+  };
+  const cancel = () => {
+    if (sending) return; // its answer belongs to this form: no closing while it is sent
+    setReason(null);
+    setRefused(null);
+    dropBtn.current?.focus();
+  };
+  const send = (e: FormEvent) => {
+    e.preventDefault();
+    const why = unassignReason(reason ?? "");
+    if (!why || sending || !onUnassign) return;
+    setSending(true);
+    setRefused(null);
+    void onUnassign(l, why).then((no) => {
+      setSending(false);
+      if (no === null) setReason(null);
+      else setRefused(no);
+      // done: CardLinks moves the focus to the rail — this row is gone; refused: the effect below puts the caret back
+    });
+  };
+  // Escape closes the form only — not the dialog around it (its native cancel, its key handlers)
+  const formKey = (e: ReactKeyboardEvent) => {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    cancel();
+  };
+  const drop =
+    l.unassign && onUnassign ? (
+      <button
+        type="button"
+        className="kb-link-unassign"
+        ref={dropBtn}
+        aria-label={`Unassign ${l.label}`}
+        aria-expanded={asking}
+        aria-controls={asking ? formId : undefined}
+        title={`Unassign ${l.label} from this card`}
+        disabled={sending /* one request: its answer belongs to this form */}
+        onClick={() => (asking ? cancel() : ask())}
+        onKeyDown={asking ? formKey : undefined /* Escape on the × closes the form too, never the dialog */}
+      >
+        ×
+      </button>
+    ) : null;
+  const form = asking ? (
+    <form id={formId} className="kb-unassign-form" onSubmit={send} onKeyDown={formKey}>
+      <input
+        ref={reasonBox}
+        value={reason}
+        maxLength={300}
+        placeholder="Reason"
+        aria-label={`Why ${l.label} is not this card's PR (logged on the card)`}
+        aria-invalid={refused !== null}
+        aria-describedby={refused !== null ? `${formId}-err` : undefined}
+        readOnly={sending}
+        onChange={(e) => setReason(e.target.value)}
+      />
+      <button
+        className="btn small danger kb-unassign-go"
+        aria-busy={sending}
+        disabled={sending || !unassignReason(reason)}
+      >
+        Unassign
+      </button>
+      {refused !== null && (
+        <span id={`${formId}-err`} className="kb-unassign-err" role="alert">
+          {refused}
+        </span>
+      )}
+    </form>
+  ) : null;
+  const marks = `${drop ? " has-unassign" : ""}${l.struck ? " struck" : ""}${asking ? " asking" : ""}`;
+  if (!tags && !detail) {
+    return (
+      <li className={marks ? `kb-link-row${marks}` : undefined}>
+        {anchor}
+        {drop}
+        {form}
+      </li>
+    );
+  }
 
-  const chips = (l.tags ?? []).map((t, i) => (
+  const chips = rowTags(l, grouped).map((t, i) => (
     <span key={i} className={`kb-link-tag ${toneClass(t.tone)}`}>
       {t.text}
     </span>
@@ -126,7 +272,7 @@ export function CardLinkRow({ link: l, grouped = false }: { link: CardLink; grou
   return (
     <li
       ref={row}
-      className={`kb-link-row${open ? " open" : ""}`}
+      className={`kb-link-row${open ? " open" : ""}${marks}`}
       onPointerEnter={detail ? enter : undefined}
       onPointerLeave={detail ? leave : undefined}
     >
@@ -148,6 +294,8 @@ export function CardLinkRow({ link: l, grouped = false }: { link: CardLink; grou
         ) : (
           <span className="kb-link-tags">{chips}</span>
         ))}
+      {drop}
+      {form}
       {open && (
         <dl
           ref={pop}
@@ -172,14 +320,24 @@ export function CardLinkRow({ link: l, grouped = false }: { link: CardLink; grou
   );
 }
 
-// The Links rail: the card's links in sections (lib/links LINK_GROUPS), each a small header with its count, then the rows
-// without their kind chip; a section longer than GROUP_FOLD folds the rest behind "+N more".
-export function CardLinks({ links }: { links: CardLink[] }) {
+// The Links rail: the card's links in sections (lib/links LINK_GROUPS; a link's group = its own sub-section), each a small
+// header with its count, then the rows without their kind chip; a section longer than GROUP_FOLD folds the rest behind
+// "+N more" — except the PR sections, which list every PR.
+export function CardLinks({ links, onUnassign }: { links: CardLink[]; onUnassign?: Unassign }) {
   const [unfolded, setUnfolded] = useState<Record<string, boolean>>({});
+  const rail = useRef<HTMLDivElement>(null);
+  // done: the unassigned row left its section (and took the focus with it) — the focus goes to the rail, not the page
+  const unassign: Unassign | undefined = onUnassign
+    ? async (l, reason) => {
+        const no = await onUnassign(l, reason);
+        if (no === null) rail.current?.focus();
+        return no;
+      }
+    : undefined;
   return (
-    <div className="kb-link-groups">
+    <div ref={rail} className="kb-link-groups" tabIndex={-1}>
       {groupLinks(links).map((g) => {
-        const open = unfolded[g.key] || g.links.length <= GROUP_FOLD + 1; // never fold a single row behind "+1 more"
+        const open = !g.fold || unfolded[g.key] || g.links.length <= GROUP_FOLD + 1; // never a single row behind "+1 more"
         const shown = open ? g.links : g.links.slice(0, GROUP_FOLD);
         return (
           <section key={g.key} className={`kb-link-group g-${g.key.replace(/[^a-z0-9-]/gi, "-")}`} aria-label={g.label}>
@@ -188,10 +346,10 @@ export function CardLinks({ links }: { links: CardLink[] }) {
             </h5>
             <ul className="kb-links">
               {shown.map((l) => (
-                <CardLinkRow key={l.url} link={l} grouped />
+                <CardLinkRow key={l.url} link={l} grouped onUnassign={unassign} />
               ))}
             </ul>
-            {g.links.length > GROUP_FOLD + 1 && (
+            {g.fold && g.links.length > GROUP_FOLD + 1 && (
               <button
                 type="button"
                 className="kb-link-more"

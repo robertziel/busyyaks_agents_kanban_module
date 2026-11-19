@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { CardLink } from "../types";
-import { hasDetail, hasTags, linkTitle, placePopover, toneClass, groupLinks } from "./links";
+import {
+  hasDetail,
+  hasTags,
+  linkTitle,
+  placePopover,
+  toneClass,
+  groupLinks,
+  prLabelParts,
+  rowTags,
+  unassignReason,
+} from "./links";
 
 const box = (left: number, top: number, w: number, h: number) => ({
   left,
@@ -87,5 +97,47 @@ describe("groupLinks", () => {
       ["Repo & web", ["url1", "repo1"]],
       ["wiki", ["wiki1"]],
     ]);
+  });
+  it("a link's group is its own sub-section of its family's, in first-seen order; only PR sections never fold", () => {
+    const g = (n: number, group?: string): CardLink => ({ ...l("pr", n), ...(group ? { group } : {}) });
+    const gs = groupLinks([g(1, "local"), l("commit", 1), g(2, "public"), g(3, "local"), g(4), g(5, " ")]);
+    expect(gs.map((x) => [x.key, x.label, x.links.map((y) => y.label), x.fold])).toEqual([
+      ["pr:local", "PRs · local", ["pr1", "pr3"], false],
+      ["pr:public", "PRs · public", ["pr2"], false],
+      ["pr", "Pull requests", ["pr4", "pr5"], false],
+      ["commit", "Commits", ["commit1"], true],
+    ]);
+  });
+});
+
+describe("a grouped PR row", () => {
+  const pr = (o: Partial<CardLink>): CardLink => ({ kind: "pr", label: "#5 r_local", url: "https://x/pull/5", ...o });
+  const t = (text: string, tone: "info" | "ok" | "muted" = "ok") => ({ text, tone });
+
+  it("rowTags: the tag that repeats the section's name is left out — only in a grouped rail, never the only tag", () => {
+    const l = pr({ group: "local", tags: [t("Local ", "info"), t("open")] });
+    expect(rowTags(l, true).map((x) => x.text)).toEqual(["open"]);
+    expect(rowTags(l, false).map((x) => x.text)).toEqual(["Local ", "open"]); // a bare row has no header to say it
+    expect(rowTags(pr({ group: "removed", tags: [t("removed", "muted")] }), true).map((x) => x.text)).toEqual([
+      "removed",
+    ]);
+    expect(rowTags(pr({ tags: [t("local", "info"), t("open")] }), true).map((x) => x.text)).toEqual(["local", "open"]);
+    expect(rowTags(pr({ group: "local" }), true)).toEqual([]);
+  });
+
+  it("prLabelParts: a PR's '#N repo' → the number + the repo in pieces that end at _ - . /; anything else is whole", () => {
+    expect(prLabelParts(pr({ label: "#91 busyyaks_agents-kanban.module" }))).toEqual({
+      ref: "#91",
+      name: ["busyyaks_", "agents-", "kanban.", "module"],
+    });
+    expect(prLabelParts(pr({ label: "#5 repo" }))).toEqual({ ref: "#5", name: ["repo"] });
+    expect(prLabelParts(pr({ label: "#5" }))).toBeNull();
+    expect(prLabelParts(pr({ label: "config" }))).toBeNull();
+    expect(prLabelParts({ kind: "commit", label: "#5 not a PR", url: "u" })).toBeNull();
+  });
+
+  it("unassignReason: the reason sent is the one typed, trimmed; blank = none", () => {
+    expect(unassignReason("  opened for card 12 ")).toBe("opened for card 12");
+    expect(unassignReason("   ")).toBe("");
   });
 });

@@ -9,7 +9,7 @@ export { KbIcon, type IconName } from "./components/KbIcon";
 export { Select, type Option } from "./components/Select";
 export { BoardEditor } from "./components/BoardEditor";
 export { WorkflowMini, miniCrop, miniLayout, MINI_PX } from "./components/WorkflowMini";
-export { CardLinkRow, CardLinks, LINK_KIND } from "./components/CardLinkRow";
+export { CardLinkRow, CardLinks, LINK_KIND, type Unassign } from "./components/CardLinkRow";
 export { AgentFace, type AgentFaceProps } from "./components/AgentFace";
 export { AgentAtWork, AgentsAtWork, HereNow, presentType } from "./components/Faces";
 export * from "./lib/face";

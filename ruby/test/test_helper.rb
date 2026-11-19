@@ -64,8 +64,12 @@ module KanbanTest
         boards: ->(s) { @boards.include?(s) },
         clock: -> { @now },
         ci: approval_ci,
+        prs: pr_roles,
       )
     end
+
+    # The prs: port — the roles every card reads (pr_roles.roles = {...} | pr_roles.down = "why").
+    def pr_roles = (@pr_roles ||= PrRoles.new)
 
     # The approval gate's ci: port — green unless a test says otherwise (approval_ci.answer = {...} | nil, .down = "why").
     def approval_ci = (@approval_ci ||= ApprovalCi.new)
@@ -110,6 +114,23 @@ class ApprovalCi
     raise AgentsKanban::Delivery::Unavailable, @down if @down
 
     @answer
+  end
+end
+
+# The Store's prs: port: one role set for every card (a local PR on either of two private repos — the card's own and an
+# engine it vendors — and a public PR on either public repo; neither required by default).
+class PrRoles
+  attr_accessor :roles, :down
+
+  def initialize
+    @roles = { "local" => { repos: %w[o/r_local o/eng_local], required: false },
+               "public" => { repos: %w[o/r o/eng], required: false }, }
+  end
+
+  def pr_roles(_card)
+    raise AgentsKanban::Delivery::Unavailable, @down if @down
+
+    @roles
   end
 end
 

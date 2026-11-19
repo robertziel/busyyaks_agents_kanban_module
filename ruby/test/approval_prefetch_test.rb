@@ -250,7 +250,7 @@ class ApprovalPrefetchTest < Minitest::Test
   def test_each_approval_gate_s_first_approve_succeeds_after_waiting_longer_than_the_poll_window
     ci = WindowedCi.new(-> { @now }, WINDOW)
     m = AgentsKanban::Store.new(db, config: config, markdown: md, boards: ->(s) { @boards.include?(s) },
-                                clock: -> { @now }, ci: ci)
+                                clock: -> { @now }, ci: ci, prs: pr_roles)
     n = AgentsKanban::Notifier.new(m, client: FakeClient.new, ci: NoCi.new, clock: -> { @now }, grace: 60, log: @log)
     gates = %w[local_human_review deploy_check public_human_review awaiting_merge]
     ids = gates.to_h { |g| [g, card(g)] }

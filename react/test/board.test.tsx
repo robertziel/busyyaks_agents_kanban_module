@@ -340,6 +340,57 @@ describe("Board", () => {
     for (const same of ["abs", "rel", "jump", "mail", "broken"]) expect(at(same)).toEqual([null, null]);
   });
 
+  it("the operator unassigns an assigned PR from the rail: × → the reason in the row's form → api.prUnassign; a refusal stays in the form", async () => {
+    const cards = [card({ id: 2, column: "doing", title: "Two repos" })];
+    const api = fakeApi(boardData(coding, cards), cards);
+    const pr = { kind: "pr" as const, label: "#5 r_local", url: "https://github.com/o/r_local/pull/5", unassign: true };
+    const plain = { kind: "url" as const, label: "github.com/o/x", url: "https://github.com/o/x" };
+    const base = await api.card(2);
+    let links: (typeof pr | typeof plain)[] = [pr, plain];
+    api.card = () => Promise.resolve({ ...base, links });
+    const unassigned: string[] = [];
+    let refuse = true;
+    api.prUnassign = (id, url, reason) => {
+      unassigned.push(`${id} ${url} ${reason}`);
+      if (refuse) return Promise.reject(new Error("refused: not this card's"));
+      links = [plain];
+      return Promise.resolve(base);
+    };
+    const prompt = vi.spyOn(window, "prompt");
+    const confirm = vi.spyOn(window, "confirm");
+    render(<Host api={api} view={{ card: 2, panel: null, archived: false }} />);
+    const x = await screen.findByRole("button", { name: "Unassign #5 r_local" });
+    expect(screen.queryByRole("button", { name: /Unassign github/ })).toBeNull(); // only rows the host marks
+    fireEvent.click(x);
+    const box = screen.getByRole<HTMLInputElement>("textbox", { name: /Why #5 r_local is not this card's PR/ });
+    fireEvent.change(box, { target: { value: " opened for card 12 " } });
+    fireEvent.click(screen.getByRole("button", { name: "Unassign" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("refused: not this card's"); // in the row, form kept
+    expect(box.value).toBe(" opened for card 12 ");
+    refuse = false;
+    fireEvent.click(screen.getByRole("button", { name: "Unassign" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Unassign #5 r_local" })).toBeNull()); // reloaded
+    expect(unassigned).toEqual(Array(2).fill("2 https://github.com/o/r_local/pull/5 opened for card 12"));
+    expect(prompt).not.toHaveBeenCalled(); // no browser prompt / confirm: the form is the question
+    expect(confirm).not.toHaveBeenCalled();
+    prompt.mockRestore();
+    confirm.mockRestore();
+  });
+
+  it("no prUnassign on the port: no unassign action", async () => {
+    const cards = [card({ id: 2, column: "doing" })];
+    const api = fakeApi(boardData(coding, cards), cards);
+    const base = await api.card(2);
+    api.card = () =>
+      Promise.resolve({
+        ...base,
+        links: [{ kind: "pr", label: "#5", url: "https://github.com/o/r/pull/5", unassign: true }],
+      });
+    render(<Host api={api} view={{ card: 2, panel: null, archived: false }} />);
+    await screen.findByText("#5");
+    expect(screen.queryByRole("button", { name: /Unassign/ })).toBeNull();
+  });
+
   it("a flagged card shows its question box in its own column; the answer stays there", async () => {
     const cards = [
       card({

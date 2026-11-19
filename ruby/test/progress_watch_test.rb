@@ -43,7 +43,7 @@ class ProgressWatchTest < Minitest::Test
     super
     @pci = ProgressCi.new
     @kb = AgentsKanban::Store.new(db, config: config, markdown: md, boards: ->(s) { @boards.include?(s) },
-                                      clock: -> { @now }, ci: @pci)
+                                      clock: -> { @now }, ci: @pci, prs: pr_roles)
     seed_template(config, KanbanTest.board_hash)
     @id = kb.create(slug: "p", title: "ship the thing", by: "lead", column: "doing")
     kb.set_owner(@id, session: "shop", by: "lead")
@@ -205,7 +205,7 @@ class ProgressWatchTest < Minitest::Test
     # outside the scope (the progress watch is off) the idle watch comments as before
     off = AgentsKanban::HostConfig.new(config.raw.merge("progress_watch" => { "stale_minutes" => nil }))
     st = AgentsKanban::Store.new(db, config: off, markdown: md, boards: ->(x) { @boards.include?(x) }, clock: -> { @now },
-                                     ci: @pci)
+                                     ci: @pci, prs: pr_roles)
     @now += 5 * 3600
     assert_equal [[@id, :idle_comment]], st.idle_watch_pass(live: ["shop"], ci: ci).select { |_, w| w == :idle_comment }
   end
@@ -330,7 +330,7 @@ class ProgressWatchTest < Minitest::Test
   def test_off_watches_nothing
     off = AgentsKanban::HostConfig.new(config.raw.merge("progress_watch" => { "stale_minutes" => nil }))
     st = AgentsKanban::Store.new(db, config: off, markdown: md, boards: ->(s) { @boards.include?(s) }, clock: -> { @now },
-                                     ci: @pci)
+                                     ci: @pci, prs: pr_roles)
     @now = @t0 + (10 * N)
     assert_equal [], st.progress_watch_pass
     assert_nil st.progress_watch_json
@@ -341,7 +341,7 @@ class ProgressWatchTest < Minitest::Test
   def test_a_port_with_half_the_progress_contract_is_refused
     half = Class.new(ApprovalCi) { def progress(_card) = [] }.new
     e = assert_raises(AgentsKanban::ConfigError) do
-      AgentsKanban::Store.new(db, config: config, markdown: md, boards: ->(_) { true }, ci: half)
+      AgentsKanban::Store.new(db, config: config, markdown: md, boards: ->(_) { true }, ci: half, prs: pr_roles)
     end
     assert_match(/progress\(card\) and progress_kinds/, e.message)
   end

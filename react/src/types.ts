@@ -343,6 +343,9 @@ export type CardLink = {
   url: string;
   tags?: LinkTag[];
   detail?: { label: string; value: string }[];
+  group?: string; // a sub-section of its kind's section, e.g. a PR's role ("local", "public"): the rail lists each apart
+  unassign?: boolean; // a PR assigned to the card: the operator may take it off (KanbanApi.prUnassign, with a reason)
+  struck?: boolean; // history: no longer the card's (a PR taken off it) — its label struck through, on one line
 };
 export type OwnerCandidate = { name: string; socket: string; state: string; engines: string[] };
 export type SessionLinks = {

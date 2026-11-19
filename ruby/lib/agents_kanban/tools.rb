@@ -47,7 +47,7 @@ module AgentsKanban
     NAMES = %w[kanban_board kanban_workflow kanban_card kanban_create kanban_move kanban_update kanban_comment
                kanban_comment_edit kanban_comment_delete kanban_handoff kanban_claim kanban_register kanban_ask
                kanban_block kanban_unblock kanban_labels kanban_label_save kanban_label_delete kanban_labels_set kanban_due_set
-               kanban_pr_assign
+               kanban_pr_assign kanban_pr_unassign
                kanban_checklist_add kanban_checklist_rename kanban_checklist_delete kanban_checklist_item_add
                kanban_checklist_item_edit
                kanban_checklist_toggle kanban_checklist_item_delete kanban_attach kanban_attachments kanban_attachment_get
@@ -111,8 +111,10 @@ module AgentsKanban
                  "gives a card its own session under it; nothing else starts one, and with no #{lt.key} running an " \
                  "ownerless card waits for the operator's Launch."
       end
-      parts << "Opened a pull request for a card: kanban_pr_assign(id, pr_url, role, author) at once — the board " \
-               "knows a card's PRs only from these assignments, never from branch names or PR numbers in text."
+      parts << "Opened a pull request for a card: kanban_pr_assign(id, pr_url, role, author) at once — every PR, on " \
+               "every repo the card changes (it adds; a card holds any number) — the board knows a card's PRs only " \
+               "from these assignments, never from branch names or PR numbers in text. A PR that is not the card's: " \
+               "kanban_pr_unassign(id, pr_url, author, reason)."
       if cfg.handoff
         screenshots = cfg.handoff.ui_change_needs_screenshots ? ", screenshots for a UI change" : ""
         gates = cfg.handoff.columns.map(&l).join(" / ")
@@ -240,15 +242,28 @@ module AgentsKanban
                          required: %w[id author], }, },
         { name: "kanban_pr_assign",
           description: "Assign a pull request to a card: call it right after you open the PR (gh pr create, or a tool " \
-                       "that opens one). The board reads a card's PRs ONLY from these assignments — its gates, CI checks " \
-                       "and the Links rail; never from branch names or PR references in text. role = which PR it is " \
-                       "(the host's roles, e.g. local for the PR on the private local repo, public for the PR on the " \
-                       "public repo); assigning a role again replaces its PR. Stored in the card's metadata prs.<role>.",
+                       "that opens one) — every PR of the card, on every repo it changes. The board reads a card's PRs " \
+                       "ONLY from these assignments — its gates, CI checks and the Links rail; never from branch names " \
+                       "or PR references in text. role = which PR it is (the host's roles, e.g. local for a PR on a " \
+                       "private local repo, public for one on a public repo). It ADDS: a card holds any number of PRs " \
+                       "per role and repo, the same URL again is a no-op, nothing is replaced. Refused: a role the " \
+                       "project does not read, a PR on a repo its role does not take, a PR already assigned to another " \
+                       "card. Stored in the card's metadata prs (a list).",
           inputSchema: { type: "object",
                          properties: { id: INT, author: AUTHOR,
                                        pr_url: { type: "string", description: "https://github.com/<owner>/<repo>/pull/<n>" },
                                        role: { type: "string", description: "which PR this is (e.g. local, public)" }, },
                          required: %w[id pr_url role author], }, },
+        { name: "kanban_pr_unassign",
+          description: "Take a PR off a card's list (one assigned by mistake, to the wrong card, or not the card's " \
+                       "work): the only way a PR leaves a card. reason is required; logged on the card and kept in " \
+                       "its metadata prs_removed. You can unassign a PR you assigned, or any on a card you are the " \
+                       "assignee of.",
+          inputSchema: { type: "object",
+                         properties: { id: INT, author: AUTHOR,
+                                       pr_url: { type: "string", description: "the assigned PR's URL" },
+                                       reason: { type: "string", description: "why this PR is not the card's" }, },
+                         required: %w[id pr_url author reason], }, },
         { name: "kanban_comment",
           description: "Add a comment (markdown) to a card's activity: progress, findings. #{comment_ask}" \
                        "Returns {id, delivered} (the comment id; who it pings). #{REFS}",
@@ -582,6 +597,9 @@ module AgentsKanban
         dump(row(@store.update(int!(a, "id"), attrs, by: str!(a, "author"))))
       when "kanban_pr_assign"
         dump(row(@store.assign_pr(int!(a, "id"), url: str!(a, "pr_url"), role: str!(a, "role"), by: str!(a, "author"))))
+      when "kanban_pr_unassign"
+        dump(row(@store.unassign_pr(int!(a, "id"), url: str!(a, "pr_url"), by: str!(a, "author"),
+                                                  reason: str!(a, "reason"), agent: true)))
       when "kanban_comment"
         c = @store.card!(int!(a, "id"))
         dump(id: @store.comment(c[:id], body: str!(a, "body"), author: str!(a, "author")),
@@ -819,7 +837,7 @@ module AgentsKanban
     # makes no sense (no project, no gate): refused.
     # Tools that make no sense on a session board: no project to register for, no PR, and nobody but its session acts
     # on it — a question or a block would wait for an operator who cannot answer there (the operator's view is read-only).
-    PROJECT_ONLY = %w[kanban_register kanban_pr_assign kanban_ask kanban_block kanban_unblock].freeze
+    PROJECT_ONLY = %w[kanban_register kanban_pr_assign kanban_pr_unassign kanban_ask kanban_block kanban_unblock].freeze
 
     def session_guard!(name, a)
       return unless @store.session_boards?
