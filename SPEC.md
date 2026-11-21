@@ -69,6 +69,9 @@ waiting for the operator wherever it sits, a card only `blocked_external` waits 
 party) and is never counted as waiting for the operator — not even in a gate (`external`); a move into a terminal column
 (Done, Cancelled) clears both.
 
+**On hold, the operator's** (v15; `Store#hold`): the operator parks a card where it sits — it keeps its column
+and leaves the flow: the board's normal view, every count and waiting list, every watch, and every agent's sight (§ 4).
+
 **Actors** are not a column field: who acts in a column follows from its type and its transitions' `by` — a gate is
 the operator's (only the operator's step leaves it), a review / working column belongs to whoever holds the named
 agent edges out of it (the host's prompts name the Reviewer Agent for an agent-review column, the Author Agent for an
@@ -146,7 +149,7 @@ cards returned to the column of their last move into it, flagged; handoff / appr
 
 `HostConfig#digest` = sha256 of the canonical JSON the client receives (`to_h`); a host may pin it.
 
-## 3. Tables (`Schema`, v14)
+## 3. Tables (`Schema`, v15)
 
 `cards` (+ `parent_id`, `metadata` JSON text since v2), `card_activity`, `board_labels`, `checklists`,
 `checklist_items`, `card_pings`, `card_attachments`, `session_dialogs`, `agent_sessions` (v3: `session`, `socket`,
@@ -158,7 +161,8 @@ template; v7 adds `board_columns.hide_after_hours`, null = the type's default; v
 nothing about it is stored); v10 adds `cards.gate_head` (the approval PR's head the handoff's green answer carried) and
 `cards.gate_state` (the last watch pass's view of the card's gate: `ready` or its hold); v11 adds `boards.archived_at` (a session board hidden after `session_boards.idle_hours` idle, § 2b); v12 adds
 `agent_sessions.lead_id` (the lead registration a session runs under), `needs_lead` (0/1: its type is `under` a lead),
-`lead_key_digest` (a lead's key, SHA-256 hex) and the CHECK `needs_lead = 0 OR lead_id IS NOT NULL`; v13 adds the progress watch's stretch on the card — `cards.progress_at`, `progress_marks` (JSON `{kind => {key, text, at}}`), `progress_pinged_at`, `progress_commented_at`, `progress_stale_at`, `progress_error`; v14 is a data step (no DDL): `cards.metadata.prs` becomes a list (§ 9 v14); v5's `workflows` is carried over and dropped by `BoardRepo#seed!`) — epochs as integers. `migrate!(db, prefix:,
+`lead_key_digest` (a lead's key, SHA-256 hex) and the CHECK `needs_lead = 0 OR lead_id IS NOT NULL`; v13 adds the progress watch's stretch on the card — `cards.progress_at`, `progress_marks` (JSON `{kind => {key, text, at}}`), `progress_pinged_at`, `progress_commented_at`, `progress_stale_at`, `progress_error`; v14 is a data step (no DDL): `cards.metadata.prs` becomes a list (§ 9 v14); v15 adds `cards.on_hold_at` /
+`on_hold_by` (§ 9 v15); v5's `workflows` is carried over and dropped by `BoardRepo#seed!`) — epochs as integers. `migrate!(db, prefix:,
 to: VERSION)`: a host migration is PINNED to the step it introduced (`to: 5` still creates `workflows`, `to: 6` the
 boards tables), so a fresh DB replays the host's migrations step by step and a rollback lands on that version's shape, JSON as text, done flags 0/1, portable DDL (`text: true` where > 255 chars may occur). `migrate!` is idempotent by introspection; the
 host's own ledger records each run. Prefix `""` = the unprefixed table names (a host whose tables already carry them needs no data move).
@@ -244,6 +248,22 @@ host's own ledger records each run. Prefix `""` = the unprefixed table names (a 
   resets the reminder. `Store#flagged_counts(slugs)` = `needs_operator` cards outside the waiting columns per project;
   `Store#needs_operator?(card)` = an open question; `Store#external?(card)` = blocked_external with no open question
   (`Store#waiting_counts` `external` = those per project — the one count `Api#board` and `#boards` both carry).
+- ON HOLD (`Store#hold(id, by:, on_hold:)`, the operator's only — `Api#hold`; no MCP tool): sets `on_hold_at` /
+  `on_hold_by` and releases the card's owner session + assignee (logged `hold` "put on hold in <column> — owner session
+  … released"), drops its pending pings (`failed`, "card put on hold"). A held card is out of `Store#live` (the board,
+  `counts`, `waiting_*`, `flagged_counts`, `owned_cards`, `adopt_ownerless`, the spawn pool, terminal events) and of every
+  watch (`watch_owners`, `flag_reminders`, the idle / progress / PR / rebase watches, the approval prefetch, the session
+  dialog's card): `Store#board(slug, on_hold: true)` is its only view, `on_hold_count(slug)` the toggle's count.
+  `delivery` = "none: on hold"; `set_owner` refuses it ("release it first"); an agent's `move` / `claim` gets
+  `no card N`. Tools answers every call that reaches a held card through any field (`id`, `parent`, `comment_id`,
+  `checklist_id`, `item_id`, `attachment_id`) with `no card N` / `no comment N` / … — the words of a missing record —
+  and `kanban_board` (archived too) leaves it out. The operator moves it by hand (it stays on hold); a move into a
+  terminal column ends the hold with the flags. Released → `on_hold_at` null, at the bottom of its column, ownerless
+  (`adopt_ownerless`: the lead takes it like any ownerless card). Refused on an archived card, a terminal column's card
+  and a session board's card, and while any unarchived card (a held one too) waits for it as its parent ("finish or detach them first"); a held
+  card is never a parent (`parent!`: "on hold: release it first"), never in `children` / a card's `children` count, never
+  in `members` or agents-at-work presence, and `kanban_pr_assign` of a PR it holds is refused without its id ("the PR of
+  another card").
 - An agent never creates a card in an operator-only column (`Board#agent_closed?`: the gates, cancelled and — on a
   board with a gate — the done column): it creates, works, then `kanban_handoff`s.
 - `kanban_handoff` and `kanban_ask` speak in normal comments: a handoff logs its one-line `handoff` event (PR · CI) AND a
@@ -407,6 +427,19 @@ primitives, for a host without its own).
 ## 9. Breaking changes for hosts (config / API)
 
 Newest first; a heading names the `Schema::VERSION` step when the change brought one.
+
+### Schema v15 — On hold
+
+- `cards.on_hold_at` (Integer) + `on_hold_by` (String): a host migration calls `migrate!(db, prefix:, to: 15)`; its
+  rollback drops the two columns (a held card becomes a live card again).
+- `Api#hold(id, {on_hold: true|false}, by:)` → the card body (422 on an unknown field, a non-boolean, an archived or a
+  finished card); the host routes it (busyyaks: `POST /api/cards/:id/hold`). `Api#board` / `#board_rev` take
+  `on_hold:` (the On hold view) and the board JSON carries `view` (`board` | `on_hold`) + `on_hold_count`; card JSON
+  `on_hold: {at, by} | null`.
+- React: `KanbanApi.hold?(id, onHold)` (optional: absent = no toggle, no button), `board` / `boardRev` opts
+  `onHold?`, `BoardView.onHold?` (busyyaks binds it to the URL). The header's "On hold · N" toggle swaps the columns
+  for the held cards (no composer there); the card dialog's Put on hold / Release hold.
+- Agents: no tool, no wording — a held card does not exist for them.
 
 ### Schema v14 — a card's PRs are a list (kanban_pr_assign adds, kanban_pr_unassign removes)
 

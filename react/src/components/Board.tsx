@@ -73,7 +73,8 @@ import { Select } from "./Select";
 
 const LIVE_POLL_MS = 3000; // the working glow's boardLive poll
 
-export type BoardView = { card: number | null; panel: Panel; archived: boolean };
+// onHold: the board's ON HOLD view (the cards the operator parked, in their columns) — only with api.hold
+export type BoardView = { card: number | null; panel: Panel; archived: boolean; onHold?: boolean };
 export type BoardProps = {
   api: KanbanApi;
   me: string; // the operator, as the engine records them (busyyaks: the signed-in email)
@@ -140,11 +141,12 @@ export function Board({
   className,
 }: BoardProps) {
   const showArchived = view.archived;
+  const showOnHold = !!view.onHold && !!api.hold;
   const openId = view.card;
   const panel = PANELS.includes(view.panel) ? view.panel : null;
   const { data, error, loading, reload } = useFetch<BoardData>(
-    () => api.board(slug, { archived: showArchived }),
-    [api, slug, showArchived],
+    () => api.board(slug, { archived: showArchived, onHold: showOnHold }),
+    [api, slug, showArchived, showOnHold],
   );
   const [err, setErr] = useState<string | null>(null);
   const [showEmpty, setShowEmpty] = useState(false); // summary="folded": the empty columns unfolded
@@ -292,7 +294,7 @@ export function Board({
   const pause = useRef(false);
   pause.current = drag !== null || busy !== null;
   const live = useLiveRev(
-    () => api.boardRev(slug, { archived: showArchived }),
+    () => api.boardRev(slug, { archived: showArchived, onHold: showOnHold }),
     () => void reload(),
     { paused: () => pause.current },
   );
@@ -735,6 +737,22 @@ export function Board({
             >
               Archived{data.archived ? ` · ${data.archived.length}` : ""}
             </button>
+            {api.hold && (
+              <button
+                type="button"
+                className="btn small kb-hold-btn"
+                aria-pressed={showOnHold}
+                onClick={() => onView({ onHold: !showOnHold, card: null, panel: null })}
+                title={
+                  showOnHold
+                    ? "Back to the board's cards"
+                    : "The cards on hold: parked where they sit, out of the flow, hidden from every agent"
+                }
+              >
+                <KbIcon name="pause" />
+                On hold · {data.on_hold_count ?? 0}
+              </button>
+            )}
             <button
               type="button"
               className="btn small kb-wf-btn"
@@ -790,6 +808,15 @@ export function Board({
           </div>
         )}
 
+        {showOnHold && (
+          <div className="flash warn kb-hold-view" role="status">
+            <i className="dot warn" />
+            <span>
+              On hold · {data.on_hold_count ?? 0} — out of the flow and hidden from every agent; only you move them.
+              Open a card → Release hold puts it back on the board.
+            </span>
+          </div>
+        )}
         {showArchived && data.archived && (
           <section className="card kb-archived">
             <h2>Archived · {data.archived.length}</h2>
@@ -1011,16 +1038,18 @@ export function Board({
                       </li>
                     ))}
                   </ol>
-                  <QuickAdd
-                    api={api}
-                    slug={slug}
-                    column={col.column}
-                    colLabel={col.label}
-                    open={addCol === col.column}
-                    setOpen={(o) => setAddCol(o ? col.column : null)}
-                    onAdded={() => void act(null, async () => {})}
-                    onError={setErr}
-                  />
+                  {!showOnHold && (
+                    <QuickAdd
+                      api={api}
+                      slug={slug}
+                      column={col.column}
+                      colLabel={col.label}
+                      open={addCol === col.column}
+                      setOpen={(o) => setAddCol(o ? col.column : null)}
+                      onAdded={() => void act(null, async () => {})}
+                      onError={setErr}
+                    />
+                  )}
                 </section>
               );
             })}

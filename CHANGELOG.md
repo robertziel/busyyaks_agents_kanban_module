@@ -8,6 +8,13 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Added
 
+- **On hold** (schema v15): the operator parks a card where it sits — `Store#hold` / `Api#hold`
+  (`cards.on_hold_at` / `on_hold_by`). A held card keeps its column and leaves the flow: the board's normal view (the
+  header's "On hold · N" toggle shows the held cards in the same columns), every count, waiting list and watch, and
+  every agent's sight (Tools answers "no card N" through any field; `kanban_board` leaves it out). Putting it on hold
+  releases its owner session and assignee and drops its pending pings; only the operator moves it; a terminal column
+  ends the hold; released, it returns ownerless to the bottom of its column for the lead to adopt. React:
+  `KanbanApi.hold?`, `BoardView.onHold?`, the card dialog's Put on hold / Release hold.
 - **Attachments as one row of miniatures**: the card dialog's Attachments section is one sideways-scrolling row of
   tiles, newest first (`newestFirst`), the newest marked "latest"; each tile's caption has its file name, time and a
   link to the comment that shows it (`commentOf`); deleting a file a comment shows says that comment keeps a broken

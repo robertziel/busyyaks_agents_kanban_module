@@ -479,6 +479,11 @@ function CardDetail({
           <span className="muted">{slug}</span>
         )}
         {c.archived && <span className="tag">archived {isoAt(c.archived)}</span>}
+        {c.on_hold && (
+          <span className="tag kb-hold-tag" title={`put on hold by ${c.on_hold.by}`}>
+            on hold {isoAt(c.on_hold.at)}
+          </span>
+        )}
         <span className="spacer" />
         <button type="button" className="btn small" onClick={onClose} aria-label="Close">
           ✕
@@ -1164,6 +1169,17 @@ function CardDetail({
               label={c.archived ? "Restore" : "Archive"}
               onClick={() => void run(() => api.archive(id, !c.archived))}
             />
+            {api.hold && !c.archived && (c.on_hold || !shape.rules.terminal.includes(c.column)) && (
+              <SideBtn
+                icon="pause"
+                label={c.on_hold ? "Release hold" : "Put on hold"}
+                on={!!c.on_hold}
+                onClick={() => {
+                  const hold = api.hold;
+                  if (hold) void run(() => hold(id, !c.on_hold));
+                }}
+              />
+            )}
             {(c.parent || c.children > 0) && (
               <p className="kb-side-meta muted kb-deps">
                 {c.parent && (

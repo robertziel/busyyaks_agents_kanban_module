@@ -31,8 +31,9 @@ export type CardPatch = {
 };
 
 export interface KanbanApi {
-  board(slug: string, opts: { archived: boolean }): Promise<BoardData>;
-  boardRev(slug: string, opts: { archived: boolean }): Promise<string>;
+  // onHold: the board's ON HOLD view (its cards on hold, in the same columns) instead of its normal cards
+  board(slug: string, opts: { archived: boolean; onHold?: boolean }): Promise<BoardData>;
+  boardRev(slug: string, opts: { archived: boolean; onHold?: boolean }): Promise<string>;
   card(id: number): Promise<CardData>;
   cardRev(id: number): Promise<string>;
   // optional: what the card's agent sessions do now (the card dialog's live line; absent = the host offers none)
@@ -47,6 +48,9 @@ export interface KanbanApi {
   update(id: number, patch: CardPatch): Promise<CardData>;
   assign(id: number, assignee: string): Promise<CardData>; // "" unassigns
   archive(id: number, archived: boolean): Promise<CardData>;
+  // optional: the operator puts a card ON HOLD / releases it (absent = the host offers no hold: no toggle,
+  // no button)
+  hold?: (id: number, onHold: boolean) => Promise<CardData>;
   setOwner(id: number, session: string): Promise<CardData>; // "" clears
   // force: the operator's Force — approve without the green-CI gate (approval.requires_green_ci); only with approved true
   approve(id: number, approved: boolean, force?: boolean): Promise<CardData>;
