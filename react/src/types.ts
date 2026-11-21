@@ -308,6 +308,8 @@ export type Card = {
   created: string;
   updated: string;
   archived: string | null;
+  // the operator's ON HOLD: out of the flow and out of every agent's sight, still in its column
+  on_hold?: { at: string; by: string } | null;
   description?: string;
   description_html?: string;
   checklists?: Checklist[];
@@ -451,6 +453,10 @@ export type BoardData = {
   config: HostConfig;
   board: BoardShapeData;
   archived?: Card[];
+  // which view the columns hold: the board's normal cards, or its cards ON HOLD; on_hold_count = how many
+  // cards the On hold view holds (absent on a host without hold)
+  view?: "board" | "on_hold";
+  on_hold_count?: number;
   backlog_md: { read_only: string; errors: string[]; tasks: BacklogTask[] } | null;
   columns_order: ColumnKey[];
   waiting_columns: ColumnKey[];

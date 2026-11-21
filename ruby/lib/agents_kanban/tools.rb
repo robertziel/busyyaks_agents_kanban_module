@@ -540,7 +540,7 @@ module AgentsKanban
                 { column: k, label: b.label(k), type: b.type_of(k).key, operator_only: b.operator_only.include?(k),
                   cards: cs.map { |c| row(c) }, }
               end, config: @config.to_h, board: @store.board_json(project[:slug], board: b), }
-      out[:archived] = @store.archived(project[:slug]).map { |c| row(c) } if archived
+      out[:archived] = @store.archived(project[:slug], with_held: false).map { |c| row(c) } if archived
       # a session board has no repo: no Backlog.md to read
       out[:backlog_md] = BacklogMd.json(@store.session_slug?(project[:slug]) ? nil : @backlog&.call(project, b), column: col)
       out
@@ -548,6 +548,7 @@ module AgentsKanban
 
     def call(name, a)
       session_guard!(name, a)
+      hold_guard!(a)
       case name
       when "kanban_session_board"
         raise Invalid, "session boards are off on this host (session_boards: null)" unless @store.session_boards?
@@ -878,17 +879,39 @@ module AgentsKanban
     # EVERY board a call touches: project, the card (id), the parent, the comment, the checklist, the item, the
     # attachment — each record by its own id, so a session board is never reached through a field the guard did not read.
     def target_slugs(a)
-      ids = []
-      ids << a["id"] if a.key?("id")
-      ids << a["parent"] if a.key?("parent") && !a["parent"].nil?
-      ids << @store.comment_card_id(a["comment_id"]) if a.key?("comment_id")
-      ids << @store.checklist_card_id(a["checklist_id"]) if a.key?("checklist_id")
-      ids << @store.item_card_id(a["item_id"]) if a.key?("item_id")
-      ids << @attachments.card_id_of(a["attachment_id"]) if a.key?("attachment_id")
-      ids = ids.filter_map { |i| Integer(i.to_s, exception: false) }
-      slugs = @store.card_slugs(ids).values
+      slugs = @store.card_slugs(target_cards(a).map(&:last)).values
       slugs << a["project"].to_s if a["project"].is_a?(String) && !a["project"].empty?
       slugs.uniq
+    end
+
+    # [[field, given value, card id]] for every card a call reaches through its fields (Integer card ids only)
+    def target_cards(a)
+      out = []
+      out << ["id", a["id"], a["id"]] if a.key?("id")
+      out << ["parent", a["parent"], a["parent"]] if a.key?("parent") && !a["parent"].nil?
+      out << ["comment_id", a["comment_id"], @store.comment_card_id(a["comment_id"])] if a.key?("comment_id")
+      out << ["checklist_id", a["checklist_id"], @store.checklist_card_id(a["checklist_id"])] if a.key?("checklist_id")
+      out << ["item_id", a["item_id"], @store.item_card_id(a["item_id"])] if a.key?("item_id")
+      out << ["attachment_id", a["attachment_id"], @attachments.card_id_of(a["attachment_id"])] if a.key?("attachment_id")
+      out.filter_map do |f, v, i|
+        n = Integer(i.to_s, exception: false)
+        n && [f, v, n]
+      end
+    end
+
+    # A card ON HOLD (Store#hold) is out of every agent's sight: a call reaching it through any field is answered as
+    # if it did not exist ("no card N", "no comment N", …) — the same words as a missing record, so nothing tells an
+    # agent the card is there.
+    MISSING = { "id" => "card", "parent" => "card", "comment_id" => "comment", "checklist_id" => "checklist",
+                "item_id" => "checklist item", "attachment_id" => "attachment", }.freeze
+
+    def hold_guard!(a)
+      hits = target_cards(a)
+      return if hits.empty?
+
+      held = @store.on_hold_ids(hits.map(&:last))
+      f, v, = hits.find { |_, _, i| held.include?(i) }
+      raise Invalid, "no #{MISSING.fetch(f)} #{v}" if f
     end
     def labels(slug) = @store.labels(slug).map { |l| @store.label_json(l) }
     def card_md(card_id)

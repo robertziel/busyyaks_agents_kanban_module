@@ -172,11 +172,12 @@ module AgentsKanban
     # The board JSON the React Board renders: columns + cards + the board's shape and rules (`board`) + the host config
     # (`config`) + whatever the host adds (board_extras). A stored board the host no longer fits → 422 with the reason
     # (the client offers the reset).
-    def board(slug, column: nil, archived: false)
+    # on_hold: true → the board's ON HOLD view (Store#hold): the same columns holding the cards on hold instead.
+    def board(slug, column: nil, archived: false, on_hold: false)
       p = project!(slug) or return not_found("no project #{slug}")
       refusing do
         b = @store.board_of(p[:slug])
-        body = board_json(p, column: column, archived: archived, board: b)
+        body = board_json(p, column: column, archived: archived, board: b, on_hold: on_hold)
         flagged = @store.flagged_counts([p[:slug]], boards: { p[:slug] => b })[p[:slug]] || 0
         # the same counts as Api#boards (Store#waiting_counts: one definition of waiting / held / external)
         w = @store.waiting_counts([p[:slug]], boards: { p[:slug] => b })
@@ -191,9 +192,11 @@ module AgentsKanban
       end
     end
 
-    def board_rev(slug, archived: false)
+    def board_rev(slug, archived: false, on_hold: false)
       p = project!(slug) or return not_found("no project #{slug}")
-      refusing { [200, { rev: Rev.of(board_json(p, archived: archived, board: @store.board_of(p[:slug]))) }] }
+      refusing do
+        [200, { rev: Rev.of(board_json(p, archived: archived, board: @store.board_of(p[:slug]), on_hold: on_hold)) }]
+      end
     end
 
     def card(id)
@@ -263,6 +266,15 @@ module AgentsKanban
       c = card!(id) or return not_found("no card #{id}")
       refusing do
         [200, card_body(@store.archive(c[:id], archived: flag!(b, "archived"), by: by))]
+      end
+    end
+
+    # {on_hold: true|false} → the card put on hold / released (Store#hold) → the card body
+    def hold(id, b, by:)
+      c = card!(id) or return not_found("no card #{id}")
+      refusing do
+        only!(b, ["on_hold"])
+        [200, card_body(@store.hold(c[:id], on_hold: flag!(b, "on_hold"), by: by))]
       end
     end
 
@@ -603,15 +615,17 @@ module AgentsKanban
 
     # ── helpers ───────────────────────────────────────────────────────────────────────────────────
 
-    def board_json(p, column: nil, archived: false, board: nil)
+    def board_json(p, column: nil, archived: false, board: nil, on_hold: false)
       b = board || @store.board_of(p[:slug])
       col = column.to_s.empty? ? nil : column.to_s
       raise Invalid, "column must be one of #{b.keys.join(', ')}" if col && !b.column?(col)
 
-      cols = @store.board(p[:slug], board: b)
+      cols = @store.board(p[:slug], board: b, on_hold: on_hold)
       cols = cols.slice(col) if col
       out = { project: p[:slug], labels: labels_json(p[:slug]),
               columns: cols.map { |k, cs| column_json(b, k, cs) },
+              # which view this is, and how many cards the ON HOLD view holds (the toggle's count)
+              view: on_hold ? "on_hold" : "board", on_hold_count: @store.on_hold_count(p[:slug]),
               config: @config.to_h, board: @store.board_json(p[:slug], board: b),
               agents: @store.agent_types(p[:slug]), }
       out[:archived] = @store.archived(p[:slug]).map { |c| @store.card_json(c) } if archived

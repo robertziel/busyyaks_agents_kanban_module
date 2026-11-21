@@ -249,16 +249,20 @@ module AgentsKanban
 
     # ── reading ───────────────────────────────────────────────────────────────────────────────────
 
-    # {column_key => [card]} in the board's order, live cards only, each decorated for its face.
-    def board(slug, board: nil)
+    # {column_key => [card]} in the board's order, live cards only, each decorated for its face. on_hold: true → the
+    # cards ON HOLD instead (Store#hold: the operator's other view of the same board, the same columns).
+    def board(slug, board: nil, on_hold: false)
       b = board || board_of(slug)
-      rows = live(slug).order(:position, :id).all.map { |c| hydrate(c, b) }
+      rows = (on_hold ? held_cards(slug) : live(slug)).order(:position, :id).all.map { |c| hydrate(c, b) }
       by_col = decorate(rows, { slug => b }).group_by { |c| c[:column] }
       b.keys.to_h { |k| [k, by_col[k] || []] }
     end
 
-    def archived(slug)
-      rows = cards.where(project_slug: slug).exclude(archived_at: nil).order(Sequel.desc(:archived_at)).all
+    # with_held: false leaves out the cards ON HOLD (what agents read: Tools never shows one)
+    def archived(slug, with_held: true)
+      ds = cards.where(project_slug: slug).exclude(archived_at: nil)
+      ds = ds.where(on_hold_at: nil) unless with_held
+      rows = ds.order(Sequel.desc(:archived_at)).all
       decorate(rows.map { |c| hydrate(c) })
     end
 
@@ -266,7 +270,7 @@ module AgentsKanban
     # slug is given, the projects in `slugs` when a list is given (a project with no live card is left out).
     # boards: {slug => Board} when the caller read them already (one batch read for a page).
     def counts(slug = nil, slugs: nil, boards: nil)
-      ds = cards.where(archived_at: nil)
+      ds = cards.where(archived_at: nil, on_hold_at: nil)
       ds = ds.where(project_slug: slug) if slug
       ds = ds.where(project_slug: slugs) if slugs
       rows = ds.group_and_count(:project_slug, :column).all
@@ -278,11 +282,14 @@ module AgentsKanban
 
     def empty_counts(slug) = board_of(slug).keys.to_h { |k| [k, 0] }
 
+    # How many cards of the project are ON HOLD (the board's "On hold" view; never in counts).
+    def on_hold_count(slug) = held_cards(slug).count
+
     # {slug => n}: live cards flagged needs_operator per project that sit outside their board's waiting columns — what
     # "N waiting for you" adds to the waiting columns' counts (a flagged card in a gate counts once). A card only
     # blocked_external waits for the world, not for the operator (waiting_counts `external`).
     def flagged_counts(slugs, boards: nil)
-      rows = cards.where(archived_at: nil, project_slug: slugs.to_a)
+      rows = cards.where(archived_at: nil, on_hold_at: nil, project_slug: slugs.to_a)
                   .exclude(asked_at: nil) # needs_operator?
                   .select(:project_slug, :column)
                   .all
@@ -305,7 +312,7 @@ module AgentsKanban
     # (its last move there, or its creation there); nil when the activity log does not say — unknown, not guessed.
     # → WaitingCards (by_slug + the boards, the template included)
     def waiting_cards(slugs)
-      rows = cards.where(archived_at: nil, project_slug: slugs.to_a).all
+      rows = cards.where(archived_at: nil, on_hold_at: nil, project_slug: slugs.to_a).all
       boards = boards_for(rows.map { |c| c[:project_slug] }.uniq + [Board::TEMPLATE])
       picked = rows.select do |c|
         b = boards[c[:project_slug]]
@@ -386,7 +393,7 @@ module AgentsKanban
         .all
       return {} if regs.empty?
 
-      rows = cards.where(archived_at: nil, owner_session: regs.map { |r| r[:session] }.uniq)
+      rows = cards.where(archived_at: nil, on_hold_at: nil, owner_session: regs.map { |r| r[:session] }.uniq)
                   .select(:id, :project_slug, :title, :column, :position, :owner_session, :owner_socket, :created_at,
                           :updated_at)
                   .all
@@ -419,6 +426,9 @@ module AgentsKanban
 
     # {id => project_slug} for the ids that are cards (archived too: they still open by ?card=).
     def card_slugs(ids) = ids.empty? ? {} : cards.where(id: ids.to_a).select_hash(:id, :project_slug)
+
+    # the ids among `ids` whose card is ON HOLD (Tools' guard: out of every agent's sight)
+    def on_hold_ids(ids) = ids.empty? ? [] : cards.where(id: ids.to_a).exclude(on_hold_at: nil).select_map(:id)
 
     def self.iso(ts) = ts && Time.at(ts).iso8601
     def iso(ts) = Store.iso(ts)
@@ -457,7 +467,9 @@ module AgentsKanban
             review_round: review_rounds(c)[c[:column]],
             parent: c[:parent_id], children: c[:children], blocked_by: c[:blocked_by], metadata: c[:metadata],
             created_by: c[:created_by], created: iso(c[:created_at]), updated: iso(c[:updated_at]),
-            archived: iso(c[:archived_at]), }
+            archived: iso(c[:archived_at]),
+            # the operator's ON HOLD (Store#hold): {at, by} | nil
+            on_hold: c[:on_hold_at] && { at: iso(c[:on_hold_at]), by: c[:on_hold_by] }, }
       j[:transitions] = c[:transitions] || []
       return j unless description
 
@@ -776,7 +788,8 @@ module AgentsKanban
                      "#{repo}: assign this PR under the role of its repo"
     end
 
-    # the same PR (any case) assigned to another live card that is not cancelled → Invalid naming it
+    # the same PR (any case) assigned to another live card that is not cancelled → Invalid naming it. A card ON HOLD
+    # still holds its PR (it comes back on release), but the refusal never names it: no agent learns a held card's id.
     def pr_elsewhere!(c, url)
       number = url[%r{/pull/(\d+)\z}, 1]
       cards.exclude(id: c[:id]).where(archived_at: nil).where(Sequel.like(:metadata, "%/pull/#{number}%")).all.each do |o|
@@ -785,6 +798,8 @@ module AgentsKanban
         had = prs.find { |p| p.is_a?(Hash) && p["url"].is_a?(String) && p["url"].casecmp?(url) }
         next unless had
         next if board_of(o[:project_slug]).type_of(o[:column]).key == "cancelled"
+
+        raise Invalid, "#{url} is already the #{had['role']} PR of another card: a PR belongs to one card" if on_hold?(o)
 
         raise Invalid, "#{url} is already the #{had['role']} PR of card ##{o[:id]} (#{o[:project_slug]}): a PR belongs " \
                        "to one card — open a PR for this card, or work on card ##{o[:id]}"
@@ -873,6 +888,7 @@ module AgentsKanban
       c = card!(id)
       named = !transition.to_s.strip.empty?
       raise Invalid, "card #{id} is archived" if c[:archived_at]
+      raise Invalid, "no card #{id}" if agent && on_hold?(c) # on hold: out of every agent's sight (Store#hold)
 
       b = board_of(c[:project_slug])
       column = transition_target!(b, c, column, transition, agent) if named
@@ -953,10 +969,64 @@ module AgentsKanban
       card(id)
     end
 
+    # ── on hold: the operator parks a card where it sits ─────────────────────────────────────────
+
+    # ON HOLD: the operator takes a card out of the flow without moving it — e.g. work that is done but not to be
+    # released yet. The card keeps its column and its place in the review loop, flags and approvals; it leaves the
+    # board's normal view (the operator's "On hold" view lists it, the same columns), every count, waiting list and
+    # watch (watchdog, idle / progress / PR / rebase watches, flag reminders, the approval prefetch), and every agent's
+    # sight: Tools answers "no card" for it, nobody adopts it, nothing pings for it. Putting it on hold releases its
+    # owner session (an agent that cannot see the card must not be told about it) and drops the pings still pending
+    # for it; only the operator moves it (by hand). Released → back in the board's normal view at the bottom of its
+    # column, ownerless: the board's lead adopts it as any ownerless card. Refused on an archived card, a card in a
+    # terminal column, and a session board's card (only its session acts there).
+    def hold(id, by:, on_hold: true)
+      c = card!(id)
+      return c if on_hold == !c[:on_hold_at].nil?
+
+      b = board_of(c[:project_slug])
+      raise Invalid, "card ##{c[:id]} is archived" if c[:archived_at]
+      raise Invalid, "card ##{c[:id]} is on a session board: only its session acts there" if session_slug?(c[:project_slug])
+      raise Invalid, "card ##{c[:id]} is in #{b.label(c[:column])} — its work is over" if on_hold && b.terminal?(c[:column])
+      kids = on_hold ? cards.where(parent_id: c[:id], archived_at: nil).order(:id).select_map(:id).map { |k| "##{k}" } : []
+      if kids.any?
+        # a child waits for its parent to finish: a held parent would hold its children (and show agents its id) — a
+        # held child too (released, it would wait on the held parent)
+        raise Invalid, "card ##{c[:id]} has cards waiting for it (#{kids.join(', ')}): finish or detach them first"
+      end
+
+      by = who!(by)
+      now = @clock.call
+      @db.transaction do
+        if on_hold
+          cards.where(id: c[:id]).update(on_hold_at: now, on_hold_by: by, owner_session: nil, owner_socket: nil,
+                                         assignee: nil, updated_at: now)
+          pings_t.where(card_id: c[:id], status: "pending").update(status: "failed", error: "card put on hold",
+                                                                    done_at: now)
+          renumber_column(c[:project_slug], c[:column])
+          was = [c[:owner_session] && "owner session #{c[:owner_session]}", c[:assignee] && "assignee #{c[:assignee]}"]
+                .compact
+          was = was.empty? ? "" : " — #{was.join(' and ')} released"
+          log(c[:id], "hold", "put on hold in #{b.label(c[:column])}#{was}", by)
+        else
+          at_end = live(c[:project_slug]).where(column: c[:column]).count
+          cards.where(id: c[:id]).update(on_hold_at: nil, on_hold_by: nil, position: at_end, updated_at: now)
+          log(c[:id], "hold", "released from hold in #{b.label(c[:column])}", by)
+        end
+      end
+      adopt_ownerless(only: c[:id]) unless on_hold
+      card(id)
+    end
+
+    def on_hold?(c) = !c[:on_hold_at].nil?
+
     # ── parents (dependencies): a card waits for its parent ───────────────────────────────────────
 
     # Live children of a card (any column), oldest first.
-    def children(id) = decorate(cards.where(parent_id: Integer(id), archived_at: nil).order(:id).all.map { |c| hydrate(c) })
+    def children(id)
+      rows = cards.where(parent_id: Integer(id), archived_at: nil, on_hold_at: nil).order(:id).all
+      decorate(rows.map { |c| hydrate(c) })
+    end
 
     # The ids among `parent_ids` that are not in a done column of their board (or are archived — an archived parent never
     # finishes). Nothing is unfinished on a host that does not enforce dependencies.
@@ -1093,7 +1163,7 @@ module AgentsKanban
       now = @clock.call
       after = @config.flags.reminder_hours * 3600
       sys = @config.system_author
-      rows = project_cards.where(archived_at: nil, flag_reminded_at: nil)
+      rows = project_cards.where(archived_at: nil, on_hold_at: nil, flag_reminded_at: nil)
                   .where(Sequel.|(Sequel.~(asked_at: nil), Sequel.~(blocked_at: nil)))
                   .all
       rows.select { |c| now - flag_since(c) >= after }.map do |c|
@@ -1116,6 +1186,7 @@ module AgentsKanban
     # What a comment / move by `author` on card c does: who it pings, or why nobody. Returned to the operator
     # (API `delivered`) so a message never vanishes silently.
     def delivery(c, author)
+      return "none: on hold" if c[:on_hold_at]
       return "none: no owner session" unless c[:owner_session]
       return "none: #{author} is the card's owner" if author == c[:owner_session] || (c[:assignee] && author == c[:assignee])
 
@@ -1376,7 +1447,7 @@ module AgentsKanban
       ids = watches_t.where(kind: REBASE, commented_at: nil).select_map(:card_id).uniq
       return [] if ids.empty?
 
-      cards.where(id: ids, archived_at: nil).order(:id).all.map do |row|
+      cards.where(id: ids, archived_at: nil, on_hold_at: nil).order(:id).all.map do |row|
         c = card(row[:id])
         got = begin
           rebase_cleared(c, board_of(c[:project_slug]), ping: true)
@@ -1411,6 +1482,8 @@ module AgentsKanban
         cards.where(id: c[:id]).update(owner_session: nil, owner_socket: nil, owner_missing_since: nil, updated_at: @clock.call)
         log(c[:id], "owner", "owner session cleared", who!(by))
       else
+        raise Invalid, "card ##{c[:id]} is on hold: release it first — no session owns a card on hold" if on_hold?(c)
+
         owner_session!(s, socket)
         @db.transaction do
           cards.where(id: c[:id]).update(owner_session: s, owner_socket: socket.to_s, owner_missing_since: nil,
@@ -1426,6 +1499,7 @@ module AgentsKanban
     # cannot start). The host verified the session is live before calling.
     def claim(id, assignee:, session:, socket: "default")
       c = card!(id)
+      raise Invalid, "no card #{id}" if on_hold?(c) # out of every agent's sight (Store#hold)
       blocked!(board_of(c[:project_slug]), nil, c[:blocked_by], "card ##{c[:id]}", claim: true)
       owner_session!(session.to_s.strip, socket) # before the assignee lands: a refused claim changes nothing
       reg = open_session(session.to_s.strip)
@@ -1487,7 +1561,7 @@ module AgentsKanban
       end
       c = card_id && card(card_id)
       c = nil unless askable.(c)
-      c ||= project_cards.where(owner_session: session, archived_at: nil)
+      c ||= project_cards.where(owner_session: session, archived_at: nil, on_hold_at: nil)
         .order(Sequel.desc(:updated_at), Sequel.desc(:id))
         .all
         .lazy
@@ -1513,7 +1587,9 @@ module AgentsKanban
     end
 
     # Live cards' owner sessions; the card an open (unanswered) dialog of this session + hash was posted on.
-    def owner_sessions = cards.where(archived_at: nil).exclude(owner_session: nil).distinct.select_map(:owner_session)
+    def owner_sessions
+      cards.where(archived_at: nil, on_hold_at: nil).exclude(owner_session: nil).distinct.select_map(:owner_session)
+    end
     def dialog_card(session, hash) = dialogs_t.where(session: session, hash: hash.to_s).order(Sequel.desc(:id)).get(:card_id)
 
     def open_dialog!(c)
@@ -1859,7 +1935,7 @@ module AgentsKanban
       by = who!(by)
       mine = Sequel.&({ owner_session: reg[:session], owner_socket: reg[:socket] })
       mine = Sequel.|(mine, { assignee: reg[:agent_name] }) unless reg[:agent_name].to_s.strip.empty?
-      ids = cards.where(archived_at: nil).where(mine).order(:id).select_map(:id)
+      ids = cards.where(archived_at: nil, on_hold_at: nil).where(mine).order(:id).select_map(:id)
       @db.transaction { ids.each { |cid| log(cid, "terminal", "#{line} · session #{reg[:session]}", by) } }
       ids
     end
@@ -1899,7 +1975,7 @@ module AgentsKanban
       end
       return {} if at_work.empty?
 
-      ids = Set.new(cards.where(project_slug: slug.to_s, archived_at: nil).select_map(:id))
+      ids = Set.new(live(slug.to_s).select_map(:id))
       out = Hash.new { |h, k| h[k] = [] }
       at_work.each do |r, l|
         who = { session: r[:session], agent: r[:agent_name], type: r[:type_key] }
@@ -2021,7 +2097,7 @@ module AgentsKanban
     # assignee cleared, logged — the next registration takes them again.
     def release_session_cards(session, reason:, by:)
       now = @clock.call
-      project_cards.where(owner_session: session.to_s, archived_at: nil).all.each do |c|
+      project_cards.where(owner_session: session.to_s, archived_at: nil, on_hold_at: nil).all.each do |c|
         cards.where(id: c[:id]).update(owner_session: nil, owner_socket: nil, owner_missing_since: nil, assignee: nil,
                                        updated_at: now)
         log(c[:id], "owner", "owner session #{session} released: #{reason}", who!(by))
@@ -2184,7 +2260,7 @@ module AgentsKanban
       now = @clock.call
       sys = @config.system_author
       released = []
-      owned = project_cards.exclude(owner_session: nil).where(archived_at: nil).all
+      owned = project_cards.exclude(owner_session: nil).where(archived_at: nil, on_hold_at: nil).all
       boards = boards_for(owned.map { |c| c[:project_slug] }.uniq)
       owned.each do |c|
         b = boards[c[:project_slug]]
@@ -2277,7 +2353,7 @@ module AgentsKanban
     def pr_watch_pass
       return [] unless @ci.respond_to?(:closed_prs)
 
-      rows = project_cards.where(archived_at: nil).order(:id).all
+      rows = project_cards.where(archived_at: nil, on_hold_at: nil).order(:id).all
       boards = boards_for(rows.map { |c| c[:project_slug] }.uniq)
       rows.reject { |c| boards[c[:project_slug]].terminal?(c[:column]) }.flat_map do |c|
         @ci.closed_prs(c).filter_map do |pr|
@@ -2364,7 +2440,7 @@ module AgentsKanban
     WaitingCounts = Struct.new(:waiting, :held, :external, :approved)
 
     def waiting_counts(slugs, boards: nil)
-      rows = cards.where(archived_at: nil, project_slug: slugs.to_a).all
+      rows = cards.where(archived_at: nil, on_hold_at: nil, project_slug: slugs.to_a).all
       boards ||= boards_for(rows.map { |r| r[:project_slug] }.uniq)
       gated = rows.select { |r| boards[r[:project_slug]].waiting.include?(r[:column]) }
       holds = gate_holds(gated.reject { |r| flagged?(r) }, boards)
@@ -2398,7 +2474,7 @@ module AgentsKanban
       now = @clock.call
       sys = @config.system_author
       done = []
-      rows = project_cards.where(archived_at: nil).all
+      rows = project_cards.where(archived_at: nil, on_hold_at: nil).all
       boards = boards_for(rows.map { |c| c[:project_slug] }.uniq)
       rows.select { |c| c[:column] == boards[c[:project_slug]].idle_column }.each do |c|
         c = c.merge(column_label: boards[c[:project_slug]].label(c[:column]))
@@ -2533,7 +2609,7 @@ module AgentsKanban
       return [] unless progress_watch?
 
       now = @clock.call
-      rows = project_cards.where(archived_at: nil).order(:id).all
+      rows = project_cards.where(archived_at: nil, on_hold_at: nil).order(:id).all
       boards = boards_for(rows.map { |c| c[:project_slug] }.uniq)
       rows.filter_map do |c|
         b = boards[c[:project_slug]]
@@ -2713,11 +2789,12 @@ module AgentsKanban
     def activity(id) = activity_t.where(card_id: Integer(id)).order(:created_at, :id).all
 
     # Everyone who has touched this board: activity authors, assignees, card creators (members / assignee candidates).
+    # A card ON HOLD adds nobody (out of every agent's sight).
     def members(slug)
-      ids = cards.where(project_slug: slug).select(:id)
-      (activity_t.where(card_id: ids).distinct.select_map(:author) +
-        cards.where(project_slug: slug).exclude(assignee: nil).distinct.select_map(:assignee) +
-        cards.where(project_slug: slug).distinct.select_map(:created_by)).uniq.sort
+      seen = cards.where(project_slug: slug, on_hold_at: nil)
+      (activity_t.where(card_id: seen.select(:id)).distinct.select_map(:author) +
+        seen.exclude(assignee: nil).distinct.select_map(:assignee) +
+        seen.distinct.select_map(:created_by)).uniq.sort
     end
 
     # ── labels (the board's set) ─────────────────────────────────────────────────────────────────
@@ -2897,7 +2974,10 @@ module AgentsKanban
 
     private
 
-    def live(slug) = cards.where(project_slug: slug, archived_at: nil)
+    # the board's cards in sight: not archived, not on hold (Store#hold) — every view, count, watch and agent reads these
+    def live(slug) = cards.where(project_slug: slug, archived_at: nil, on_hold_at: nil)
+    # the operator's ON HOLD view of a board: its held cards, still in their columns
+    def held_cards(slug) = cards.where(project_slug: slug, archived_at: nil).exclude(on_hold_at: nil)
 
     def board!(slug)
       raise Invalid, "no board #{slug}" unless slug.is_a?(String) && !slug.empty?
@@ -3199,11 +3279,12 @@ module AgentsKanban
       gone = []
       gone << "needs_operator" if c[:asked_at]
       gone << "blocked_external" if c[:blocked_at]
+      gone << "on hold" if c[:on_hold_at] # a held card moved by hand into a terminal column: its work is over
       return if gone.empty?
 
       cards.where(id: c[:id]).update(dialog_id: nil, question: nil, question_options: nil, asked_at: nil, asked_by: nil,
                                      blocked_at: nil, blocked_author: nil, blocked_reason: nil, blocked_url: nil,
-                                     flag_reminded_at: nil)
+                                     flag_reminded_at: nil, on_hold_at: nil, on_hold_by: nil)
       log(c[:id], "flag", "#{gone.join(' + ')} cleared — the card is in #{b.label(column)}", by)
     end
 
@@ -3227,11 +3308,11 @@ module AgentsKanban
 
     # every unarchived card sitting in a gate column of its board, with that board → [[card row, board], …]
     def gate_cards
-      boards = boards_for(cards.where(archived_at: nil).distinct.select_map(:project_slug))
+      boards = boards_for(cards.where(archived_at: nil, on_hold_at: nil).distinct.select_map(:project_slug))
       gates = boards.values.flat_map(&:gate_columns).uniq
       return [] if gates.empty?
 
-      cards.where(archived_at: nil, column: gates).order(:id).all.filter_map do |c|
+      cards.where(archived_at: nil, on_hold_at: nil, column: gates).order(:id).all.filter_map do |c|
         b = boards[c[:project_slug]]
         [c, b] if b.gate?(c[:column])
       end
@@ -3506,7 +3587,8 @@ module AgentsKanban
       files = attachments_t.where(card_id: ids, deleted_at: nil).group_and_count(:card_id).as_hash(:card_id, :count)
       media = newest_pictures(ids)
       dialogs = dialogs_t.where(id: list.map { |c| c[:dialog_id] }.compact, answered_at: nil).as_hash(:id)
-      kids = cards.where(parent_id: ids, archived_at: nil).group_and_count(:parent_id).as_hash(:parent_id, :count)
+      kids = cards.where(parent_id: ids, archived_at: nil, on_hold_at: nil).group_and_count(:parent_id)
+                  .as_hash(:parent_id, :count)
       parents = list.map { |c| c[:parent_id] }.compact.uniq
       open = unfinished(parents)
       items = items_t.join(@tables[:checklists], id: :checklist_id).where(Sequel[@tables[:checklists]][:card_id] => ids)
@@ -3666,6 +3748,7 @@ module AgentsKanban
       p = cards.where(id: pid).first or raise Invalid, "no card #{pid} to be the parent"
       raise Invalid, "parent card ##{pid} is on #{p[:project_slug]}, not on #{slug}" unless p[:project_slug] == slug
       raise Invalid, "parent card ##{pid} is archived" if p[:archived_at]
+      raise Invalid, "parent card ##{pid} is on hold: release it first" if on_hold?(p)
       raise Invalid, "a card cannot be its own parent" if self_id && pid == self_id
 
       if self_id

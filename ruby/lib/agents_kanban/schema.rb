@@ -38,8 +38,10 @@ module AgentsKanban
     # progress_error (why the last pass could not read the card's evidence);
     # 14 = a card's PRs are a LIST (no DDL, a data step): metadata `prs` {role => url} → [{url, repo, number, role, by,
     # at}] (by / at read off the card's "PR <role>: <url>" activity line, null when none says), the never-released
-    # `prs_replaced` → `prs_removed` entries (prs_to_lists!; prs_to_roles! is the host's rollback)
-    VERSION = 14
+    # `prs_replaced` → `prs_removed` entries (prs_to_lists!; prs_to_roles! is the host's rollback);
+    # 15 = cards.on_hold_at / on_hold_by: the operator's ON HOLD (Store#hold) — the card keeps its column, leaves the
+    # board's normal view, every watch and count, and every agent's sight (Tools: no such card) until released
+    VERSION = 15
     TABLES = %i[cards card_activity board_labels checklists checklist_items card_pings card_attachments session_dialogs
                 agent_sessions ci_watches boards board_columns board_transitions].freeze
 
@@ -90,6 +92,7 @@ module AgentsKanban
                     ])
       end
       prs_to_lists!(db, prefix: prefix, prs: prs, now: now) if to >= 14
+      add_missing(db, t[:cards], [[:on_hold_at, Integer], [:on_hold_by, String]]) if to >= 15
       t
     end
 
