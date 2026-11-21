@@ -32,8 +32,6 @@ export type HostConfig = {
     qa_min_chars: number;
     ui_change_needs_screenshots: boolean;
   } | null;
-  // the approval gate: requires_green_ci = an approval step is refused until the card's PR checks are green; null = no gate
-  approval: { requires_green_ci: boolean } | null;
   dependencies: boolean;
   // the cross-cutting card flags (needs_operator / blocked_external): one reminder comment after that many hours
   flags: { reminder_hours: number };
@@ -74,6 +72,9 @@ export type BoardColumnDef = {
   label: string;
   type: ColumnTypeKey;
   hide_after_hours: number;
+  // a gate column only: true = its approval step (and a handoff into it) waits for the card's PR checks
+  // green; the server sends it on every gate column (false = CI never asked there) and on no other
+  requires_green_ci?: boolean;
 };
 export type BoardShape = { columns: BoardColumnDef[]; transitions: WorkflowTransition[] };
 // one approval step: the operator's move from → to approves; `then` = where its agent takes the card next (null = no single way)
@@ -112,6 +113,8 @@ export type BoardRules = {
   // the review columns: review rounds are counted per column (Card.review_round)
   review_columns: ColumnKey[];
   hide_after_hours: Record<ColumnKey, number>;
+  // the gate columns whose approval step waits for green CI (requires_green_ci; none by default)
+  green_ci: ColumnKey[];
 };
 // Api#board_shape / Store#board_json: the shape + its rules + the type set + who saved it (the graph editor's data)
 export type BoardShapeData = BoardShape & {

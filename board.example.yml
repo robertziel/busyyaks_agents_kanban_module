@@ -11,6 +11,9 @@
 #   review     a further work column — an agent's review or the system's (listened, no watchdog move; review rounds counted here)
 #   gate       waits for the operator (agents enter with kanban_handoff only; the operator's one forward exit approves;
 #              an agent leaves only along a named agent transition once approved)
+#              optional `requires_green_ci: true`: the approval out of this gate, and a handoff into it,
+#              wait for the card's PR checks green (the host's ci: port); absent = false, CI never asked — the
+#              template sets it nowhere. README § Use case: a gate that waits for green CI
 #   done       finished (finishes a parent; terminal; operator-only; agents enter from a gate only, approved)
 #   cancelled  stopped (terminal; operator-only; finishes nothing)
 # A question for the operator is a FLAG on the card (kanban_ask → needs_operator), not a column: the card keeps its

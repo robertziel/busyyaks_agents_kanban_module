@@ -29,7 +29,13 @@ module KanbanTest
   def self.db = DB
   def self.config(name = "coding") = CONFIGS.fetch(name)
   # The board fixture (columns with types + transitions) as a plain hash — what a host seeds its template from.
-  def self.board_hash(name = "coding") = JSON.parse(File.read(File.join(ROOT, "fixtures/boards/#{name}.board.json")))
+  # green_ci: true = every gate column waits for green CI (requires_green_ci, a board's own choice, off in
+  # every fixture) — the suite's CI-gate tests turn it on.
+  def self.board_hash(name = "coding", green_ci: false)
+    h = JSON.parse(File.read(File.join(ROOT, "fixtures/boards/#{name}.board.json")))
+    h["columns"].each { |c| c["requires_green_ci"] = true if c["type"] == "gate" } if green_ci
+    h
+  end
   def self.markdown(cfg) = AgentsKanban::Markdown.new(attachment_url_prefix: cfg.attachment_url_prefix)
 
   # Every test starts from empty tables; the clock is a settable integer so timing rules are exact. The board template

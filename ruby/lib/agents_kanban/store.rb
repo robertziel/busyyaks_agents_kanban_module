@@ -72,10 +72,6 @@ module AgentsKanban
     def initialize(db, config:, markdown:, boards:, prs:, clock: -> { Time.now.to_i }, ci: nil)
       raise ArgumentError, "config must be an AgentsKanban::HostConfig" unless config.is_a?(HostConfig)
       raise ArgumentError, "prs: must answer pr_roles(card) (the host's PR roles port)" unless prs.respond_to?(:pr_roles)
-      if config.green_ci_gate? && !ci.respond_to?(:approval_checks)
-        raise ConfigError, "host config has approval.requires_green_ci but the Store got no ci: port answering " \
-                           "approval_checks(card, step)"
-      end
       if ci.respond_to?(:progress) != ci.respond_to?(:progress_kinds)
         raise ConfigError, "the ci: port must answer both progress(card) and progress_kinds (the progress watch's " \
                            "evidence and what it is), or neither"
@@ -128,8 +124,20 @@ module AgentsKanban
     def board_save(slug, hash, by:)
       board!(slug)
       not_session_shape!(slug)
+      green_ci_port!(hash)
       @repo.save(slug, hash, by: who!(by), cards_in: method(:cards_in_columns))
       board_json(slug)
+    end
+
+    # A board whose gate waits for green CI (requires_green_ci) needs a Store with a ci: port that answers
+    # approval_checks: refused on save, never found out at the first Approve.
+    def green_ci_port!(hash)
+      cols = hash.is_a?(Hash) && hash["columns"].is_a?(Array) ? hash["columns"] : []
+      gated = cols.select { |c| c.is_a?(Hash) && c["requires_green_ci"] == true }.map { |c| c["key"] }
+      return if gated.empty? || @ci.respond_to?(:approval_checks)
+
+      raise Invalid, "column #{gated.join(', ')}: requires_green_ci needs a host CI port (Store ci: answering " \
+                     "approval_checks) — this host has none: save the gate without it"
     end
 
     # Back to the template (the project's rows replaced by its copy; refused like a save when cards sit in a column the
@@ -875,8 +883,9 @@ module AgentsKanban
 
     # To column at position (0-based; nil or past the end = last). Both columns are renumbered.
     # `transition:` names a workflow edge out of the card's column instead of a target column (Jira's "Start work").
-    # The green-CI gate (approval.requires_green_ci) is asked only by an explicit approval: Store#approve (the Approve
-    # button) or the step's own named transition ("Approve"). Any other operator move along the step — a drag, the
+    # The green-CI gate (a gate column's requires_green_ci) is asked only by an explicit approval:
+    # Store#approve (the Approve button) or the step's own named transition ("Approve"). Any other operator move along
+    # the step — a drag, the
     # catch-all edge — is never refused by it: it still approves, and its activity line says CI was not asked.
     # `withdraw:` = Store#unapprove's move back to the step's gate: the operator's undo needs no edge in the workflow.
     # `force:` = Store#approve(force: true), the operator's Force button: the explicit approval WITHOUT the green-CI
@@ -929,7 +938,7 @@ module AgentsKanban
             # into it — from elsewhere, by a catch-all edge — is a plain move: nobody is pinged to carry on)
             cards.where(id: c[:id]).update(approved_at: @clock.call, approved_by: by)
             note = approval_note(b, step)
-            unasked = @config.green_ci_gate? && !checked
+            unasked = b.green_ci_step?(step) && !checked
             how = force ? "forced" : "dragged"
             note += " (#{how}: CI not asked)" if unasked
             log(c[:id], "approve", note, by)
@@ -1231,8 +1240,9 @@ module AgentsKanban
       move_check!(b, c, target, agent: true, handoff: true) # BEFORE writing: a refused move leaves no handoff behind
       by = who!(by)
       pr = pr_url.to_s.strip.empty? ? nil : pr_url.to_s.strip
-      # A gate with an approval step is entered only on green CI (approval.requires_green_ci), BEFORE writing: the card
-      # as it will sit there is asked exactly what the operator's Approve will ask — unread, pending, red or unknown →
+      # A gate with an approval step that waits for green CI (its requires_green_ci) is entered only on green
+      # CI, BEFORE writing: the card as it will sit there is asked exactly what the operator's Approve will ask —
+      # unread, pending, red or unknown →
       # refused with that state, nothing written ("hand off once CI is green"). Green → the Approve answers at once.
       ci = ci_url.to_s.strip.empty? ? nil : ci_url.to_s.strip
       step = b.approval_from(target)
@@ -1266,25 +1276,26 @@ module AgentsKanban
 
     # ── approval: the operator approves a card for the next step; its agent then moves it on ──
     # Every approval step of the board (Board#approvals: a gate's one forward operator exit) works the same way.
-    # `force: true` = the operator's Force button: the same approval without the green-CI gate (approval.requires_green_ci
-    # — CI and the PR's state at the handoff's head are not asked); every other refusal stays. Operator only: no MCP
+    # `force: true` = the operator's Force button: the same approval without the green-CI gate (the gate column's
+    # requires_green_ci — CI and the PR's state at the handoff's head are not asked); every other refusal stays.
+    # Operator only: no MCP
     # tool approves, and Store#move refuses force with agent: true.
     def approve(id, by:, force: false)
       c = card!(id)
       b = board_of(c[:project_slug])
       raise Invalid, "this board has no approval step (no gate with a single forward operator exit)" if b.approvals.empty?
-      if force && !@config.green_ci_gate?
-        raise Invalid, "force: true needs approval.requires_green_ci — this host's Approve asks no CI: approve without force"
-      end
 
       step = b.approval_from(c[:column])
-      return move(id, column: step.to, by: by, approval: true, force: force) if step
-
-      into = b.gate?(c[:column]) ? b.approval_into(c[:column]) : nil
-      unless into
+      into = !step && b.gate?(c[:column]) ? b.approval_into(c[:column]) : nil
+      unless step || into
         raise Invalid, "only a card in #{b.approvals.map { |a| b.label(a.from) }.join(' or ')} can be approved " \
                        "(card ##{c[:id]} is in #{b.label(c[:column])})"
       end
+      if force && !b.green_ci_step?(step || into)
+        raise Invalid, "force: true needs a gate that waits for green CI — #{b.label((step || into).from)} has no " \
+                       "requires_green_ci in the workflow, its Approve asks no CI: approve without force"
+      end
+      return move(id, column: step.to, by: by, approval: true, force: force) if step
 
       approve_in_place(c, b, into, by, force: force)
     end
@@ -1301,7 +1312,7 @@ module AgentsKanban
       by = who!(by)
       green = force ? nil : green_ci!(c, b, step)
       rebase = green && rebase_of!(c, green)
-      unasked = force && @config.green_ci_gate?
+      unasked = force && b.green_ci_step?(step)
       @db.transaction do
         cards.where(id: c[:id]).update(approved_at: @clock.call, approved_by: by, updated_at: @clock.call)
         log(c[:id], "approve",
@@ -1442,7 +1453,7 @@ module AgentsKanban
 
     # Every open mark asked again (notifier watch pass) → [[card_id, :cleared | "held: <why>"], …].
     def rebase_watch_pass
-      return [] unless @config.green_ci_gate?
+      return [] unless @ci.respond_to?(:approval_checks) # a mark is set only on a green answer of the port
 
       ids = watches_t.where(kind: REBASE, commented_at: nil).select_map(:card_id).uniq
       return [] if ids.empty?
@@ -2298,7 +2309,7 @@ module AgentsKanban
       released
     end
 
-    # ── approval prefetch (approval.requires_green_ci): Approve never waits for a CI read ─────────────────────
+    # ── approval prefetch (a gate column's requires_green_ci): Approve never waits for a CI read ───────
     #
     # Every card the operator can Approve has that step's checks asked of the host's ci: port — at the handoff and on
     # every notifier watch pass — so a host that answers asynchronously (a poller holding the token, answering what was
@@ -2311,10 +2322,8 @@ module AgentsKanban
     # goes on to the next card, nothing is silent.
     # → [[card_id, state | "no PR" | "unavailable: <why>" | "skipped: <why>" | "failed: <why>", gate event], …]
     def approval_prefetch_pass
-      return [] unless @config.green_ci_gate?
-
       gate_cards.map do |c, b|
-        next [c[:id], "skipped: #{prefetch_skipped(c, b)}", nil] unless approval_pending(c, b)
+        next [c[:id], "skipped: #{prefetch_skipped(c, b)}", nil] unless b.green_ci_step?(approval_pending(c, b))
 
         begin
           prefetch_approval(c, b)
@@ -2333,9 +2342,7 @@ module AgentsKanban
     # Every unarchived card the operator can Approve now, with the step it takes, in id order — the cards the prefetch
     # asks: a host's guard checks their reads stayed fresh (card #511) → [[card row, step], …]; [] without the gate.
     def approval_pending_cards
-      return [] unless @config.green_ci_gate?
-
-      gate_cards.filter_map { |c, b| (step = approval_pending(c, b)) && [c, step] }
+      gate_cards.filter_map { |c, b| (step = approval_pending(c, b)) && b.green_ci_step?(step) && [c, step] }
     end
 
     # ── PR watch: a PR assigned to a live card closed without merging ───────────────────────────────────────────
@@ -2367,7 +2374,8 @@ module AgentsKanban
       end
     end
 
-    # ── approvable now (approval.requires_green_ci): a gate card waits for the OPERATOR only while its Approve would pass
+    # ── approvable now (a gate column's requires_green_ci): a gate card waits for the OPERATOR only while its
+    # Approve would pass
     #
     # The operator, card #248: "Tickets waiting to approve that can't be approved due to things like CI etc. should not
     # be here!!" A card in a gate an approval step leaves from HOLDS (→ the reason) while that step's checks are not
@@ -2378,9 +2386,8 @@ module AgentsKanban
     # pass; "ready" from the handoff's green answer) — only a card with none recorded yet is asked live. The operator's
     # Approve always asks live (green_ci!).
     def gate_hold(c, b)
-      return nil unless @config.green_ci_gate?
+      return nil unless b.green_ci_step?(b.approval_from(c[:column]))
 
-      b.approval_from(c[:column]) or return nil
       return nil if c[:gate_state] == "ready"
       return c[:gate_state] if c[:gate_state]
 
@@ -2411,8 +2418,6 @@ module AgentsKanban
 
     # {card id => hold} for the given rows (only the held ones)
     def gate_holds(rows, boards)
-      return {} unless @config.green_ci_gate?
-
       rows.each_with_object({}) do |c, acc|
         why = gate_hold(c, boards[c[:project_slug]])
         acc[c[:id]] = why if why
@@ -3321,6 +3326,8 @@ module AgentsKanban
     # Why a gate card is not asked (approval_prefetch_pass): approved, its agent carries on — or no step at all.
     def prefetch_skipped(c, b)
       return "approved by #{c[:approved_by]}, its agent carries on" if c[:approved_at] && b.approval_into(c[:column])
+      step = approval_pending(c, b)
+      return "#{b.label(step.from)} does not wait for green CI (no requires_green_ci in the workflow)" if step
 
       "no approval step leaves or enters #{b.label(c[:column])}"
     end
@@ -3329,9 +3336,10 @@ module AgentsKanban
     # step here). The gate event is said once per change, the last state kept on the card (gate_state):
     # :red = its CI turned red (the owner is pinged to fix it), :ready = a hold cleared (it now waits for the operator).
     def prefetch_approval(c, b)
-      return nil unless @config.green_ci_gate? && !c[:archived_at]
+      return nil if c[:archived_at]
 
-      step = approval_pending(c, b) or return nil
+      step = approval_pending(c, b)
+      return nil unless b.green_ci_step?(step)
       begin
         pr = @ci.approval_checks(c, step.to_h)
       rescue Delivery::Unavailable => e
@@ -3409,12 +3417,16 @@ module AgentsKanban
       end
     end
 
-    # The approval gate (host config approval.requires_green_ci): the card's PR checks must be green — asked of the
+    # The approval gate (the gate column's requires_green_ci): the card's PR checks must be green — asked of the
     # host's ci: port for this step (the host picks the PR: e.g. the local PR at the local step, the public PR at the
     # final one). No PR, not finished, failed, not read yet or the port unreachable → refused with what it saw. An
     # answer's `reason:` is the host's own refusal (e.g. a prerequisite PR not merged), said in place of the CI wording.
     def green_ci!(c, b, step, handoff: false)
-      return unless @config.green_ci_gate?
+      return unless b.green_ci_step?(step)
+      unless @ci.respond_to?(:approval_checks)
+        raise ConfigError, "#{b.label(step.from)} waits for green CI (requires_green_ci) but the Store got no ci: port " \
+                           "answering approval_checks(card, step)"
+      end
 
       what = handoff ? "not handed off (→ #{b.label(step.from)})" : "not approved (#{b.label(step.from)} → #{b.label(step.to)})"
       again = handoff ? "hand off again in a minute" : "approve again in a minute"

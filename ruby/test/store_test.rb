@@ -743,10 +743,10 @@ class StoreTest < Minitest::Test
                  m.activity(id).reverse.find { |a| a[:kind] == "flag" }[:body]
   end
 
-  # approval.requires_green_ci — every approval step (button or drag along it) asks the ci: port for
-  # that step and is refused, nothing moved or logged, unless the card's PR checks are green.
+  # a gate column's requires_green_ci — every approval step out of such a gate (button or its transition)
+  # asks the ci: port for that step and is refused, nothing moved or logged, unless the card's PR checks are green.
   def test_approval_waits_for_green_ci_at_every_step
-    m = store(board: KanbanTest.board_hash("local_v4"))
+    m = store(board: KanbanTest.board_hash("local_v4", green_ci: true))
     id = local_card(m)
     m.move(id, transition: "Open local PR", by: "claude-shop-lead", agent: true)
     m.handoff(id, **handoff_ok, by: "claude-shop-lead")
@@ -803,7 +803,7 @@ class StoreTest < Minitest::Test
   # the operator's drag is never refused by the green-CI gate — along a step it still approves (the activity
   # says CI was not asked); the catch-all edge alike. Only the Approve button and the step's own transition ask CI.
   def test_an_operator_drag_along_a_step_approves_without_asking_ci
-    m = store(board: KanbanTest.board_hash("local_v4"))
+    m = store(board: KanbanTest.board_hash("local_v4", green_ci: true))
     id = local_card(m)
     m.move(id, transition: "Open local PR", by: "claude-shop-lead", agent: true)
     m.handoff(id, **handoff_ok, by: "claude-shop-lead")
@@ -829,7 +829,7 @@ class StoreTest < Minitest::Test
 
   # the final step's ping tells the owner to merge: dragged there, it also says CI was never asked
   def test_a_final_step_dragged_pings_merge_only_once_green
-    m = store(board: KanbanTest.board_hash("local_v4"))
+    m = store(board: KanbanTest.board_hash("local_v4", green_ci: true))
     id = local_card(m)
     m.move(id, transition: "Move", column: "public_human_review", by: "operator@x")
     m.pending_pings.each { |p| m.ping_result(p, "sent") }
@@ -841,15 +841,43 @@ class StoreTest < Minitest::Test
     refute_includes text, AgentsKanban::Store::CI_NOT_ASKED
   end
 
-  def test_a_store_with_the_green_ci_gate_needs_the_port
-    e = assert_raises(AgentsKanban::ConfigError) do
-      AgentsKanban::Store.new(db, config: config, markdown: KanbanTest.markdown(config), boards: ->(_s) { true },
-                                  prs: pr_roles)
-    end
-    assert_match(/approval.requires_green_ci but the Store got no ci: port/, e.message)
-    content = KanbanTest.config("content")
-    assert AgentsKanban::Store.new(db, config: content, markdown: KanbanTest.markdown(content), boards: ->(_s) { true },
-                                   prs: pr_roles)
+  # green CI is each gate column's own choice — a Store without a ci: port builds, runs every gate that asks
+  # no CI, and refuses to save a board whose gate asks it (never found out at the first Approve)
+  def test_a_board_whose_gate_waits_for_green_ci_needs_the_port
+    seed_template(config, KanbanTest.board_hash("local_v4"))
+    portless = AgentsKanban::Store.new(db, config: config, markdown: KanbanTest.markdown(config),
+                                           boards: ->(s) { @boards.include?(s) }, clock: -> { @now }, prs: pr_roles)
+    id = portless.create(slug: "p", title: "t", by: "me", column: "local_human_review")
+    assert_equal "local_merged_pr", portless.approve(id, by: "operator@x")[:column], "no gate asks CI: no port asked"
+    gated = KanbanTest.board_hash("local_v4")
+    gated["columns"].find { |c| c["key"] == "deploy_check" }["requires_green_ci"] = true
+    e = assert_raises(Invalid) { portless.board_save("p", gated, by: "operator@x") }
+    assert_equal "column deploy_check: requires_green_ci needs a host CI port (Store ci: answering approval_checks) — " \
+                 "this host has none: save the gate without it", e.message
+    assert_equal %w[deploy_check], store.board_save("p", gated, by: "operator@x")[:rules][:green_ci]
+  end
+
+  # the default asks no CI anywhere — a board that sets requires_green_ci on none of its gates approves and
+  # takes handoffs without asking the ci: port; one gate set → only that step asks
+  def test_only_a_gate_with_requires_green_ci_asks_ci
+    m = store(board: KanbanTest.board_hash("local_v4"))
+    id = local_card(m)
+    m.move(id, transition: "Open local PR", by: "claude-shop-lead", agent: true)
+    approval_ci.answer = { number: 7, state: "failure", finished_at: 5 }
+    m.handoff(id, **handoff_ok, by: "claude-shop-lead")
+    m.approve(id, by: "operator@x")
+    assert_equal "local_merged_pr", m.card(id)[:column]
+    assert_empty approval_ci.asked, "no gate waits for green CI: the port is never asked"
+    refute_includes m.activity(id).reverse.find { |a| a[:kind] == "approve" }[:body], "CI not asked",
+                    "nothing to say when the gate asks no CI"
+    gated = KanbanTest.board_hash("local_v4")
+    gated["columns"].find { |c| c["key"] == "deploy_check" }["requires_green_ci"] = true
+    m.board_save("p", gated, by: "operator@x")
+    e = assert_raises(Invalid) { m.handoff(id, **handoff_ok, by: "claude-shop-lead") }
+    assert_match(/not handed off \(→ Local: Deploy check\): PR #7 of card ##{id} — CI failed/, e.message)
+    approval_ci.answer = { number: 7, state: "success", finished_at: 5 }
+    m.handoff(id, **handoff_ok, by: "claude-shop-lead")
+    assert_equal "deploy_check", m.card(id)[:column]
   end
 
   # ── pings + watchdog ─────────────────────────────────────────────────────────────────────────

@@ -82,7 +82,6 @@
     "qa_min_chars": 20,
     "ui_change_needs_screenshots": true
   },
-  "approval": { "requires_green_ci": true },
   "dependencies": false,
   "session_boards": {
     "slug_prefix": "session:",

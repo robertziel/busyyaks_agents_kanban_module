@@ -48,9 +48,13 @@ class SchemaTest < Minitest::Test
     assert_empty db.schema(t[:cards]).map(&:first) & pw, "v12 has no progress watch stretch"
     S.migrate!(db, prefix: p, to: 14, prs: nil)
     assert_empty db.schema(t[:cards]).map(&:first) & %i[on_hold_at on_hold_by], "v14 has no hold"
-    S.migrate!(db, prefix: p) # = to: VERSION
+    S.migrate!(db, prefix: p, to: 15)
     assert_equal %i[on_hold_at on_hold_by], db.schema(t[:cards]).map(&:first) & %i[on_hold_at on_hold_by],
                  "v15 = + cards.on_hold_at / on_hold_by"
+    refute db.schema(t[:board_columns]).map(&:first).include?(:requires_green_ci), "v15 has no requires_green_ci"
+    S.migrate!(db, prefix: p) # = to: VERSION
+    assert db.schema(t[:board_columns]).map(&:first).include?(:requires_green_ci),
+           "v16 = + board_columns.requires_green_ci"
     assert_equal pw, db.schema(t[:cards]).map(&:first) & pw, "v13 = + the progress watch's stretch on the card"
     assert_equal %i[gate_head gate_state], db.schema(t[:cards]).map(&:first) & %i[gate_head gate_state],
                  "v10 = + cards.gate_head / gate_state"

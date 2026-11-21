@@ -19,7 +19,7 @@ module AgentsKanban
   #       gets ONE reminder comment by the system author (Store#flag_reminders);
   #   3b. the idle watch (config.idle_watch, the host's `ci:` port): CI finished + owner silent → ping, then comment;
   #       a live owner quiet for hours → comment;
-  #   3c. the approval prefetch (config.approval.requires_green_ci, the Store's `ci:` port): every card in a gate an
+  #   3c. the approval prefetch (a gate column's requires_green_ci, the Store's `ci:` port): every card in a gate an
   #       approval step leaves from has its step's checks asked again (Store#approval_prefetch_pass), so the host keeps a
   #       fresh answer and Approve never waits for a CI read; a card the port cannot answer is logged;
   #       The same pass is the gate watch (card #248): a gate card whose CI turned red pings its owner once; one whose

@@ -84,8 +84,12 @@ export const UNKNOWN_ICON = "M5.8 6a2.2 2.2 0 1 1 3.2 2c-.7.4-1 .9-1 1.6 M8 12.2
 // the icon a column's type draws; none = a type the engine's fixed set does not have — the card says so (never a blank card)
 export const iconOf = (type: string): string | undefined => (TYPE_ICON as Record<string, string | undefined>)[type];
 // the pill a card carries: its type's status, or the error for a type the editor cannot draw
-export const cardBadge = (c: BoardColumnDef, t: ColumnType | undefined): string | null =>
-  iconOf(c.type) && t ? typeBadge(t) : `unknown type: ${c.type}`;
+// (a gate that waits for green CI says so:)
+export const cardBadge = (c: BoardColumnDef, t: ColumnType | undefined): string | null => {
+  if (!iconOf(c.type) || !t) return `unknown type: ${c.type}`;
+  const badge = typeBadge(t);
+  return badge && c.type === "gate" && c.requires_green_ci ? `${badge} · CI` : badge;
+};
 
 const clone = (s: BoardShape): BoardShape => ({
   columns: s.columns.map((c) => ({ ...c })),
@@ -637,6 +641,8 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
                     setCol(selCol.key, {
                       type: v as ColumnTypeKey,
                       hide_after_hours: typeOf(v as ColumnTypeKey)?.hide_after_hours ?? selCol.hide_after_hours,
+                      // a gate's own setting: kept on a gate, dropped from any other type
+                      requires_green_ci: v === "gate" ? (selCol.requires_green_ci ?? false) : undefined,
                     })
                   }
                   ariaLabel="Column type"
@@ -658,6 +664,20 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
                   }
                 />
               </label>
+              {selCol.type === "gate" && (
+                <label
+                  className="kb-side-field kb-be-check"
+                  title="On: the approval out of this gate, and a handoff into it, wait for the card's PR checks green · Off (default): CI is never asked here"
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!selCol.requires_green_ci}
+                    aria-label="Requires green CI"
+                    onChange={(e) => setCol(selCol.key, { requires_green_ci: e.target.checked })}
+                  />
+                  <span>Requires green CI</span>
+                </label>
+              )}
               <p className="muted kb-be-summary">{typeOf(selCol.type)?.summary}</p>
               <p className="muted">
                 {moved[selCol.key]

@@ -286,6 +286,27 @@ describe("BoardEditor", () => {
     expect(await within(dlg).findByText(/saved by me/)).toBeInTheDocument();
   });
 
+  // a gate's "Requires green CI" — off by default, offered on a gate only, its card says "· CI" when on,
+  // Save sends it; retyped away from a gate it is dropped
+  it("a gate column opts in to green CI: off by default, a checkbox on gates only, saved with the draft", async () => {
+    const a = api();
+    const dlg = await open(a);
+    fireEvent.click(within(dlg).getByRole("button", { name: "Column QA (Review)" }));
+    expect(within(dlg).queryByLabelText("Requires green CI")).toBeNull();
+    const gate = within(dlg).getByRole("button", { name: "Column Human Check (Gate)" });
+    fireEvent.click(gate);
+    const box = within(dlg).getByLabelText<HTMLInputElement>("Requires green CI");
+    expect(box.checked).toBe(false);
+    expect(within(gate).getByText("waits for you")).toBeInTheDocument();
+    fireEvent.click(box);
+    expect(box.checked).toBe(true);
+    expect(within(gate).getByText("waits for you · CI")).toBeInTheDocument();
+    fireEvent.click(within(dlg).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(a.saved).toHaveLength(1));
+    expect(a.saved[0]!.columns.find((c) => c.key === "human_check")!.requires_green_ci).toBe(true);
+    expect(a.saved[0]!.columns.filter((c) => c.requires_green_ci).map((c) => c.key)).toEqual(["human_check"]);
+  });
+
   it("clicking an arrow edits it: name, who takes it, delete", async () => {
     const a = api();
     const dlg = await open(a);

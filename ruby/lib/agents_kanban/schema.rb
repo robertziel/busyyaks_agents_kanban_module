@@ -41,7 +41,9 @@ module AgentsKanban
     # `prs_replaced` → `prs_removed` entries (prs_to_lists!; prs_to_roles! is the host's rollback);
     # 15 = cards.on_hold_at / on_hold_by: the operator's ON HOLD (Store#hold) — the card keeps its column, leaves the
     # board's normal view, every watch and count, and every agent's sight (Tools: no such card) until released
-    VERSION = 15
+    # 16 = + board_columns.requires_green_ci (0/1, null = 0): a gate column's own choice whether its approval step waits
+    # for green CI — was the host-wide approval.requires_green_ci; no data step: every gate starts at 0
+    VERSION = 16
     TABLES = %i[cards card_activity board_labels checklists checklist_items card_pings card_attachments session_dialogs
                 agent_sessions ci_watches boards board_columns board_transitions].freeze
 
@@ -93,6 +95,7 @@ module AgentsKanban
       end
       prs_to_lists!(db, prefix: prefix, prs: prs, now: now) if to >= 14
       add_missing(db, t[:cards], [[:on_hold_at, Integer], [:on_hold_by, String]]) if to >= 15
+      add_missing(db, t[:board_columns], [[:requires_green_ci, Integer]]) if to >= 16
       t
     end
 

@@ -296,7 +296,7 @@ module AgentsKanban
         hash = {
           "columns" => cols.map do |c|
             { "key" => key.(c[:key]), "label" => map.dig(c[:key], "label") || c[:label], "type" => c[:type],
-              "hide_after_hours" => c[:hide_after_hours], }
+              "hide_after_hours" => c[:hide_after_hours], **green_ci_of(c), }
           end,
           "transitions" => transitions_t.where(project_slug: slug).order(:position, :id).all.map do |r|
             from = JSON.parse(r[:from_keys])
@@ -397,7 +397,7 @@ module AgentsKanban
           type = ColumnTypes::LEGACY.fetch(c[:type], c[:type])
           report["columns"][c[:key]] = "#{c[:type]} → #{type}" if type != c[:type]
           { "key" => c[:key], "label" => c[:label], "type" => type,
-            "hide_after_hours" => c[:hide_after_hours], }
+            "hide_after_hours" => c[:hide_after_hours], **green_ci_of(c), }
         end
         transitions = trs.map do |r|
           { "name" => r[:name], "from" => JSON.parse(r[:from_keys]), "to" => r[:to_key], "by" => r[:by] }
@@ -503,7 +503,7 @@ module AgentsKanban
       cols.to_h do |slug, cs|
         columns = cs.map do |c|
           { "key" => c[:key], "label" => c[:label], "type" => c[:type],
-            "hide_after_hours" => c[:hide_after_hours], }
+            "hide_after_hours" => c[:hide_after_hours], **green_ci_of(c), }
         end
         transitions = (trs[slug] || []).map do |r|
           { "name" => r[:name], "from" => JSON.parse(r[:from_keys]), "to" => r[:to_key], "by" => r[:by] }
@@ -511,6 +511,9 @@ module AgentsKanban
         [slug, board!(slug, { "columns" => columns, "transitions" => transitions })]
       end
     end
+
+    # a stored column's requires_green_ci: 1 = true; 0, null or a table before v16 = false (never asked)
+    def green_ci_of(row) = row[:requires_green_ci].to_i == 1 ? { "requires_green_ci" => true } : {}
 
     def board!(slug, hash)
       Board.new(hash, host: @host)
@@ -549,9 +552,12 @@ module AgentsKanban
         # a v6 – v8 table (the same replay, before its v9 step drops them) has the graph positions x / y NOT NULL that
         # the v6 – v8 editor drew from: the rows get that version's serpentine, and v9 drops the columns
         legacy_xy = columns_t.columns.include?(:x)
+        # a v6 – v15 table (the same replay, before its v16 step) has no requires_green_ci: no gate asks CI there
+        green = columns_t.columns.include?(:requires_green_ci)
         board.columns.each_with_index do |c, i|
           row = { project_slug: slug, key: c.key, label: c.label, type: c.type.key, position: i }
           row[:hide_after_hours] = c.hide_after_hours if hide
+          row[:requires_green_ci] = c.requires_green_ci ? 1 : 0 if green
           row.merge!(Schema.legacy_xy(i)) if legacy_xy
           columns_t.insert(row)
         end

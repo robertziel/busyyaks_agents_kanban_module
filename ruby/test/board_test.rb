@@ -189,7 +189,7 @@ class BoardTest < Minitest::Test
     bad.({ "columns" => [col("a", "nope")], "transitions" => [] }, /column a: type "nope" is not one of parked, queued/)
     # the graph is laid out by the editor every time: a stored position is an unknown key (SPEC § 2)
     bad.({ "columns" => [col("a", "parked").merge("x" => 1, "y" => 2)], "transitions" => [] },
-         /columns\[0\] must be an object with key, label, type \(and optionally hide_after_hours\)/)
+         /columns\[0\] must be an object with key, label, type \(and optionally hide_after_hours, requires_green_ci\)/)
     bad.({ "columns" => [col("a", "parked"), col("a", "parked")], "transitions" => [] }, /duplicate column key a/)
     bad.({ "columns" => [col("a", "queued"), col("b", "queued")], "transitions" => [] },
          /columns a and b are both queued: a board has at most one queued column/)
@@ -235,7 +235,7 @@ host: config)
 
   def test_host_config_has_no_board_keys_and_takes_name_types
     assert_equal %w[priorities label_colors system_author attachment_url_prefix launchers agent_types concurrency
-                    owner_sessions table_prefix theme idle_watch progress_watch handoff approval dependencies session_dialogs
+                    owner_sessions table_prefix theme idle_watch progress_watch handoff dependencies session_dialogs
                     flags review_loop session_boards face_roles avatar_url],
                  AgentsKanban::HostConfig::KEYS
     e = assert_raises(AgentsKanban::ConfigError) { AgentsKanban::HostConfig.new(host_raw.merge("columns" => [])) }
@@ -297,7 +297,7 @@ host: config)
     end
     columns = raw["columns"].map { |c| c.merge("hidden" => 1) }
     e = assert_raises(Invalid) { B.new(raw.merge("columns" => columns), host: config) }
-    assert_match(/must be an object with key, label, type \(and optionally hide_after_hours\)/, e.message)
+    assert_match(/must be an object with key, label, type \(and optionally hide_after_hours, requires_green_ci\)/, e.message)
   end
 
   def test_a_saved_hide_after_hours_round_trips_through_the_rows
@@ -308,6 +308,43 @@ host: config)
     assert_equal 48, r.fetch("g/r", by: "sys").column("merged").hide_after_hours
     assert_equal 48, db[:"#{KanbanTest::PREFIX}board_columns"].where(project_slug: "g/r", key: "merged").get(:hide_after_hours)
     assert_equal 24, r.fetch("p", by: "sys").column("merged").hide_after_hours # the template: the type's default
+  end
+
+  # whether a gate's approval waits for green CI is the gate column's own setting — absent = false (the
+  # default: no gate asks CI), only a gate takes it, a boolean; to_h carries it only when true; it round-trips the rows
+  def test_requires_green_ci_is_a_gate_columns_own_opt_in
+    b = coding
+    assert_empty b.green_ci_columns, "the default: no gate asks CI"
+    assert_empty b.rules[:green_ci]
+    refute b.green_ci_step?(b.approvals.first)
+    refute(b.to_h["columns"].any? { |c| c.key?("requires_green_ci") }, "false is never written out")
+    on = raw.merge("columns" => raw["columns"].map { |c| c["key"] == "human_check" ? c.merge("requires_green_ci" => true) : c })
+    b2 = B.new(on, host: config)
+    assert_equal %w[human_check], b2.green_ci_columns
+    assert_equal %w[human_check], b2.rules[:green_ci]
+    assert b2.green_ci_step?(b2.approval_from("human_check"))
+    assert_equal true, b2.to_h["columns"].find { |c| c["key"] == "human_check" }["requires_green_ci"]
+    off = raw.merge("columns" => raw["columns"].map { |c| c.merge("requires_green_ci" => false) })
+    assert_empty B.new(off, host: config).green_ci_columns, "false is allowed on any column (a retyped gate)"
+    e = assert_raises(Invalid) do
+      B.new(raw.merge("columns" => raw["columns"].map { |c| c["key"] == "qa" ? c.merge("requires_green_ci" => true) : c }),
+            host: config)
+    end
+    assert_equal "column qa: requires_green_ci is a gate column's setting (this column is review)", e.message
+    e = assert_raises(Invalid) do
+      yes = raw["columns"].map { |c| c["key"] == "human_check" ? c.merge("requires_green_ci" => "yes") : c }
+      B.new(raw.merge("columns" => yes), host: config)
+    end
+    assert_equal "column human_check: requires_green_ci must be true or false (absent = false)", e.message
+    r = repo
+    r.fetch("g/r", by: "sys")
+    r.save("g/r", on, by: "op", cards_in: ->(*) { {} })
+    assert_equal %w[human_check], r.fetch("g/r", by: "sys").green_ci_columns
+    stored = %w[human_check ready].map do |k|
+      db[:"#{KanbanTest::PREFIX}board_columns"].where(project_slug: "g/r", key: k).get(:requires_green_ci)
+    end
+    assert_equal [1, 0], stored
+    assert_empty r.fetch("p", by: "sys").green_ci_columns, "the template: none"
   end
 
   # ── the repository: per project in the database, the template, instantiation ─────────────────

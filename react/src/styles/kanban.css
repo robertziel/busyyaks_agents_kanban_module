@@ -2163,6 +2163,14 @@
   color: var(--ak-ink-faint);
   font-weight: 500;
 }
+/* a gate's "Requires green CI" switch: the box beside its words, one row */
+.ak-root .kb-side-field.kb-be-check {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 6px;
+  color: var(--ak-ink);
+  cursor: pointer;
+}
 .ak-root .kb-side-field .sel-btn {
   width: 100%;
   min-width: 0;

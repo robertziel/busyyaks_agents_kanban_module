@@ -52,7 +52,7 @@ export interface KanbanApi {
   // no button)
   hold?: (id: number, onHold: boolean) => Promise<CardData>;
   setOwner(id: number, session: string): Promise<CardData>; // "" clears
-  // force: the operator's Force — approve without the green-CI gate (approval.requires_green_ci); only with approved true
+  // force: the operator's Force — approve without the green-CI gate (the gate column's requires_green_ci); only with approved true
   approve(id: number, approved: boolean, force?: boolean): Promise<CardData>;
   // optional: the operator takes one assigned PR off the card, with the reason (logged on the card); absent = no action
   prUnassign?: (id: number, prUrl: string, reason: string) => Promise<CardData>;

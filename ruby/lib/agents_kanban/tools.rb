@@ -118,12 +118,9 @@ module AgentsKanban
       if cfg.handoff
         screenshots = cfg.handoff.ui_change_needs_screenshots ? ", screenshots for a UI change" : ""
         gates = cfg.handoff.columns.map(&l).join(" / ")
-        green = if @config.green_ci_gate?
-                  " Hand off only once the PR's CI is green: a handoff into a gate the operator approves is refused " \
-                    "while its checks are unread, pending or red — wait for CI (your Monitor), then hand off again."
-                else
-                  ""
-                end
+        # each gate's own choice (the board's requires_green_ci), so said for every host
+        green = " A gate whose workflow waits for green CI refuses the handoff while the PR's checks are unread, " \
+                "pending or red — wait for CI (your Monitor), then hand off again."
         parts << "Work done: kanban_handoff (how to check it, PR, CI#{screenshots}) — the only way into a gate " \
                  "(#{gates}); you leave a gate only along a named transition once the operator approved.#{green}"
       end
@@ -414,12 +411,9 @@ module AgentsKanban
         required = %w[id qa ui_change author]
         required += ["pr_url"] if hg.requires_pr_url
         required += ["ci_url"] if hg.requires_ci_url
-        green_note = if host.green_ci_gate?
-                       "Into a gate the operator approves: refused until that step's PR checks are read and green " \
-                         "(unread / pending / red → refused with the state: wait for CI, then hand off again). "
-                     else
-                       ""
-                     end
+        green_note = "Into a gate whose workflow waits for green CI (its requires_green_ci): refused until that step's " \
+                     "PR checks are read and green (unread / pending / red → refused with the state: wait for CI, then " \
+                     "hand off again). "
         defs.insert(8, { name: "kanban_handoff",
                          description: "The ONLY way an agent moves a card into a gate (#{hg.columns.map(&l).join(' / ')}): " \
                                       "the gate your column has a named agent transition into (several: give transition " \

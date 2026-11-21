@@ -25,17 +25,13 @@ class HostConfigTest < Minitest::Test
     assert_nil content.handoff
     assert content.dependencies
     assert_nil content.idle_watch
-    assert coding.green_ci_gate?
-    assert_nil content.approval
-    refute content.green_ci_gate?
-    refute AgentsKanban::HostConfig.new(raw.merge("approval" => { "requires_green_ci" => false })).green_ci_gate?
-    bad = raw.merge("approval" => { "requires_green_ci" => "yes" })
-    assert_match(/approval.requires_green_ci must be/,
-                 assert_raises(AgentsKanban::ConfigError) { AgentsKanban::HostConfig.new(bad) }.message)
-    assert_raises(AgentsKanban::ConfigError) { AgentsKanban::HostConfig.new(raw.merge("approval" => {})) }
-    missing = raw.tap { |h| h.delete("approval") }
-    assert_match(/missing keys approval/,
-                 assert_raises(AgentsKanban::ConfigError) { AgentsKanban::HostConfig.new(missing) }.message)
+    # green CI moved to the board (a gate column's requires_green_ci): the old key is refused, naming the move
+    moved = assert_raises(AgentsKanban::ConfigError) do
+      AgentsKanban::HostConfig.new(raw.merge("approval" => { "requires_green_ci" => true }))
+    end
+    assert_equal "host config: unknown keys approval (approval.requires_green_ci moved to the board: set " \
+                 "requires_green_ci: true on each gate column whose approval waits for green CI — SPEC § 2)",
+                 moved.message
     assert_equal ["news_articles", "news-articles-*"], content.owner_sessions
     assert_nil coding.owner_sessions
     assert content.owner_session?("news_articles") && content.owner_session?("news-articles-12")
