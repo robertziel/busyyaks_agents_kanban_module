@@ -6,6 +6,15 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ## [Unreleased]
 
+### Changed
+
+- **Green CI is a gate column's setting, off by default**: `requires_green_ci: true` on a GATE
+  column (Board, Schema v16 `board_columns.requires_green_ci`, `rules.green_ci`, the editor's "Requires green CI"
+  checkbox, the gate's card "waits for you · CI") makes the approval out of that gate and a handoff into it wait for
+  green PR checks — the prefetch, gate hold, gate watch and Force exist only there. **Breaking**: the host config's
+  `approval` key is removed and refused, naming the move; after the v16 migration no gate asks CI until its board sets
+  it. A Store without a `ci:` port refuses to save a board that sets it. README § Use case: a gate that waits for green CI.
+
 ### Added
 
 - **On hold** (schema v15): the operator parks a card where it sits — `Store#hold` / `Api#hold`

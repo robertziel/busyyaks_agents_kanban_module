@@ -27,7 +27,7 @@ module AgentsKanban
   #                        the PR is the card's pr_url, else the open PR on the owner's branch (the host decides how
   #                        it finds it)
   #   last_commit_at(card) → epoch of the newest commit on the owner's branch | nil when there is none
-  # The approval gate (Store ci:, only when the host config has approval.requires_green_ci):
+  # The approval gate (Store ci:, only at a gate column with requires_green_ci):
   #   approval_checks(card, step) → the same answer as pr_checks for the PR this approval step is about (step =
   #                        {from:, to:, then:, name:, final:}); approved only on state "success"; "failure" and
   #                        "stuck" (a check pending longer than the host allows) are red: the gate watch pings the

@@ -22,7 +22,7 @@ class ApprovalPrefetchTest < Minitest::Test
 
   def setup
     super
-    @m = store(board: KanbanTest.board_hash("local_v4"))
+    @m = store(board: KanbanTest.board_hash("local_v4", green_ci: true))
     @log = StringIO.new
     @n = AgentsKanban::Notifier.new(@m, client: FakeClient.new, ci: NoCi.new, clock: -> { @now }, grace: 60, log: @log)
   end
@@ -129,7 +129,8 @@ class ApprovalPrefetchTest < Minitest::Test
                                     card_url: CARD_URL)
     handoff = tools.definitions.find { |d| d[:name] == "kanban_handoff" }[:description]
     assert_includes handoff, "refused until that step's PR checks are read and green"
-    assert_includes tools.instructions, "Hand off only once the PR's CI is green"
+    assert_includes tools.instructions, "A gate whose workflow waits for green CI refuses the handoff while the PR's " \
+                                        "checks are unread, pending or red"
   end
 
   # an error that is not "cannot answer" (a host bug) refuses the handoff before anything is written: the agent's

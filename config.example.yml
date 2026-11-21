@@ -163,16 +163,9 @@ progress_watch: { stale_minutes: 30 }
 # required, screenshots attached first when ui_change and ui_change_needs_screenshots). null = this host has no handoff
 # gate — a board with a gate column is then refused when read.
 handoff: { requires_pr_url: true, requires_ci_url: true, qa_min_chars: 20, ui_change_needs_screenshots: true }
-# the approval gate (every approval step: the operator's Approve button, or a drag along the step). null = no gate.
-#   requires_green_ci  true = refused unless the host's ci: port (Store.new ci:) answers approval_checks(card, step) with
-#                      state "success"; no PR, checks pending / failed / not read yet, or the port unreachable → refused,
-#                      with the PR and its state. A Store built from this config without that port fails to build.
-#                      The same question is asked ahead (answer discarded) at each handoff into an approval gate and on
-#                      every notifier watch pass for each card waiting there, so an asynchronous host keeps it fresh.
-#                      A handoff INTO such a gate is refused the same way until that step's checks are read and green.
-#                      A card in such a gate counts as waiting for the operator only while its Approve would pass now
-#                      (green, at the head the handoff saw); otherwise it is "waiting for CI" (gate_hold) and not counted.
-approval: { requires_green_ci: true }
+# (approval: REMOVED) whether an approval step waits for green CI is no longer the host's: each GATE column
+# of a board says it itself — `requires_green_ci: true` in the board (SPEC § 2, README § Use case: a gate that waits for
+# green CI); absent = false, CI never asked. A config that still has `approval` is refused naming the move.
 # parent dependencies: true = ENFORCED on every board (a child cannot enter a queued / working / review column nor be
 # claimed while a parent is unfinished — not in the done column; a finished parent promotes its parked children to the
 # queued column); false = parents are recorded and shown only.

@@ -39,9 +39,8 @@ module AgentsKanban
   #   owner_sessions            null (the host's rule) or session-name globs a card may be owned by
   #   table_prefix              namespaces the engine's tables ("" = the unprefixed names busyyaks started with)
   #   theme                     {"--ak-<token>": "<css value>"}: the React board's CSS variables ({} = the library's own)
-  #   approval                  null or {requires_green_ci}: true = every approval step (Store#approve, the operator's
-  #                             drag along a step) is refused unless the host's ci: port (Store.new ci:, approval_checks)
-  #                             says the card's PR checks are green; the refusal names the PR and its state
+  #   (approval)                REMOVED: whether an approval step waits for green CI is the board's, per gate
+  #                             column (Board: requires_green_ci) — the key is refused, naming the move
   #   idle_watch                null or {ci_ping_after_minutes, ci_comment_after_minutes, owner_idle_hours}: the timings of
   #                             the idle watch on every board's WORKING column (Store#idle_watch_pass; needs the Notifier's
   #                             ci: port)
@@ -64,7 +63,7 @@ module AgentsKanban
   # key, fixtures/boards/*.json are complete examples (coding.json + coding.board.json are busyyaks's).
   class HostConfig
     KEYS = %w[priorities label_colors system_author attachment_url_prefix launchers agent_types concurrency owner_sessions
-              table_prefix theme idle_watch progress_watch handoff approval dependencies session_dialogs flags review_loop
+              table_prefix theme idle_watch progress_watch handoff dependencies session_dialogs flags review_loop
               session_boards face_roles avatar_url].freeze
     # Keys a host config had before lead-first boards: refused with what replaced them, never read.
     REMOVED_AGENT_TYPE_KEYS = {
@@ -125,8 +124,6 @@ module AgentsKanban
     HandoffParams = Struct.new(:requires_pr_url, :requires_ci_url, :qa_min_chars, :ui_change_needs_screenshots,
                                keyword_init: true)
     IDLE_WATCH_KEYS = %w[ci_ping_after_minutes ci_comment_after_minutes owner_idle_hours].freeze
-    APPROVAL_KEYS = %w[requires_green_ci].freeze
-    Approval = Struct.new(:requires_green_ci, keyword_init: true)
     IdleWatch = Struct.new(:ci_ping_after_minutes, :ci_comment_after_minutes, :owner_idle_hours, keyword_init: true)
     # progress_watch: {stale_minutes} — a card in a working or review column with no progress (its activity, or the
     # evidence the host's ci: port gives: a PR head, a CI check, a branch commit) for that long escalates, one step per
@@ -168,7 +165,7 @@ module AgentsKanban
     AVATAR_URL = %r{\Ahttps://[A-Za-z0-9.-]+(?::\d+)?/[A-Za-z0-9._~/%&=?+-]*\{sha256\}[A-Za-z0-9._~/%&=?+-]*\z}
 
     attr_reader :priorities, :label_colors, :system_author, :attachment_url_prefix, :launchers, :agent_types, :concurrency,
-                :owner_sessions, :table_prefix, :theme, :idle_watch, :progress_watch, :handoff, :approval, :dependencies,
+                :owner_sessions, :table_prefix, :theme, :idle_watch, :progress_watch, :handoff, :dependencies,
                 :session_dialogs, :flags, :review_loop, :session_boards, :face_roles, :avatar_url, :raw
 
     def self.load(path)
@@ -190,6 +187,10 @@ module AgentsKanban
       if unknown.any?
         moved = (unknown & %w[columns gates workflow waiting listened]).any?
         hint = " (columns, gates and workflow live in the database now: SPEC § 2)" if moved
+        if unknown.include?("approval")
+          hint = " (approval.requires_green_ci moved to the board: set requires_green_ci: true on each gate column " \
+                 "whose approval waits for green CI — SPEC § 2)"
+        end
         raise ConfigError, "host config: unknown keys #{unknown.join(', ')}#{hint}"
       end
       raise ConfigError, "host config: missing keys #{missing.join(', ')}" if missing.any?
@@ -217,7 +218,6 @@ module AgentsKanban
       @idle_watch = hash["idle_watch"] && parse_idle_watch(hash["idle_watch"])
       @progress_watch = parse_progress_watch(hash["progress_watch"])
       @handoff = hash["handoff"] && parse_handoff(hash["handoff"])
-      @approval = hash["approval"] && parse_approval(hash["approval"])
       @dependencies = bool!(hash["dependencies"], "dependencies")
       @session_dialogs = parse_session_dialogs(hash["session_dialogs"])
       @flags = parse_flags(hash["flags"])
@@ -240,8 +240,6 @@ module AgentsKanban
     end
     def launcher_keys = @launchers.map(&:key)
 
-    # true when every approval step must see the card's PR checks green first (Store's ci: port, approval_checks)
-    def green_ci_gate? = !@approval.nil? && @approval.requires_green_ci
     # The agent type by key: there is no default type — a launch names what it starts; an unknown key is refused.
     def agent_type(key)
       k = key.to_s
@@ -325,10 +323,6 @@ module AgentsKanban
       ).freeze
     end
 
-    def parse_approval(v)
-      shape!(v, APPROVAL_KEYS, "approval")
-      Approval.new(requires_green_ci: bool!(v["requires_green_ci"], "approval.requires_green_ci")).freeze
-    end
 
     def parse_idle_watch(v)
       shape!(v, IDLE_WATCH_KEYS, "idle_watch")

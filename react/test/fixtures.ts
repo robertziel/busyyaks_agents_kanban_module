@@ -145,6 +145,7 @@ export function rulesOf(shape: BoardShape, host: HostConfig): BoardRules {
     idle_column: working,
     review_columns: of("review"),
     hide_after_hours: Object.fromEntries(shape.columns.map((c) => [c.key, c.hide_after_hours])),
+    green_ci: shape.columns.filter((c) => c.requires_green_ci).map((c) => c.key),
   };
 }
 
@@ -202,6 +203,15 @@ export function fixture(name: "coding" | "content" | "local_v4" | "legacy_v2_pre
       updated: "2026-11-04T20:00:00Z",
     },
   };
+}
+
+// the fixture with every gate column waiting for green CI (requires_green_ci) — off in every fixture board
+export function withGreenCi(f: Fixture): Fixture {
+  const shape = {
+    ...f.shape,
+    columns: f.shape.columns.map((c) => (c.type === "gate" ? { ...c, requires_green_ci: true } : c)),
+  };
+  return { ...f, shape, board: { ...f.board, ...shape, rules: rulesOf(shape, f.host) } };
 }
 
 export function boardData(f: Fixture, cards: Card[], theme: Record<string, string> = {}): BoardData {

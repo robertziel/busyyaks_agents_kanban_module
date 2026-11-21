@@ -18,7 +18,7 @@ class OperatorUnstuckTest < Minitest::Test
       ci_url: "https://ci.example.com/job/r/1/", ui_change: false, }
   end
 
-  def local = (@local ||= store(board: KanbanTest.board_hash("local_v4")))
+  def local = (@local ||= store(board: KanbanTest.board_hash("local_v4", green_ci: true)))
 
   def local_card(column: "doing")
     id = local.create(slug: "p", title: "t", by: "me", column: column)
@@ -142,7 +142,7 @@ class OperatorUnstuckTest < Minitest::Test
 
   # in place on a step that is not the last one: the ping says the card stays and names the agent's next move
   def test_an_approval_in_place_on_a_step_that_is_not_final_says_the_card_stays
-    hash = KanbanTest.board_hash("local_v4")
+    hash = KanbanTest.board_hash("local_v4", green_ci: true)
     hash["transitions"].find { |t| t["name"] == "Merge" }["to"] = "deploy_check"
     local.board_save("p", hash, by: OP)
     id = local_card

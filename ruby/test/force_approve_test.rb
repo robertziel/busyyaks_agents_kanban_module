@@ -17,7 +17,7 @@ class ForceApproveTest < Minitest::Test
       ci_url: "https://ci.example.com/job/r/1/", ui_change: false, }
   end
 
-  def local = (@local ||= store(board: KanbanTest.board_hash("local_v4")))
+  def local = (@local ||= store(board: KanbanTest.board_hash("local_v4", green_ci: true)))
 
   def in_human_review
     id = local.create(slug: "p", title: "t", by: "me", column: "doing")
@@ -112,14 +112,12 @@ class ForceApproveTest < Minitest::Test
            "no MCP tool approves or forces"
   end
 
-  def test_force_is_refused_on_a_host_without_the_green_ci_gate
-    raw = JSON.parse(File.read(File.join(KanbanTest::ROOT, "fixtures/boards/coding.json")))
-    off = AgentsKanban::HostConfig.new(raw.merge("table_prefix" => KanbanTest::PREFIX, "approval" => nil))
-    s = store(off, board: KanbanTest.board_hash("local_v4"))
+  def test_force_is_refused_at_a_gate_that_asks_no_ci
+    s = store(board: KanbanTest.board_hash("local_v4"))
     id = s.create(slug: "p", title: "t", by: "me", column: "local_human_review")
     e = assert_raises(Invalid) { s.approve(id, by: OP, force: true) }
-    assert_equal "force: true needs approval.requires_green_ci — this host's Approve asks no CI: approve without force",
-                 e.message
+    assert_equal "force: true needs a gate that waits for green CI — Local: Human review has no requires_green_ci in " \
+                 "the workflow, its Approve asks no CI: approve without force", e.message
     assert_nil s.card(id)[:approved_at]
     assert_equal "local_merged_pr", s.approve(id, by: OP)[:column]
   end

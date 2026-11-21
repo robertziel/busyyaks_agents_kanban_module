@@ -26,7 +26,7 @@ class RebaseApprovalTest < Minitest::Test
 
   def setup
     super
-    @m = store(board: KanbanTest.board_hash("local_v4"))
+    @m = store(board: KanbanTest.board_hash("local_v4", green_ci: true))
     @log = StringIO.new
     @n = AgentsKanban::Notifier.new(@m, client: FakeClient.new, ci: NoCi.new, clock: -> { @now }, grace: 60, log: @log)
     @id = @m.create(slug: "p", title: "ship", by: "me", column: "doing")

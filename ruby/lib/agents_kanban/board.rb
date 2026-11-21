@@ -20,6 +20,10 @@ module AgentsKanban
   #     the editor lays the graph out itself every time — SPEC § 2; an `x` / `y` is an unknown key, refused)
   #   - hide_after_hours (optional on input): an integer 0..MAX_HIDE_HOURS — a card with no update for that long is folded
   #     behind the list's "Load older" (0 = never); absent = the type's default (ColumnTypes); to_h always carries it
+  #   - requires_green_ci (optional on input, a GATE column only): true = the approval step leaving this gate
+  #     (and a handoff into it) asks the host's ci: port and is refused until the step's PR checks are green; absent =
+  #     false, CI is never asked there (the default: a board asks CI only where its workflow says so). to_h carries it
+  #     only when true
   #   - at most one column of each singleton type (queued, done, cancelled)
   #   - exactly one done column: what "finished" means on this board
   #   - a gate column needs the host's `handoff` parameters (HostConfig) — null there and a gate column = refused
@@ -35,15 +39,18 @@ module AgentsKanban
   class Board
     KEYS = %w[columns transitions].freeze
     COLUMN_KEYS = %w[key label type].freeze
-    OPTIONAL_COLUMN_KEYS = %w[hide_after_hours].freeze
+    OPTIONAL_COLUMN_KEYS = %w[hide_after_hours requires_green_ci].freeze
     MAX_HIDE_HOURS = 24 * 365
     KEY_RE = /\A[a-z][a-z0-9_]{0,39}\z/
     MAX_COLUMNS = 30
     MAX_LABEL = 60
     TEMPLATE = "" # the template board's project slug in the repository: the board of no project in particular
 
-    Column = Struct.new(:key, :label, :type, :hide_after_hours, keyword_init: true) do
-      def to_h = { key: key, label: label, type: type.key, hide_after_hours: hide_after_hours }
+    Column = Struct.new(:key, :label, :type, :hide_after_hours, :requires_green_ci, keyword_init: true) do
+      def to_h
+        h = { key: key, label: label, type: type.key, hide_after_hours: hide_after_hours }
+        requires_green_ci ? h.merge(requires_green_ci: true) : h
+      end
     end
     # The handoff gate: the gate columns (agents enter them only with kanban_handoff) + what the host requires of one.
     Handoff = Struct.new(:columns, :requires_pr_url, :requires_ci_url, :qa_min_chars, :ui_change_needs_screenshots,
@@ -97,6 +104,12 @@ module AgentsKanban
     def index(key) = keys.index(key.to_s)
     # {key => hours}: how long a card in the column may go without an update before the list folds it (0 = never).
     def hide_after_hours = @columns.to_h { |c| [c.key, c.hide_after_hours] }
+    # The gate columns whose approval step (and a handoff into them) waits for green CI (the workflow's
+    # choice per gate, none by default).
+    def green_ci_columns = @columns.select(&:requires_green_ci).map(&:key)
+    def green_ci?(key) = column?(key) && column(key).requires_green_ci
+    # Does this approval step ask CI? Its gate (`from`) says.
+    def green_ci_step?(step) = !step.nil? && green_ci?(step.from)
 
     # ── the derived rules ─────────────────────────────────────────────────────────────────────────
 
@@ -158,7 +171,7 @@ module AgentsKanban
         dependencies: @dependencies && { done: @dependencies.done, blocked: @dependencies.blocked,
                                          promote: @dependencies.promote&.to_h, },
         idle_column: idle_column, review_columns: review_columns,
-        hide_after_hours: hide_after_hours, }
+        hide_after_hours: hide_after_hours, green_ci: green_ci_columns, }
     end
 
     private
@@ -194,7 +207,16 @@ module AgentsKanban
           raise Invalid, "#{where}: hide_after_hours must be an integer 0..#{MAX_HIDE_HOURS} (0 = never hide)"
         end
 
-        Column.new(key: c["key"], label: c["label"].strip, type: type, hide_after_hours: hide).freeze
+        green = c.fetch("requires_green_ci", nil)
+        unless [nil, true, false].include?(green)
+          raise Invalid, "#{where}: requires_green_ci must be true or false (absent = false)"
+        end
+        if green && type.key != "gate"
+          raise Invalid, "#{where}: requires_green_ci is a gate column's setting (this column is #{type.key})"
+        end
+
+        Column.new(key: c["key"], label: c["label"].strip, type: type, hide_after_hours: hide,
+                   requires_green_ci: green == true).freeze
       end
       dup = cols.map(&:key).tally.select { |_, n| n > 1 }.keys
       raise Invalid, "duplicate column key #{dup.first}" if dup.any?

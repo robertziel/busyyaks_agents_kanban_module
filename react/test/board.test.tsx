@@ -9,7 +9,7 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Board, type BoardView, type KanbanApi } from "../src";
 import type { Attachment, BoardData, Card, CardData } from "../src/types";
-import { boardData, fixture } from "./fixtures";
+import { boardData, fixture, withGreenCi } from "./fixtures";
 
 const coding = fixture("coding");
 const content = fixture("content");
@@ -966,7 +966,8 @@ describe("Board", () => {
         approved_by: "op@x",
       }),
     ];
-    const api = fakeApi(boardData(localV4, cards), cards);
+    // Force only where the gate waits for green CI — the fixture's gates opted in
+    const api = fakeApi(boardData(withGreenCi(localV4), cards), cards);
     let r = render(<Host api={api} view={{ card: 5, panel: null, archived: false }} />);
     await screen.findByText("✓ Approve → Local: Merged");
     const force = screen.getByRole("button", { name: "Force skip CI" });
@@ -988,8 +989,8 @@ describe("Board", () => {
     await screen.findByText("Withdraw approval");
     expect(screen.queryByRole("button", { name: "Force skip CI" })).toBeNull();
     r.unmount();
-    const noGate = { ...localV4, host: { ...localV4.host, approval: null } };
-    render(<Host api={fakeApi(boardData(noGate, cards), cards)} view={{ card: 5, panel: null, archived: false }} />);
+    // the default: no gate asks CI (no requires_green_ci) → no Force
+    render(<Host api={fakeApi(boardData(localV4, cards), cards)} view={{ card: 5, panel: null, archived: false }} />);
     await screen.findByText("✓ Approve → Local: Merged");
     expect(screen.queryByRole("button", { name: "Force skip CI" })).toBeNull();
     expect(screen.getByText("✓ Approve → Local: Merged").parentElement).toHaveClass("kb-approve-solo");
@@ -1044,7 +1045,7 @@ describe("Board", () => {
         ],
       }),
     ];
-    const api = fakeApi(boardData(localV4, cards), cards);
+    const api = fakeApi(boardData(withGreenCi(localV4), cards), cards); // the gate asks CI
     render(<Host api={api} view={{ card: 5, panel: null, archived: false }} />);
     fireEvent.click(await screen.findByRole("button", { name: "Transition" }));
     const list = await screen.findByRole("listbox");

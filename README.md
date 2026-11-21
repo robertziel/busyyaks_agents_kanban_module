@@ -131,6 +131,48 @@ adopts, the lead it runs `under` or `standalone`, its caps), the concurrency cap
 gate's requirements, parent dependencies, idle-watch timings, the table prefix, theme tokens, the system author and the
 attachment route.
 
+## Use case: a gate that waits for green CI
+
+By default **no gate asks CI**: the operator's Approve and an agent's `kanban_handoff` go through whatever the PR's
+checks say. A gate column opts in, one gate at a time, with `requires_green_ci: true` (it was the host-wide
+`approval.requires_green_ci`, now refused in the host config).
+
+**What it does at that gate** (SPEC § 2: Green CI, and the host config table's `(approval)` row = the green-CI gate)
+
+| when | without it (default) | with `requires_green_ci: true` |
+|---|---|---|
+| `kanban_handoff` into the gate | moves the card | refused until the step's checks are read and green (unread / pending / red → the state is said, nothing written) |
+| the operator's **Approve** (or the step's own transition) | approves | refused until green; the refusal names the PR and its state |
+| a drag along the step | approves | approves, logged "(dragged: CI not asked)"; the owner's ping says to read CI first |
+| **Force** button | not shown | approves without asking CI, logged "(forced: CI not asked)" |
+| waiting count | the card counts as waiting for you | counts only while its Approve would pass now; otherwise "waiting for CI" (`gate_hold`) |
+| notifier watch pass | — | the step's checks asked ahead (prefetch), a red CI pings the owner once |
+
+**Set it up**
+
+1. The host builds its Store with a `ci:` port answering `approval_checks(card, step)` (SPEC § 1 Ports, § 2): it decides which
+   PR and which checks a step reads — e.g. the PR head's checks at a review gate, the merge commit's checks at a gate
+   after the merge. A Store without one refuses to save a board that sets the flag.
+2. Turn it on for the gate: in the board's **Workflow** editor select the gate column and tick **Requires green CI**
+   (its card then says "waits for you · CI"), Save. Or in the board JSON:
+
+   ```json
+   { "key": "deploy_check", "label": "Deploy check", "type": "gate", "requires_green_ci": true }
+   ```
+
+   Only a `gate` column takes it (`true` elsewhere is refused); the step it gates is the gate's one forward operator
+   exit (`rules.gates.approvals`, `from` = this gate); `rules.green_ci` lists the gates that ask.
+3. Check it: hand a card off into the gate while its PR is red — refused with the state; green — accepted, and the
+   operator's Approve answers at once.
+
+**Which gates** (a staging → main board, e.g. Staging: Human review → Staging: Merged → Staging: Deploy check →
+Main: Human review → Awaiting merge): tick the gates where an approval on red CI would ship something broken —
+typically the deploy check (the merged staging PR's merge commit must be green) and the main review (the main PR must
+be green before it may merge). Leave a gate unticked where a human looks first and CI is not the question.
+
+**Migrating from `approval.requires_green_ci`**: delete the key from the host config (it is refused, naming the move),
+migrate to Schema v16, then tick the gates that should keep asking — after the migration none does.
+
 ## Layout
 
 | Path | Holds |

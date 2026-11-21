@@ -347,10 +347,12 @@ function CardDetail({
   // that is a gate (dragged there: approved in place)
   const at = stepAt(gates.approvals, gates.handoff?.columns ?? [], c.column, !!c.approved);
   const step = at?.step ?? null;
+  // does this step's gate wait for green CI? The board's own choice per gate column (rules.green_ci)
+  const stepAsksCi = !!step && shape.rules.green_ci.includes(step.from);
   const transitionMoves = operatorMoves(
     c.transitions ?? [],
     gates.approvals.find((a) => a.from === c.column) ?? null,
-    !!config.approval?.requires_green_ci,
+    shape.rules.green_ci.includes(c.column),
   );
   const moveOptions = [
     { value: c.column, label: colLabel(c.column) },
@@ -1227,7 +1229,7 @@ function CardDetail({
                   </>
                 ) : (
                   // no Force (no green-CI gate): `display: contents` — the Approve button is the block's own grid item as before
-                  <div className={config.approval?.requires_green_ci ? "kb-approve-row" : "kb-approve-solo"}>
+                  <div className={stepAsksCi ? "kb-approve-row" : "kb-approve-solo"}>
                     <button
                       type="button"
                       className="btn kb-approve-btn"
@@ -1239,7 +1241,7 @@ function CardDetail({
                     </button>
                     {/* the same approval without the green-CI gate — only where the gate asks CI; no confirm:
                         the approval is withdrawn in one click (Withdraw approval) and the agent is told to read CI first */}
-                    {config.approval?.requires_green_ci && (
+                    {stepAsksCi && (
                       <button
                         type="button"
                         className="btn kb-force-btn"
