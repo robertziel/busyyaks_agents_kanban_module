@@ -325,12 +325,12 @@ class LeadFirstTest < Minitest::Test
     assert_equal [lead, "localclaude"], r.values_at("lead", "launcher")
     assert_equal kb.open_session(lead)[:id], kb.open_session("by_hand")[:lead_id]
     @live << "lead_by_hand"
-    out = @tools.call("kanban_register", { "project" => "o/other", "type" => "lead", "tmux_session" => "lead_by_hand",
-                                           "author" => "me", "launcher" => "fullclaude", })
-    refute_includes out, "lead_key", "a lead registered by hand gets no key (QA round 1)"
-    assert_nil kb.open_session("lead_by_hand")[:lead_key_digest], "no key minted: it cannot kanban_spawn"
-    id = kb.create(slug: "o/other", title: "x", by: "op", column: "backlog")
-    assert_raises(AgentsKanban::Denied) { spawn(id, "lead_by_hand") }
+    e = assert_raises(AgentsKanban::Denied) do
+      @tools.call("kanban_register", { "project" => "o/other", "type" => "lead", "tmux_session" => "lead_by_hand",
+                                       "author" => "me", "launcher" => "fullclaude", })
+    end
+    assert_match(/a lead is started only by the operator's Launch/, e.message)
+    assert_nil kb.open_session("lead_by_hand"), "a lead is never registered by hand"
   end
 
   # QA round 1: the key reaches the host's start (env) and nothing else — no registration Hash, no JSON answer of the

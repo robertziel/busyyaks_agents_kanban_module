@@ -294,7 +294,8 @@ module AgentsKanban
         { name: "kanban_register",
           description: "Register the tmux session you run in as an agent session of this board: type (one of " \
                        "#{host.agent_type_keys.join(', ')}), project, tmux_session. Refused beyond #{register_cap}the " \
-                       "type's own caps — then stop and say so. " \
+                       "type's own caps — then stop and say so. A lead type is refused: a lead is started only by the " \
+                       "operator's Launch. " \
                        "On success your session ADOPTS the project's ownerless cards in the columns of the type's " \
                        "column types (#{register_takes}) and you act as the returned " \
                        "agent name (use it as author: cards you create are then owned by your session without " \
@@ -571,6 +572,13 @@ module AgentsKanban
         @store.not_registered!(session)
         live = live_sessions!
         t = @config.agent_type(str!(a, "type"))
+        # a lead is the operator's: started by the host's Launch (Api#launch), never a session registering itself — a
+        # terminal session that called itself the lead would adopt the board's ownerless cards and run its team
+        if @config.lead_type?(t)
+          raise Denied, "#{t.key} is a lead type: a lead is started only by the operator's Launch, never registered by " \
+                        "hand — register as #{@config.agent_types.select { |x| x.under == t.key }.map(&:key).join(' / ')} " \
+                        "under the running lead, or do not register"
+        end
         @store.launch_check!(type: t.key, project: p[:slug], live: live, grace: @grace)
         lead = nil
         if t.under # lead-first: only under the board's RUNNING lead, which hands its key to the session

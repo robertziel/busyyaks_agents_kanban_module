@@ -302,19 +302,19 @@ class ToolsTest < Minitest::Test
     b = kb.create(slug: "g/r", title: "B", by: "op", column: "human_check")
     kb.create(slug: "g/r", title: "C", by: "op", column: "backlog")
     kb.comment(a, body: "status?", author: "operator@example.com", operator: true)
-    # the lead runs two launchers: a session started by hand must say which one it was started with
-    msg = err("kanban_register", project: "g/r", type: "lead", tmux_session: "tl_g_r", author: "claude-tl_g_r")
-    assert_match(/agent type lead runs fullclaude, localclaude — name the launcher this session was started with/, msg)
+    # a lead is the operator's (Launch): never registered by hand, whatever launcher it names
+    [{}, { launcher: "localclaude" }].each do |extra|
+      msg = err("kanban_register", project: "g/r", type: "lead", tmux_session: "tl_g_r", author: "claude-tl_g_r", **extra)
+      assert_match(/lead is a lead type: a lead is started only by the operator's Launch/, msg)
+    end
     assert_equal 0, kb.sessions_t.count, "nothing registered"
-    msg = err("kanban_register", project: "g/r", type: "lead", launcher: "nope", tmux_session: "tl_g_r", author: "x")
-    assert_match(/agent type lead does not run launcher "nope" \(fullclaude, localclaude\)/, msg)
-    reg = ok("kanban_register", project: "g/r", type: "lead", launcher: "localclaude", tmux_session: "tl_g_r",
-                                author: "claude-tl_g_r")
-    assert_equal "localclaude", reg["launcher"]
-    assert_equal %w[lead claude-tl_g_r tl_g_r], reg.values_at("type", "agent", "session")
-    adopted = reg["adopted"].map { |c| c.values_at("id", "column", "column_label") }
-    assert_equal [[a, "doing", "In progress"], [b, "human_check", "Human Check"]], adopted
-    assert_equal({ "max_sessions" => 6, "running" => 1, "free" => 5 }, reg["concurrency"])
+    # the host's launch registers it (Api#launch → Store#register_session) and it adopts the ownerless work
+    reg = kb.register_session(session: "tl_g_r", project: "g/r", type: "lead", launcher: "localclaude", by: "op")
+    assert_equal "localclaude", reg[:launcher]
+    assert_equal %w[lead claude-tl_g_r tl_g_r], reg.values_at(:type, :agent, :session)
+    assert_equal [a, b], reg[:adopted]
+    assert_equal [["doing", "In progress"], ["human_check", "Human Check"]],
+                 reg[:adopted].map { |id| row = ok("kanban_card", id: id)["card"]; row.values_at("column", "column_label") }
     assert_equal %w[claude-tl_g_r tl_g_r], kb.card(a).values_at(:assignee, :owner_session)
     assert_equal "relay", kb.pings(a).first[:reason], "the operator's unheard comment reaches the new owner"
     # the registered agent name is the author: the card is owned with no tmux_session and no claim
@@ -325,11 +325,9 @@ class ToolsTest < Minitest::Test
     e = kb.create(slug: "g/r", title: "E", by: "op", column: "doing")
     asked = ok("kanban_ask", id: e, question: "Which?", author: "claude-tl_g_r", tmux_session: "tl_g_r", options: %w[x y])
     assert_equal %w[doing claude-tl_g_r tl_g_r], asked.values_at("column", "assignee", "owner_session")
-    # twice is refused; a second lead for the same project is refused by max_per_project
-    msg = err("kanban_register", project: "g/r", type: "lead", tmux_session: "tl_g_r", author: "x")
+    # registered already: refused (the session is not registered twice)
+    msg = err("kanban_register", project: "g/r", type: "plain", tmux_session: "tl_g_r", author: "x")
     assert_match(/already registered as lead for g\/r/, msg)
-    msg = err("kanban_register", project: "g/r", type: "lead", tmux_session: "lead_1", author: "x")
-    assert_match(%r{1/1 lead session already runs for g/r .*tl_g_r \(lead, g/r\)}, msg)
     msg = err("kanban_register", project: "g/r", type: "boss", tmux_session: "lead_1", author: "x")
     assert_match(/no agent type "boss"/, msg)
     msg = err("kanban_register", project: "g/r", type: "plain", tmux_session: "ghost", author: "x")
