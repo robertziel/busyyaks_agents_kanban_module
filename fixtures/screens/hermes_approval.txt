@@ -1,0 +1,40 @@
+
+────────────────────────────────────────
+● LAB_MCP
+────────────────────────────────────────
+
+  ┊ ⚡ preparing mcp__lab__lab_echo…
+  ┊ 🔌 Lab · lab echo  from-model  0.0s
+
+╭─ ☤ Hermes ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+LAB_DONE
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+────────────────────────────────────────
+● LAB_SHELL
+────────────────────────────────────────
+
+  ┊ 💻 preparing terminal…
+/opt/hermes/pm/shell.py:13: SyntaxWarning: "\W" is an invalid escape sequence. Such sequences will not work in the futur
+e. Did you mean "\\W"? A raw string is also an option.
+  minus C:\Windows\System32\bash.exe (the WSL launcher stub, first on PATH
+╭─────────────────────────────────────────────────╮
+│ ⚠️  Dangerous Command                           │
+│                                                 │
+│ rm -rf /out/hermes/run/lab-target && touch      │
+│ /out/hermes/run/shell-ran                       │
+│                                                 │
+│ ❯ 1. Allow once                                 │
+│   2. Allow for this session                     │
+│   3. Add to permanent allowlist                 │
+│   4. Deny                                       │
+│                                                 │
+│ delete in root path                             │
+╰─────────────────────────────────────────────────╯
+
+  💻 rm -rf /out/hermes/run/lab-target + 1 command  (  0.0s · ↓ 23 tok)
+  ↑/↓ to select, Enter to confirm  (299s)
+ ☤ lab-model │ 3.49K/200K pinned │ [░░░░░░░░░░] 2% │ ◷ 0.1s │ ↑ 101 t/s │ 11s │ ⏱ 0s                        ─ lab title
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+⚠ ❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

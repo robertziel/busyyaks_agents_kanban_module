@@ -201,6 +201,21 @@ class NotifierDialogTest < Minitest::Test
     assert_empty log.string.lines.grep(/skipped/)
   end
 
+  # Hermes keeps no status record (no waiting_for): the scan goes by its screen's verdict
+  def test_a_session_whose_screen_reads_blocked_is_scanned
+    client = FakeClient.new
+    client.live = ["shop"]
+    client.screen = File.read(File.join(KanbanTest::ROOT, "fixtures/screens/hermes_approval.txt"))
+    client.snap = { "age_s" => 1, "interval_s" => 5,
+                    "sessions" => [{ "name" => "shop", "panes" => [{ "screen" => { "state" => "working" } }] }], }
+    n = AgentsKanban::Notifier.new(kb, client: client, ci: NoCi.new, clock: -> { @now }, grace: 60, log: StringIO.new)
+    2.times { n.watch; @now += 31 }
+    assert_nil kb.card(@id)[:dialog_id], "a working screen is not read"
+    client.snap["sessions"][0]["panes"][0]["screen"]["state"] = "blocked"
+    2.times { n.watch; @now += 31 }
+    assert kb.card(@id)[:dialog_id], "the approval became the card's question"
+  end
+
   # The real watchdog failure keeps its line: the host's session list is the liveness source, so without it the whole
   # pass is skipped — every pass, nothing released.
   def test_an_unreachable_session_list_still_skips_the_watchdog_and_says_so

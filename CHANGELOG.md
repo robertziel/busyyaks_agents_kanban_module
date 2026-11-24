@@ -14,6 +14,16 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
   then lead pings, then the rest. Lead pings survive the watchdog's release of the worker.
 - **The progress watch covers an approved gate card its agent must carry on**; at its last step the card waits for the
   operator instead of counting as "agent on it".
+- **Hermes's dangerous-command panel is a session dialog**: `SessionDialog.parse` reads it from real
+  screens (digits answer it; its countdown is never hashed; "Show full command" is shown, never clickable), and the
+  notifier's dialog scan also reads a session whose screen shows `blocked` (Hermes keeps no status record).
+
+### Fixed
+
+- **CI: the React suite runs alone**: `scripts/ci/test.sh all` runs lint, both Ruby suites, audit and secrets at once,
+  then `react` with the runner to itself. Beside the two Ruby suites it shared GitHub's 4 vCPUs and random tests timed
+  out: runs 44430241873 (`feature/card-pr-lists`, 2026-11-19) and 45395693342 red, 45401030980 green with this change
+  (`test.sh all` 2 min 11 s).
 
 ### Changed
 

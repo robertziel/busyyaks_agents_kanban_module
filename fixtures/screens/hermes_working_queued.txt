@@ -1,0 +1,40 @@
+────────────────────────────────────────
+
+  ┊ ⚡ preparing mcp__lab__lab_echo…
+  ┊ 🔌 Lab · lab echo  from-model  0.0s
+
+╭─ ☤ Hermes ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+LAB_DONE
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+────────────────────────────────────────
+● LAB_SHELL
+────────────────────────────────────────
+
+  ┊ 💻 preparing terminal…
+/opt/hermes/pm/shell.py:13: SyntaxWarning: "\W" is an invalid escape sequence. Such sequences will not work in the futur
+e. Did you mean "\\W"? A raw string is also an option.
+  minus C:\Windows\System32\bash.exe (the WSL launcher stub, first on PATH
+
+⚠ Approval: rm -rf /out/hermes/run/lab-target && touch /out/hermes/run/shell-ran → allowed once
+  ┊ 💻 $         rm -rf /out/hermes/run/lab-target + 1 command  1.7s
+
+╭─ ☤ Hermes ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+LAB_DONE
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+────────────────────────────────────────
+● LAB_SLOW
+────────────────────────────────────────
+
+  Queued for the next turn: LAB_PING
+  (tip) Your message was queued for the next turn. Use /busy interrupt to make Enter stop the current run instead, or /b
+usy steer to inject mid-run. This tip only shows once.
+  (¬‿¬) reasoning...
+
+ Queue · 1 queued · /queue list · Ctrl+R collapse
+ 1. LAB_PING
+ ☤ lab-model │ ~3.6K/200K pinned │ [░░░░░░░░░░] ~2% │ ◷ 0.1s │ ↑ 103 t/s │ 16s │ ⏱ 2s                       ─ lab title
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+☤ ❯ msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

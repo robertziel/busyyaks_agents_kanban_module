@@ -212,7 +212,7 @@ host's own ledger records each run. Prefix `""` = the unprefixed table names (a 
   when the lead is the actor, the card is on hold or no lead runs. A row of its own for the lead's session: it does not
   wait for the worker's turn, `next_pings` serves sessions holding a lead ping first, and the watchdog's release fails only the gone
   session's pending pings.
-- Session dialogs: one `question` per (session, hash); an answered one is not re-posted within 120 s; a key is pressed
+- Session dialogs (Claude Code's prompts; Hermes's dangerous-command panel, only with its `⚠ ❯` prompt row under it; the scan reads an owner whose pane has `waiting_for` or a screen state `blocked`): one `question` per (session, hash); an answered one is not re-posted within 120 s; a key is pressed
   only through the host's `press` and only while the hash still matches (the launcher re-reads the screen). The hash leaves out Claude Code's
   ticking "will automatically block this request in M:SS" countdown — it is not the dialog.
   A dialog is asked only once it has stayed on the screen `session_dialogs.settle_seconds` (the Notifier's first read
