@@ -45,6 +45,14 @@ describe("pingLine", () => {
     expect(l.text).toBe("pending · a question is on its screen · 4 tries");
     expect(l.hint).toMatch(/blocked on a dialog/);
   });
+  it("says a held ping waits behind others, whatever its last error", () => {
+    expect(pingLine(ping({ queued_behind: 1, error: "a dialog is on its screen" }))).toEqual({
+      tone: "warn",
+      text: "pending · queued behind 1 earlier ping",
+      hint: null,
+    });
+    expect(pingLine(ping({ queued_behind: 2 })).text).toBe("pending · queued behind 2 earlier pings");
+  });
   it("says a fresh pending ping was not tried yet", () => {
     expect(pingLine(ping({ attempts: 0 }))).toEqual({ tone: "warn", text: "pending · not tried yet", hint: null });
   });

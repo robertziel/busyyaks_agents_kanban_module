@@ -424,7 +424,7 @@ module AgentsKanban
         String :session, null: false
         String :socket, null: false
         String :text, text: true, null: false
-        String :reason, null: false  # comment | move | answer | relay | approve
+        String :reason, null: false  # comment | operator_comment | move | answer | relay | approve | … | lead_*
         String :status, null: false  # pending | sent | failed
         Integer :attempts, null: false, default: 0
         String :error, text: true

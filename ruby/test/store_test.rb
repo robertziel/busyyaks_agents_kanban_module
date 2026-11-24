@@ -298,7 +298,7 @@ class StoreTest < Minitest::Test
     assert_equal "doing", kb.move(id, column: "doing", by: "claude-shop-lead", agent: true)[:column], "work resumes"
     kb.pending_pings.each { |p| kb.ping_result(p, "sent") }
     kb.comment(id, body: "thanks", author: "operator@example.com", operator: true)
-    assert_equal "comment", kb.pending_pings.last[:reason], "a comment on an unflagged card is a comment"
+    assert_equal "comment", kb.ping_json(kb.pending_pings.last)[:reason], "a comment on an unflagged card is a comment"
   end
 
   # blocked_external: a reason and a URL, the card stays, agents wait for kanban_unblock

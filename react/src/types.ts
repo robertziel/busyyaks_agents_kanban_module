@@ -396,6 +396,7 @@ export type Ping = {
   status: "pending" | "sent" | "failed";
   error: string | null;
   attempts: number;
+  queued_behind?: number; // pending: how many of its session's pings go first
 };
 export type Attachment = {
   id: number;
