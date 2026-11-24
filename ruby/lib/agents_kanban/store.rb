@@ -44,6 +44,7 @@ module AgentsKanban
     DUE = /\A(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)(?::(\d\d))?(Z|[+-]\d\d:?\d\d)?\z/
     SESSION = /\A[A-Za-z0-9._-]{1,100}\z/
     PING_BODY = 1500
+    MAX_PING_TEXT = 7900 # one pending row's burst
     DRAGGED_NOTE = "It was dragged: CI was not asked — read the PR's checks first."
     FORCED_NOTE = "It was approved with Force: CI was not asked — read the PR's checks first."
     CI_NOT_ASKED = "ci-not-asked" # the approve ping's marker: a drag approved the step, the green-CI gate was not asked
@@ -373,8 +374,14 @@ module AgentsKanban
     # question open on it waits for the operator (needs_operator wins); blocked_external wins (`external`); a CI hold
     # wins (`held`: CI red after the Approve says so, hold = Store#gate_hold's why); NO owner session → nobody carries it
     # on, so it waits for the operator ("approved · no agent" on the waiting list) until a session owns it.
+    # A card the progress watch escalated to its last step waits for the operator: no longer "agent on it".
     def carried_on?(c, b, hold = nil)
-      !c[:approved_at].nil? && !needs_operator?(c) && hold.nil? && !c[:owner_session].to_s.empty? &&
+      agents_next_step?(c, b) && hold.nil? && progress_stale(c, b).nil?
+    end
+
+    # Approved, owned, and the next step is its agent's — whatever CI says: the progress watch's gate scope.
+    def agents_next_step?(c, b)
+      !c[:approved_at].nil? && !needs_operator?(c) && !c[:owner_session].to_s.empty? &&
         b.waiting.include?(c[:column]) && !b.agent_next(c[:column]).nil?
     end
 
@@ -1083,7 +1090,7 @@ module AgentsKanban
           log(c[:id], "answer", "answered the question — the card stays in #{b.label(c[:column])}, work resumes", author)
           enqueue_ping(c, "answer", author, body.to_s)
         else
-          enqueue_ping(c, "comment", author, body.to_s)
+          enqueue_ping(c, operator ? OPERATOR_COMMENT : "comment", author, body.to_s)
         end
         cid
       end
@@ -1122,6 +1129,7 @@ module AgentsKanban
         # not a separate entry kind; the card's question box carries the open question and its options
         log(c[:id], "comment", "**Question for the operator:**\n\n#{body}", by)
         log(c[:id], "flag", "needs_operator set — the card waits in #{b.label(c[:column])}", by)
+        tell_lead(c, "ask", by, "asked the operator: #{clip_ping(q)}")
       end
       card(id)
     end
@@ -1148,6 +1156,7 @@ module AgentsKanban
                                        flag_reminded_at: nil, updated_at: @clock.call)
         log(c[:id], "comment", "**Blocked (external):** #{r}\n\n#{u}", by)
         log(c[:id], "flag", "blocked_external set — the card waits in #{b.label(c[:column])}", by)
+        tell_lead(c, "block", by, "is blocked externally: #{clip_ping(r)} (#{u})")
       end
       card(id)
     end
@@ -1271,7 +1280,9 @@ module AgentsKanban
         log(c[:id], "comment", "**Handed to #{b.label(target)}**#{links.any? ? " · #{links.join(' · ')}" : ''}\n\n#{qa}", by)
         unresolved_label!(c, by, unresolved) if exhausted && unresolved.positive?
       end
-      move(id, column: target, by: by, agent: true, handoff: true)
+      moved = move(id, column: target, by: by, agent: true, handoff: true)
+      tell_lead(c, "handoff", by, "was handed off to #{b.label(target)}#{pr ? " (PR #{pr})" : ''}")
+      moved
     end
 
     # ── approval: the operator approves a card for the next step; its agent then moves it on ──
@@ -1891,6 +1902,7 @@ module AgentsKanban
     def end_session(session, reason:, by:)
       open = open_session(session.to_s) or raise Invalid, "session #{session} is not registered (or already ended)"
       sessions_t.where(id: open[:id]).update(ended_at: @clock.call, end_reason: reason.to_s, last_seen_at: open[:last_seen_at])
+      tell_lead_session_ended(open, reason.to_s, by)
       open[:id]
     end
 
@@ -2019,14 +2031,18 @@ module AgentsKanban
     def sessions_sync(live, grace:)
       now = @clock.call
       gone = []
+      ended = []
       sessions_t.where(ended_at: nil).all.each do |r|
         if live.include?(r[:session])
           sessions_t.where(id: r[:id]).update(last_seen_at: now)
         elsif now - r[:launched_at] >= grace
           sessions_t.where(id: r[:id]).update(ended_at: now, end_reason: GONE)
           gone << r[:session]
+          ended << r
         end
       end
+      # after every row is ended: a lead gone in this same pass hears nothing
+      ended.each { |r| tell_lead_session_ended(r, GONE, @config.system_author) }
       gone
     end
 
@@ -2178,7 +2194,7 @@ module AgentsKanban
                "(#{b.label(c[:column])}, #{c[:project_slug]}) while no session owned it — " \
                "it reached nobody until now (your session just became the owner):\n\n#{body[0, 6000]}\n\n" \
                "Read the card with kanban_card id=#{c[:id]}, act on it, and reply with kanban_comment."
-             when "comment"
+             when "comment", OPERATOR_COMMENT
                clip = body.length > PING_BODY ? "#{body[0, PING_BODY]}…" : body
                "#{tag} New comment on card ##{c[:id]} \"#{c[:title]}\" (#{b.label(c[:column])}, #{c[:project_slug]}) " \
                "by #{author}:\n\n#{clip}\n\n" \
@@ -2233,32 +2249,167 @@ module AgentsKanban
                "Read it with kanban_card id=#{c[:id]} and continue."
              end
       # one pending ping per card+session: a burst of comments arrives as one message, not a stream of prompts
-      pending = pings_t.where(card_id: c[:id], session: c[:owner_session], status: "pending").first
-      if pending
-        pings_t.where(id: pending[:id]).update(text: "#{pending[:text]}\n\n---\n\n#{text}"[0, 7900])
+      queue_ping(c[:id], c[:owner_session], c[:owner_socket] || "default", text, reason)
+    end
+
+    # A burst joins the newest pending row nothing may have been typed from (attempts 0). Any other may already sit in the
+    # session's input, where an engine that reads its input back knows it by its exact text: its text never changes. A
+    # burst past MAX_PING_TEXT, or one event longer than that, opens the next rows: nothing is cut.
+    def queue_ping(card_id, session, socket, text, reason)
+      pending = pings_t.where(card_id: card_id, session: session, status: "pending", attempts: 0)
+                       .order(Sequel.desc(:id)).first
+      joined = pending && "#{pending[:text]}\n\n---\n\n#{text}"
+      if joined && joined.length <= MAX_PING_TEXT
+        # the row takes the rank of the most urgent event it now carries
+        stronger = PING_RANKS.fetch(reason, PING_RANK_REST) < PING_RANKS.fetch(pending[:reason], PING_RANK_REST)
+        pings_t.where(id: pending[:id]).update(text: joined, reason: stronger ? reason : pending[:reason])
         return
       end
-      pings_t.insert(card_id: c[:id], session: c[:owner_session], socket: c[:owner_socket] || "default", text: text,
-                     reason: reason, status: "pending", created_at: @clock.call)
+      ping_parts(text).each do |part|
+        pings_t.insert(card_id: card_id, session: session, socket: socket, text: part, reason: reason, status: "pending",
+                       created_at: @clock.call)
+      end
     end
+
+    # A text past MAX_PING_TEXT in parts; their join is the text. Cut after a list separator or a line, else at whitespace
+    # that does not sit between a word and the "#" after it (a "card #N" stays whole); a word longer than a part is cut
+    # where it must be.
+    def ping_parts(text)
+      parts = []
+      rest = text
+      while rest.length > MAX_PING_TEXT
+        cut = ping_cut(rest)
+        parts << rest[0..cut]
+        rest = rest[(cut + 1)..]
+      end
+      (parts << rest).reject { |part| part.strip.empty? }
+    end
+
+    # the index of the next part's last character, within MAX_PING_TEXT of the start of `rest`
+    def ping_cut(rest)
+      sep = rest.rindex(/[,\n]\s/, MAX_PING_TEXT - 2)
+      return sep + 1 if sep
+
+      space = rest.rindex(/(?<![\w\s])\s|\s(?!\s*#)/, MAX_PING_TEXT - 1)
+      space.nil? || space.zero? ? MAX_PING_TEXT - 1 : space
+    end
+
+    # ── the running lead hears about its workers ───────────────────────────────────────
+    # One ping per event — ask, handoff, block, session end, the progress watch's first step — never per comment. Only a
+    # session registered UNDER a lead has one; none when the lead itself acted, or its registration ended. A row of its
+    # own: it never waits for the worker's turn, and a worker's pending pings never hold it back (next_pings).
+    LEAD_PINGS = %w[lead_ask lead_handoff lead_block lead_session_end lead_progress].freeze
+    OPERATOR_COMMENT = "operator_comment"
+    OPERATOR_PINGS = ["answer", "approve", "move", "relay", OPERATOR_COMMENT].freeze
+    # next_pings' order: a row that may sit in the input, the operator's rows, lead events, the rest
+    PING_RANK_TYPED = 0
+    PING_RANK_REST = 3
+    PING_RANKS = OPERATOR_PINGS.to_h { |r| [r, 1] }.merge(LEAD_PINGS.to_h { |r| [r, 2] }).freeze
+
+    def lead_of(reg)
+      reg && reg[:lead_id] && sessions_t.where(id: reg[:lead_id], ended_at: nil).first
+    end
+
+    def tell_lead(c, event, by, what)
+      return if c[:on_hold_at] || c[:owner_session].to_s.empty?
+
+      reg = sessions_t.where(ended_at: nil, session: c[:owner_session], socket: c[:owner_socket] || "default").first
+      lead = lead_of(reg)
+      return if lead.nil? || [lead[:session], lead[:agent_name]].include?(by)
+
+      text = "[#{@config.system_author}] Your worker #{reg[:session]}: card ##{c[:id]} \"#{c[:title]}\" " \
+             "(#{c[:project_slug]}) #{what}. Read it with kanban_card id=#{c[:id]} and act: #{LEAD_ACTIONS.fetch(event)}"
+      queue_ping(c[:id], lead[:session], lead[:socket], text, "lead_#{event}")
+    end
+
+    LEAD_ACTIONS = {
+      "ask" => "the card waits for the operator; keep the rest of the board moving.",
+      "block" => "the card waits for the outside world; clear the blocker if you can.",
+      "handoff" => "check the worker has its next step; the gate waits for the operator.",
+      "progress" => "nudge the worker now, or respawn it if it is stuck.",
+    }.freeze
+
+    # One ping for the session, on its first open card, naming all of them. A session that holds none needs no action.
+    def tell_lead_session_ended(reg, reason, by)
+      lead = lead_of(reg)
+      return if lead.nil? || [lead[:session], lead[:agent_name]].include?(by)
+
+      b = board_of(reg[:project_slug])
+      held = cards.where(owner_session: reg[:session], owner_socket: reg[:socket], archived_at: nil, on_hold_at: nil)
+                  .order(:id).all.reject { |c| b.terminal?(c[:column]) }
+      return if held.empty?
+
+      waits, spawn = held.partition { |c| needs_operator?(c) || (b.waiting.include?(c[:column]) && !agents_next_step?(c, b)) }
+      names = ->(list) { list.map { |c| "card ##{c[:id]}" }.join(", ") }
+      text = "[#{@config.system_author}] Your worker #{reg[:session]} ended (#{reason}) holding #{held.size} open " \
+             "card(s) on #{reg[:project_slug]}."
+      text += " Once each comes back to you, give it a worker with kanban_spawn: #{names.call(spawn)}." if spawn.any?
+      text += " Waiting for the operator, no worker needed yet: #{names.call(waits)}." if waits.any?
+      queue_ping(held.first[:id], lead[:session], lead[:socket], text, "lead_session_end")
+    end
+
+    def clip_ping(text) = text.length > PING_BODY ? "#{text[0, PING_BODY]}…" : text
 
     def pending_pings(limit = 20) = pings_t.where(status: "pending").order(:created_at, :id).limit(limit).all
 
-    def ping_result(ping, status, error: nil)
-      pings_t.where(id: ping[:id]).update(status: status, error: error, attempts: Sequel[:attempts] + 1,
+    # What the Notifier tries this pass: ONE row per session, the later ones wait for it. Per session the order is
+    # (a) a row something may already have been typed from: it is what sits in the composer;
+    # (b) the operator's own rows (answer, approve, the operator's comment, move, relay);
+    # (c) lead events; (d) the rest. Oldest first within each.
+    # A row failed after the give-up releases the next. waiting_since = when this row could first be tried: the give-up
+    # counts from there, never from a wait behind another row. Sessions holding an operator's row or a lead event come
+    # first in the batch, then the oldest.
+    def next_pings(limit = 20)
+      queues = pings_t.where(status: "pending").order(:created_at, :id).all.group_by { |p| [p[:session], p[:socket]] }
+      done = pings_t.where(session: queues.keys.map(&:first).uniq).exclude(done_at: nil).select_group(:session, :socket)
+                    .select_append(Sequel.function(:max, :done_at).as(:last)).all
+                    .to_h { |r| [[r[:session], r[:socket]], r[:last]] }
+      heads = queues.map do |key, rows|
+        first = ping_order(rows).first
+        [rows.any? { |p| PING_RANKS.key?(p[:reason]) } ? 0 : 1,
+         first.merge(waiting_since: [first[:created_at], done[key]].compact.max),]
+      end
+      heads.sort_by { |urgent, p| [urgent, p[:created_at], p[:id]] }.first(limit).map(&:last)
+    end
+
+    def ping_order(rows)
+      rows.sort_by do |p|
+        [p[:attempts].positive? ? PING_RANK_TYPED : PING_RANKS.fetch(p[:reason], PING_RANK_REST), p[:created_at], p[:id]]
+      end
+    end
+
+    # How many of its session's pending rows go before this one (next_pings' order).
+    def pings_ahead(ping)
+      rows = pings_t.where(status: "pending", session: ping[:session], socket: ping[:socket]).all
+      ping_order(rows).index { |p| p[:id] == ping[:id] }.to_i
+    end
+
+    # tried: false = nothing was typed from this row (a dialog found first, the port's `typed: false`). Anything else may
+    # have reached the session's input: `attempts` counts those, and such a row's text never changes (queue_ping).
+    def ping_result(ping, status, error: nil, tried: true)
+      pings_t.where(id: ping[:id]).update(status: status, error: error, attempts: Sequel[:attempts] + (tried ? 1 : 0),
                                           done_at: status == "pending" ? nil : @clock.call)
       return if status == "pending"
 
-      note = status == "sent" ? "pinged #{ping[:session]} (#{ping[:reason]})" : "ping to #{ping[:session]} failed: #{error}"
+      note = if status == "sent"
+               "pinged #{ping[:session]} (#{ping_word(ping[:reason])})"
+             else
+               "ping to #{ping[:session]} failed: #{error}"
+             end
       log(ping[:card_id], "ping", note, @config.system_author)
     end
 
     def pings(card_id, limit = 10) = pings_t.where(card_id: Integer(card_id)).order(Sequel.desc(:id)).limit(limit).all
 
     def ping_json(p)
-      { at: iso(p[:created_at]), done_at: iso(p[:done_at]), session: p[:session], reason: p[:reason], status: p[:status],
-        error: p[:error], attempts: p[:attempts], }
+      out = { at: iso(p[:created_at]), done_at: iso(p[:done_at]), session: p[:session], reason: ping_word(p[:reason]),
+              status: p[:status], error: p[:error], attempts: p[:attempts], }
+      ahead = p[:status] == "pending" ? pings_ahead(p) : 0
+      ahead.positive? ? out.merge(queued_behind: ahead) : out
     end
+
+    # an operator's comment is ranked apart, and reads "comment" everywhere
+    def ping_word(reason) = reason == OPERATOR_COMMENT ? "comment" : reason
 
     # Watchdog: cards whose owner session is gone. `live` = session names the collector sees now. A card missing
     # for longer than `grace` seconds is released: owner + assignee cleared, watchdog.from → watchdog.to, pending pings
@@ -2290,12 +2441,15 @@ module AgentsKanban
 
         @db.transaction do
           gone = c[:owner_session]
+          reg = open_session(gone)
           sessions_t.where(session: gone, ended_at: nil).update(ended_at: now, end_reason: "gone (watchdog)")
+          tell_lead_session_ended(reg, "gone (watchdog)", sys) if reg # before this card loses its owner: it is named
           cards.where(id: c[:id]).update(owner_session: nil, owner_socket: nil, owner_missing_since: nil, assignee: nil,
                                          updated_at: now)
           unassigned = c[:assignee] ? " #{c[:assignee]}" : ''
           log(c[:id], "watchdog", "session #{gone} is gone (#{now - c[:owner_missing_since]}s) — unassigned#{unassigned}", sys)
-          pings_t.where(card_id: c[:id], status: "pending")
+          # only the gone session's: the lead's ping about this very card still goes
+          pings_t.where(card_id: c[:id], status: "pending", session: gone)
             .update(status: "failed", error: "owner session #{gone} is gone", done_at: now)
           if wd && c[:column] == wd.from
             renumber(live(c[:project_slug]).where(column: wd.to).order(:position, :id).select_map(:id) + [c[:id]])
@@ -2584,6 +2738,7 @@ module AgentsKanban
     # the activity kinds that are the card's progress (the spec's: comment, move, checklist, attachment) — never an
     # owner change, an edit, a terminal event, an archive / restore, a flag or the engine's own entries
     PROGRESS_KINDS = %w[comment move checklist attachment].freeze
+    UNREAD = "unpolled" # the ci: port's state of a row nobody has read yet
     PROGRESS_RESET = { progress_pinged_at: nil, progress_commented_at: nil, progress_stale_at: nil }.freeze
 
     def progress_watch? = @config.progress_watch.on?
@@ -2599,7 +2754,9 @@ module AgentsKanban
     end
 
     def progress_scope?(c, b)
-      b.column?(c[:column]) && (b.working?(c[:column]) || b.review?(c[:column])) && !flagged?(c)
+      return false if !b.column?(c[:column]) || flagged?(c)
+
+      b.working?(c[:column]) || b.review?(c[:column]) || agents_next_step?(c, b)
     end
 
     # Why the card counts as waiting for the operator (step 3), or nil. Read off the last watch pass (its stretch), so
@@ -2645,7 +2802,9 @@ module AgentsKanban
       end
       act = activity_t.where(card_id: c[:id], kind: PROGRESS_KINDS).exclude(author: @config.system_author)
                       .order(Sequel.desc(:created_at), Sequel.desc(:id)).select(:id, :kind, :created_at).first
-      latest = [c[:created_at], act&.fetch(:created_at), *marks.values.map { |m| m["at"] }].compact.max
+      # an approval is progress: the agent's stretch on an approved gate card starts no earlier than it
+      approved = agents_next_step?(c, b) ? c[:approved_at] : nil
+      latest = [c[:created_at], approved, act&.fetch(:created_at), *marks.values.map { |m| m["at"] }].compact.max
       json = marks.empty? ? nil : JSON.generate(marks)
       # progress only moves the stretch FORWARD: a vanished mark (a port kind missing for a pass, a deleted branch) or a
       # deleted comment lowers `latest` — that is no progress, and never restarts the steps
@@ -2707,18 +2866,81 @@ module AgentsKanban
     def progress_ping!(c, b, now, last)
       sys = @config.system_author
       owner = c[:owner_session]
+      nudge = owner ? approved_nudge(c, b) : "" # asks CI: outside the transaction
       @db.transaction do
         cards.where(id: c[:id]).update(progress_pinged_at: now)
         if owner
           enqueue_ping(c, "progress", sys,
                        "No progress on card ##{c[:id]} \"#{c[:title]}\" (#{b.label(c[:column])}, #{c[:project_slug]}) " \
-                       "for #{progress_mins(c, now)} min — #{last}. Post what is happening with kanban_comment, push " \
-                       "the work, hand it off, or flag what blocks it (kanban_block / kanban_ask).")
+                       "for #{progress_mins(c, now)} min — #{last}. #{nudge}Post what is happening with kanban_comment, " \
+                       "push the work, hand it off, or flag what blocks it (kanban_block / kanban_ask).")
+          tell_lead(c, "progress", sys, "has shown no progress for #{progress_mins(c, now)} min in " \
+                                        "#{b.label(c[:column])} — #{last}")
         end
         log(c[:id], "progress", "no progress for #{progress_mins(c, now)} min — #{last} — " \
                                 "#{owner ? "pinged #{owner}" : 'no owner session to ping'}", sys)
       end
       owner ? :ping : :ping_nobody
+    end
+
+    # What the agent of an approved card may do now, in whichever column the approval put it (a review, working or gate
+    # column). The step that approved it is the question: it knows what counts there (an open PR's head, the merge
+    # commit's CI once merged). Red, still running or conflicting is a hold; a row nobody read yet, or a port that cannot
+    # answer, is unread: neither a hold nor a go. A step with no green-CI gate asks nothing and says so; a card no approval
+    # step leads to, or with no agent step after it, gets no wording.
+    def approved_nudge(c, b)
+      step = approved_step(c, b)
+      return "" unless step&.then
+
+      nxt = b.label(step.then)
+      return "It is approved; this step asks no CI: take its next step (#{nxt}). " unless b.green_ci_step?(step)
+
+      kind, why = approved_read(c, step)
+      case kind
+      when :unread then "It is approved; #{why}. Read its checks before its next step (#{nxt}). "
+      when :hold then "It is approved but held: #{why}. Its next step (#{nxt}) waits for green checks. "
+      else "It is approved: take its next step (#{nxt}). "
+      end
+    end
+
+    def approved_step(c, b) = c[:approved_at] && !b.terminal?(c[:column]) ? b.approval_into(c[:column]) : nil
+
+    # → [:clear] | [:hold, why] | [:unread, why]
+    def approved_read(c, step)
+      pr = @ci.approval_checks(c, step.to_h)
+      return [:unread, pr[:reason] || "its CI is not read yet (asked now)"] if pr&.dig(:state) == UNREAD
+      if pr&.dig(:rebase)
+        return [:hold, "#{pr[:number] ? "PR ##{pr[:number]}" : 'its PR'} conflicts with #{pr[:rebase][:base]}"]
+      end
+
+      why = hold_from(c, pr)
+      why ? [:hold, why] : [:clear]
+    rescue StandardError => e # one card's port error never ends the pass
+      [:unread, "CI state unknown — #{e.message}"]
+    end
+
+    # ── approved cards keep their CI asked ─────────────────────────────────────────────────────────────
+    # A host may poll only what was asked recently. The approval prefetch stops at the approval, while the card's agent
+    # may take a long time to carry it on, so each watch pass asks the step that approved every such card, in any column.
+    # Only a question: the answer is discarded here. → [[card_id, state | "no PR" | "unavailable: <why>" | "failed: <why>"]]
+    def approved_ci_pass
+      rows = project_cards.where(archived_at: nil, on_hold_at: nil).exclude(approved_at: nil).order(:id).all
+      boards = boards_for(rows.map { |c| c[:project_slug] }.uniq)
+      rows.filter_map do |c|
+        step = approved_step(c, boards[c[:project_slug]])
+        next unless step&.then && boards[c[:project_slug]].green_ci_step?(step)
+
+        [c[:id], approved_ci_state(c, step)]
+      end
+    end
+
+    def approved_ci_state(c, step)
+      pr = @ci.approval_checks(c, step.to_h)
+      pr ? pr[:state] : "no PR"
+    rescue Delivery::Unavailable => e
+      "unavailable: #{e.message}"
+    rescue StandardError => e # one card's host error never ends the pass for the others
+      "failed: #{e.class}: #{e.message}"
     end
 
     def progress_comment!(c, b, now, last)

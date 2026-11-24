@@ -28,6 +28,8 @@ module AgentsKanban
   #       step's checks asked again; green with no conflict clears the mark (Store#rebase_watch_pass);
   #   3d. the PR watch (the ci: port's optional closed_prs): every PR assigned to a live card stays watched; one closed
   #       without merging is told ONCE — a comment on the card and a ping to its owner (Store#pr_watch_pass);
+  #   3d'. the approved CI: every approved card its agent must carry on has the step that approved it asked
+  #       again (Store#approved_ci_pass), so a host that polls only recent requests still answers it;
   #   3e. the progress watch (config.progress_watch): a card in a working / review column with no progress for
   #       stale_minutes pings its owner, then gets a comment, then counts as waiting (Store#progress_watch_pass); a card
   #       the Store's ci: port cannot answer is said once per change of reason;
@@ -56,6 +58,7 @@ module AgentsKanban
       @pr_watch_failed = {} # card id => why the PR watch could not read its PRs: logged on change
       @progress_failed = {} # card id => why the progress watch could not read its evidence: logged on change
       @rebase_said = {} # card id => what the rebase watch last said of it: logged on change
+      @approved_failed = {} # card id => why the port could not answer for an approved card: logged on change
       @log = log
       # the idle watch's port (errors.rb, CiChecks): a board with idle_watch configured and no port is a wiring error
       @ci = ci
@@ -68,27 +71,36 @@ module AgentsKanban
     end
 
     def deliver
-      @store.pending_pings.each do |p|
+      @store.next_pings.each do |p|
         d = dialog(p[:session], p[:socket], card_id: p[:card_id])
         if d
           # a dialog on the screen: the ping waits — never typed into it — whether or not it was asked yet
-          @store.ping_result(p, "pending", error: d)
+          @store.ping_result(p, "pending", error: d, tried: false)
           next
         end
-        r = @client.notify(session: p[:session], socket: p[:socket], text: p[:text])
+        r = notify(p)
         if r["ok"]
           @store.ping_result(p, "sent")
         elsif r["gone"] || r["unsupported"]
           @store.ping_result(p, "failed", error: r["error"])
-        elsif @clock.call - p[:created_at] > @give_up
+        elsif @clock.call - p[:waiting_since] > @give_up
           @store.ping_result(p, "failed", error: "gave up after #{@give_up / 60} min: #{r['error']}")
         else
-          @store.ping_result(p, "pending", error: r["error"])
+          # only the port's explicit `typed: false` says nothing reached the session's input
+          @store.ping_result(p, "pending", error: r["error"], tried: r["typed"] != false)
         end
         @log.puts("ping ##{p[:id]} card #{p[:card_id]} → #{p[:session]}: #{r['ok'] ? 'sent' : r['error']}")
       end
     rescue Delivery::Unavailable => e
       @log.puts("deliver skipped: #{e.message}")
+    end
+
+    # A call that broke midway may have typed the text: recorded so, and the pass stops as for any unreachable port.
+    def notify(ping)
+      @client.notify(session: ping[:session], socket: ping[:socket], text: ping[:text])
+    rescue Delivery::Unavailable => e
+      @store.ping_result(ping, "pending", error: e.message)
+      raise
     end
 
     def watch
@@ -127,6 +139,7 @@ module AgentsKanban
       guard("approval prefetch") { approval_prefetch }
       guard("rebase watch") { rebase_watch }
       guard("pr watch") { pr_watch }
+      guard("approved CI") { approved_ci }
       guard("progress watch") { progress_watch }
       guard("dialog scan") { watch_dialogs }
     end
@@ -191,6 +204,20 @@ ready: "ready for approval", }
         @log.puts("rebase watch: card #{id} #{what == :cleared ? 'rebased, CI green: mark cleared' : what}")
       end
       @rebase_said = pass.to_h
+    end
+
+    # Every approved card its agent must carry on keeps its step's CI asked (Store#approved_ci_pass): a host polls only
+    # what was asked recently. A card the port could not answer is said once per change, and once when it answers.
+    def approved_ci
+      pass = @store.approved_ci_pass
+      failed = pass.filter_map do |id, what|
+        [id, what.delete_prefix(UNAVAILABLE)] if what.start_with?(UNAVAILABLE, FAILED)
+      end.to_h
+      failed.each { |id, why| @log.puts("approved CI: card #{id}: #{why}") unless @approved_failed[id] == why }
+      ((@approved_failed.keys & pass.map(&:first)) - failed.keys).each do |id|
+        @log.puts("approved CI: card #{id} answered again")
+      end
+      @approved_failed = failed
     end
 
     def pr_watch

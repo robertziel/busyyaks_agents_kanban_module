@@ -19,6 +19,10 @@ export function pingLine(p: Ping): PingLine {
   if (p.status === "sent") return { tone: "ok", text: `sent to ${p.session}`, hint: null };
   if (p.status === "failed")
     return { tone: "bad", text: `failed · ${p.error ?? "no reason recorded"}${n}`, hint: null };
+  if (p.queued_behind) {
+    const pings = p.queued_behind === 1 ? "1 earlier ping" : `${p.queued_behind} earlier pings`;
+    return { tone: "warn", text: `pending · queued behind ${pings}`, hint: null };
+  }
   const blocked = /question is on its screen|dialog is on its screen/i.test(p.error ?? "");
   return {
     tone: "warn",

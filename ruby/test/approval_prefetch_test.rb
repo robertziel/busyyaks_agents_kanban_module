@@ -275,12 +275,13 @@ class ApprovalPrefetchTest < Minitest::Test
     assert_equal ["public_human_review", "awaiting_merge", true], step.values_at(:from, :to, :final)
   end
 
-  def test_an_approved_card_in_awaiting_merge_is_not_asked_and_said_once
+  # the prefetch leaves it (no Approve is left to answer); the approved CI pass asks it, once per watch pass
+  def test_an_approved_card_in_awaiting_merge_is_left_by_the_prefetch_and_said_once
     id = card("awaiting_merge")
     @m.approve(id, by: "operator@x")
     approval_ci.asked.clear
     2.times { @n.watch }
-    refute_includes asked_ids, id
+    assert_equal [id, id], asked_ids
     assert_equal ["approval prefetch: card #{id} not asked: approved by operator@x, its agent carries on"],
                  @log.string.lines.grep(/approval prefetch/).map(&:chomp)
   end
@@ -312,7 +313,7 @@ class ApprovalPrefetchTest < Minitest::Test
     assert_equal %w[local_human_review deploy_check public_human_review public_human_review],
                  pending.map { |_, step| step.from }
     approval_ci.asked.clear
-    @n.watch
+    @m.approval_prefetch_pass
     assert_equal gated, asked_ids
   end
 end

@@ -6,6 +6,15 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ## [Unreleased]
 
+### Added
+
+- **The running lead hears about its workers**: one ping when a worker on its board asks, hands off,
+  blocks or ends holding open cards, and on the progress watch's first step. None on a comment, when the lead acted or
+  when no lead runs. A session's pings go one at a time: a row that may already sit in its input, then the operator's own,
+  then lead pings, then the rest. Lead pings survive the watchdog's release of the worker.
+- **The progress watch covers an approved gate card its agent must carry on**; at its last step the card waits for the
+  operator instead of counting as "agent on it".
+
 ### Changed
 
 - **Green CI is a gate column's setting, off by default**: `requires_green_ci: true` on a GATE

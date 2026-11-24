@@ -203,8 +203,15 @@ host's own ledger records each run. Prefix `""` = the unprefixed table names (a 
   click on its file chip in rendered markdown — plays it in the lightbox with the browser's controls. The host's page
   CSP must allow `media-src` its own origin, and the host should answer `Range` requests so the player can seek.
 - A comment claims the author's own unlinked attachments it references; deleting the comment unlinks, never deletes.
-- Pings: one pending per card + session (a burst coalesces); never to the owner's own author; `relay` when a card
+- Pings: one pending per card + session (a burst coalesces into the newest row nothing may have been typed from: any other may sit in the session's input, recognised by its exact text, so its text never changes; past `MAX_PING_TEXT` it opens the next pending row, no event is cut). **Delivery** (`Store#next_pings`): per session ONE attempt per pass; the order is (a) a row something may already have been typed from, (b) the operator's own rows (`answer`, `approve`, the operator's comment, `move`, `relay`), (c) lead events, (d) the rest, oldest first within each; the later rows wait for it, the give-up (counted from when the row could first be tried) releases the next, and a waiting row's `ping_json` carries `queued_behind: N` (the owner panel: "queued behind N earlier pings"). The `notify` port's answer may carry `typed: false` = nothing reached the session's input; absent or anything else, and a call that raised `Delivery::Unavailable`, counts as typed; never to the owner's own author; `relay` when a card
   gains an owner (the operator's undelivered comments since the last agent comment).
+- **The running lead hears about its workers** (`Store::LEAD_PINGS`): one ping to the OPEN lead registration
+  (`lead_id` of the owner's registration) when a card's worker asks (`lead_ask`), hands off (`lead_handoff`), blocks
+  (`lead_block`), when its session ends holding open cards (`lead_session_end`: one ping on the first, naming all, for
+  `kanban_spawn` only those a worker can act on, the rest as waiting for the operator; a session holding none is not told), and on the progress watch's first step (`lead_progress`). Never on a comment; none
+  when the lead is the actor, the card is on hold or no lead runs. A row of its own for the lead's session: it does not
+  wait for the worker's turn, `next_pings` serves sessions holding a lead ping first, and the watchdog's release fails only the gone
+  session's pending pings.
 - Session dialogs: one `question` per (session, hash); an answered one is not re-posted within 120 s; a key is pressed
   only through the host's `press` and only while the hash still matches (the launcher re-reads the screen). The hash leaves out Claude Code's
   ticking "will automatically block this request in M:SS" countdown — it is not the dialog.
@@ -324,6 +331,14 @@ host's own ledger records each run. Prefix `""` = the unprefixed table names (a 
   the port cannot answer (ANY error it raises, or a malformed list) is skipped and said (`"unavailable: <why>"`, the
   Notifier logs it once per change of reason; `cards.progress_error` = card JSON `progress_error` until it answers
   again), its stretch kept.
+- **Approved gate cards**: the watch also covers a card its agent must carry on (`Store#agents_next_step?`:
+  approved, owned, unflagged, in a waiting gate with an agent's named way on; a CI hold does not take it out). Its
+  stretch starts no earlier than the approval. At the last step it waits for the operator and stops being `carried_on`.
+- **The nudge on an approved card**, in any column an approval puts it (review, working or gate): the first ping asks the
+  CI of the step that approved it (`approval_into`); red, pending or conflicting is said as a hold, a row not read yet (`unpolled`, in the port's `reason:` words when it gives one)
+  or a port that cannot answer as unread ("read its checks before its next step"), never "take its next step". A step whose
+  gate has no `requires_green_ci` asks nothing and says so. Each `Notifier#watch` pass asks that step for every such card
+  (`Store#approved_ci_pass`, the answer discarded), so a host that polls only recent requests keeps its rows read.
 - **One voice per quiet card**: on a card the progress watch covers (on, and in its scope) the idle watch never
   comments — neither its CI comment nor its idle-owner comment; its CI ping ("CI finished — hand off or fix") still
   goes. Off, or outside the scope, the idle watch comments as before.
