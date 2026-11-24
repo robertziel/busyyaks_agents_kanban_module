@@ -3,7 +3,8 @@
 require "digest"
 
 module AgentsKanban
-  # A dialog on a Claude Code session's screen (permission prompt, AskUserQuestion), parsed from `tmux capture-pane`
+  # A dialog on an agent session's screen (Claude Code: permission prompt, AskUserQuestion; Hermes: its dangerous-command
+  # panel, `hermes` below), parsed from `tmux capture-pane`
   # text. Pure Ruby, no dependencies and no other file of this library: loaded by the host's container (Store,
   # Notifier) AND by its host-side launcher, so both sides compute the same `hash` — the launcher presses a key only
   # while the screen still shows that exact dialog. Require this file alone from a host script.
@@ -19,6 +20,17 @@ module AgentsKanban
     MAX_COMMAND = 12
     # Claude Code's unattended-session countdown, re-drawn every second: shown, never hashed.
     COUNTDOWN = /(block this request in) \d+(?::\d{2})+/i
+    # Hermes's approval hint under its panel ("(299s)" = its countdown, never hashed) and the prompt row it draws
+    # while the panel is open (`⚠ ❯`): the row a transcript quoting the panel does not have.
+    HERMES_FOOT = %r{\A\s*↑/↓ to select, Enter to confirm(?:\s+\(\d+s\))?\s*\z}
+    HERMES_PROMPT = /\A⚠\s*❯/
+    HERMES_TITLE = /Dangerous Command/
+    HERMES_OPTION = /\A\s*(?:❯\s*)?(\d{1,2})\.\s+(\S.*?)\s*\z/
+    # the panel's "view" choice re-draws it with the whole command: it answers nothing
+    HERMES_VIEW = /\AShow full command\z/i
+    HERMES_LAST = /\A(?:Deny|Show full command)\z/i
+    HERMES_BELOW = 6 # rows from the hint to its prompt row (the status bar and a rule sit between them)
+    HERMES_ABOVE = 4 # rows from the panel's bottom border to the hint (the running tool's line sits between them)
 
     module_function
 
@@ -26,6 +38,7 @@ module AgentsKanban
       raw = screen.to_s.lines.map(&:rstrip)
       lines = raw.map { |l| l.gsub(BOX, " ").rstrip }
       foot = lines.rindex { |l| l.match?(FOOT) } or return nil
+      return hermes(raw, foot) if raw[foot].match?(HERMES_FOOT)
 
       # the run of numbered options nearest the footer (description lines between options are allowed)
       opt_idx = []
@@ -76,6 +89,51 @@ module AgentsKanban
       text = lines[(command ? c_start : [q_start, 0].max)..foot].join("\n").strip
       { question: question.to_s, command: command, options: options, escape: escape, free_text: free_text,
         hash: Digest::SHA256.hexdigest(norm.join("\n")), text: text, }
+    end
+
+    # Hermes's panel: ╭ title · command · numbered choices · description ╰, the hint below it, `⚠ ❯` below that. Anything
+    # else with that hint is no dialog. Choices are read upward from the last one (Deny / Show full command) while their
+    # numbers run down to 1, so a numbered line inside the command is never taken for one.
+    def hermes(raw, foot)
+      return nil unless raw[(foot + 1)..(foot + HERMES_BELOW)].to_a.any? { |l| l.match?(HERMES_PROMPT) }
+
+      bottom = (foot - 1).downto([foot - HERMES_ABOVE, 0].max).find { |i| raw[i].match?(/\A\s*╰─+╯\s*\z/) } or return nil
+      top = (bottom - 1).downto(0).find { |i| raw[i].match?(/\A\s*╭─+╮\s*\z/) } or return nil
+      rows = raw[(top + 1)...bottom].map { |l| l.sub(/\A\s*│ ?/, "").sub(/\s*│\s*\z/, "") }
+      return nil unless rows.first.to_s.match?(HERMES_TITLE)
+
+      last = rows.rindex { |r| (m = r.match(HERMES_OPTION)) && m[2].match?(HERMES_LAST) } or return nil
+      first, options = hermes_options(rows, last)
+      return nil unless first
+
+      command = dedent(rows[1...first].reject { |r| r.strip.empty? })
+      why = rows[(last + 1)..].map(&:strip).reject(&:empty?).join(" ")
+      question = ["Dangerous Command", (why unless why.empty?)].compact.join(": ")
+      norm = [question, command, *options.map { |o| "#{o[:key]}. #{o[:label]}" }].map { |x| x.gsub(/\s+/, " ").strip }
+      { question: question, command: command.empty? ? nil : command, options: options, escape: false, free_text: false,
+        hash: Digest::SHA256.hexdigest(norm.join("\n")), text: raw[top..bottom].join("\n"), }
+    end
+
+    # → [row of choice 1, options] walking up from row `last`; a wrapped label's continuation rows join their choice
+    def hermes_options(rows, last)
+      want = rows[last].match(HERMES_OPTION)[1].to_i
+      options = []
+      tail = []
+      last.downto(1) do |i|
+        m = rows[i].match(HERMES_OPTION)
+        if m && m[1].to_i == want
+          label = [m[2], *tail].join(" ").gsub(/\s+/, " ")
+          options.unshift({ key: m[1], label: label, free: label.match?(HERMES_VIEW) })
+          tail = []
+          want -= 1
+          return [i, options] if want.zero?
+        elsif rows[i].match?(/\A {4}\S/)
+          tail.unshift(rows[i].strip)
+        else
+          return nil
+        end
+      end
+      nil
     end
 
     def dedent(ls)

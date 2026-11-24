@@ -16,6 +16,9 @@ class CiGatesTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__) # ruby/test → the repo root
   TEST_SH = File.join(ROOT, "scripts/ci/test.sh")
   HOOKS_RUN = File.join(ROOT, "scripts/hooks/run")
+  RUNNER_ENV = File.join(ROOT, "scripts/ci/runner.env")
+  RUNNER_CPUS = File.read(RUNNER_ENV)[/^CI_RUNNER_CPUS=(\d+)$/, 1]
+  CPU_QUOTA = "#{RUNNER_CPUS}00000 100000".freeze
 
   STUB_DOCKER = <<~SH
     #!/bin/sh
@@ -23,15 +26,23 @@ class CiGatesTest < Minitest::Test
     case "$1" in
       inspect) printf '%s|%s\\n' "$STUB_MOUNT" "$STUB_MOUNT" ;;
       image) exit 0 ;;
-      *) if [ -n "$DOCKER_FAIL" ] && printf '%s' "$*" | grep -qE -- "$DOCKER_FAIL"; then exit "$DOCKER_EXIT"; fi ;;
+      info) case "$*" in *NCPU*) echo "$STUB_NCPU" ;; esac ;;
+      *) case "$*" in *cgroup/cpu.max*) echo "$STUB_CPU_MAX" ;; esac
+         if [ -n "$DOCKER_SLOW" ] && printf '%s' "$*" | grep -qE -- "$DOCKER_SLOW"; then sleep 1; printf 'end: %s\n' "$*" >> "$DOCKER_LOG"; fi
+         if [ -n "$DOCKER_FAIL" ] && printf '%s' "$*" | grep -qE -- "$DOCKER_FAIL"; then exit "$DOCKER_EXIT"; fi ;;
     esac
   SH
   # scripts/hooks/image builds the hooks image from a dozen inputs; the fixture's prints a tag (run's own logic is tested)
   STUB_IMAGE = "#!/usr/bin/env bash\necho agents-kanban-hooks:stub\n"
   # the lint wrappers and the lint image script, for `audit` / `all` (their own runs are the lint stage's business)
   STUB_OK = "#!/bin/sh\necho stub\n"
+  # a lint wrapper held for a second, its end logged like a slow container's (the react ordering test)
+  STUB_SLOW_LINT = "#!/bin/sh\nsleep 1\nprintf 'end: lint %s\\n' \"$0\" >> \"$DOCKER_LOG\"\necho stub\n"
+  # each stage `all` runs beside the others → a mark in its log line (lint: the wrappers above; the rest: containers)
+  STAGE_CONTAINERS = { "lint" => "end: lint", "ruby-sqlite" => "-sqlite ", "ruby-pg" => "-pg ", "audit" => "-audit ",
+                       "secrets" => "gitleaks", }.freeze
   # the stages `all` runs, as the script lists them
-  STAGES = File.read(TEST_SH)[/^  all\) all_suites (.+) ;;$/, 1].split
+  STAGES = File.read(TEST_SH)[/^  all\) all_suites (.+) ;;$/, 1].split - ["--then"]
 
   def setup
     @dir = File.realpath(Dir.mktmpdir("ci-gates"))
@@ -43,8 +54,10 @@ class CiGatesTest < Minitest::Test
 
   def teardown = FileUtils.rm_rf(@dir)
 
-  def env(path: "#{@bin}:#{ENV.fetch('PATH')}", fail: nil, code: 1, mount: @dir)
+  def env(path: "#{@bin}:#{ENV.fetch('PATH')}", fail: nil, code: 1, mount: @dir, cpu_max: CPU_QUOTA, ncpu: "32", slow: nil)
     { "PATH" => path, "DOCKER_LOG" => @log, "STUB_MOUNT" => mount, "DOCKER_FAIL" => fail.to_s, "DOCKER_EXIT" => code.to_s,
+      "DOCKER_SLOW" => slow.to_s,
+      "STUB_CPU_MAX" => cpu_max, "STUB_NCPU" => ncpu,
       "GIT_AUTHOR_NAME" => "ci", "GIT_AUTHOR_EMAIL" => "ci@example.invalid",
       "GIT_COMMITTER_NAME" => "ci", "GIT_COMMITTER_EMAIL" => "ci@example.invalid",
       "GIT_CONFIG_GLOBAL" => "/dev/null", "GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_INDEX_FILE" => nil,
@@ -92,12 +105,12 @@ class CiGatesTest < Minitest::Test
     dir
   end
 
-  def ci_repo(extra = {}) = repo("ci", { "scripts/ci/test.sh" => TEST_SH }, extra)
+  def ci_repo(extra = {}) = repo("ci", { "scripts/ci/test.sh" => TEST_SH, "scripts/ci/runner.env" => RUNNER_ENV }, extra)
 
   # everything `all` touches besides docker: the lint wrappers and the lint image
-  def full_ci_repo
-    stubs = %w[scripts/lint/image scripts/lint/rubocop scripts/lint/shellcheck].to_h { [_1, STUB_OK] }
-    repo("full", { "scripts/ci/test.sh" => TEST_SH }.merge(stubs))
+  def full_ci_repo(lint: STUB_OK)
+    stubs = { "scripts/lint/image" => STUB_OK, "scripts/lint/rubocop" => lint, "scripts/lint/shellcheck" => lint }
+    repo("full", { "scripts/ci/test.sh" => TEST_SH, "scripts/ci/runner.env" => RUNNER_ENV }.merge(stubs))
   end
 
   def hooks_repo = repo("hooks", { "scripts/hooks/run" => HOOKS_RUN, "scripts/hooks/image" => STUB_IMAGE })
@@ -116,7 +129,7 @@ class CiGatesTest < Minitest::Test
 
   def test_secrets_refuses_an_in_tree_gitleaks_allowlist
     [".gitleaksignore", "nested/.gitleaks.toml"].each_with_index do |file, i|
-      dir = repo("allow#{i}", { "scripts/ci/test.sh" => TEST_SH }, file => "x\n")
+      dir = repo("allow#{i}", { "scripts/ci/test.sh" => TEST_SH, "scripts/ci/runner.env" => RUNNER_ENV }, file => "x\n")
       _out, err, status = run_in(dir, "scripts/ci/test.sh", "secrets")
 
       assert_equal 1, status.exitstatus, file
@@ -193,6 +206,79 @@ class CiGatesTest < Minitest::Test
 
     assert_equal 1, status.exitstatus
     assert_match "ci: #{STAGES.map { "#{_1} exit #{_1 == 'secrets' ? 1 : 0}" }.join(' · ')}", out
+  end
+
+  # The React suite runs alone, after every other stage has finished: beside the two Ruby suites (a worker per test file
+  # each) it shared the runner's CPUs and random tests timed out (GitHub's 4-vCPU runner; CHANGELOG names the runs).
+  # EVERY other stage's container is held for a second, so
+  # react waiting on any one of them only would start before the others end.
+  def test_all_starts_the_react_suite_only_once_every_other_stage_has_ended
+    _out, err, status = run_in(full_ci_repo(lint: STUB_SLOW_LINT), "scripts/ci/test.sh", "all", slow: "^run ")
+    assert_predicate status, :success?, err
+    calls = docker_calls
+    react = calls.index { _1.start_with?("run ") && _1.include?("-react ") }
+    refute_nil react, calls.join("\n")
+    assert_equal STAGES - ["react"], STAGE_CONTAINERS.keys, "every stage `all` runs beside the others is held here"
+    others = calls.each_index.select { calls[_1].start_with?("run ") && _1 != react }
+    ends = calls.each_index.select { calls[_1].start_with?("end: ") && !calls[_1].include?("-react ") }
+    assert_equal others.size + 2, ends.size, calls.join("\n") # every container's end + the two lint wrappers'
+    STAGE_CONTAINERS.each do |stage, mark|
+      assert(calls[0...react].any? { _1.start_with?("end: ") && _1.include?(mark) }, "#{stage} never ended before react")
+    end
+    assert_operator react, :>, ends.max, "the react container started while another stage still ran"
+  end
+
+  # ── the react stage's CPU quota (more vitest workers than CPU time timed out random tests) ──
+
+  def react_runs = docker_runs.reject { _1.include?("cgroup/cpu.max") }
+
+  def test_react_runs_on_the_runners_quota_with_that_many_workers
+    _out, err, status = run_in(ci_repo, "scripts/ci/test.sh", "react")
+
+    assert_predicate status, :success?, err
+    run = react_runs.first
+    assert_equal 1, react_runs.size
+    assert_includes run, "--cpus #{RUNNER_CPUS} "
+    assert_includes run, "-e CI_RUNNER_CPUS=#{RUNNER_CPUS} "
+    assert_includes File.read(@log), 'vitest run --maxWorkers="$CI_RUNNER_CPUS"' # the script's later lines of the argv
+  end
+
+  def test_react_refuses_a_daemon_that_does_not_apply_the_quota
+    _out, err, status = run_in(ci_repo, "scripts/ci/test.sh", "react", cpu_max: "max 100000")
+
+    assert_equal 1, status.exitstatus
+    assert_match "did not limit a container", err
+    assert_empty react_runs, "the suite never starts unlimited"
+  end
+
+  def test_react_refuses_a_host_with_fewer_cpus_or_an_unknown_count
+    ["1", ""].each do |ncpu|
+      FileUtils.rm_f(@log)
+      dir = File.directory?(File.join(@dir, "ci")) ? File.join(@dir, "ci") : ci_repo
+      _out, err, status = run_in(dir, "scripts/ci/test.sh", "react", ncpu: ncpu)
+
+      assert_equal 1, status.exitstatus, ncpu
+      assert_match(/CPUs/, err)
+      assert_empty docker_runs, "no container for #{ncpu.inspect}"
+    end
+  end
+
+  def test_a_missing_or_bad_runner_env_fails_before_any_container
+    dir = ci_repo
+    file = File.join(dir, "scripts/ci/runner.env")
+    { "CI_RUNNER_CPUS=0\n" => "positive integer", "CI_RUNNER_CPUS=4\nOTHER=1\n" => "unknown line" }.each do |body, says|
+      File.write(file, body)
+      _out, err, status = run_in(dir, "scripts/ci/test.sh", "react")
+
+      assert_equal 1, status.exitstatus, body
+      assert_match says, err
+    end
+    File.delete(file)
+    _out, err, status = run_in(dir, "scripts/ci/test.sh", "react")
+
+    assert_equal 1, status.exitstatus
+    assert_match "is missing", err
+    assert_empty docker_calls
   end
 
   def test_an_unknown_stage_is_a_usage_error

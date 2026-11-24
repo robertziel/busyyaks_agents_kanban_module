@@ -16,8 +16,9 @@
 #                                    (the advisory databases)
 #   scripts/ci/test.sh secrets       gitleaks over the full git history; any finding fails it,
 #                                    never allowlisted
-#   scripts/ci/test.sh all           the six at once, each into its own log, printed one after the other once all
-#                                    have finished; fails if any fails
+#   scripts/ci/test.sh all           lint, both Ruby suites, audit and secrets at once, then react ALONE; each into
+#                                    its own log, printed one after the other once all have finished; fails if any
+#                                    fails
 #
 # Where it runs: Jenkins (the maintainer's runner, Jenkinsfile) and GitHub Actions (.github/workflows/ci.yml, every
 # pull request on the public repo, forks included) run this same script; so does any machine with Docker.
@@ -43,6 +44,23 @@ DOCKER_IMAGE=docker:28.5.2-cli   # for the chown (any image with a shell would d
 NODE_IMAGE=node:22-slim          # react/Dockerfile's base
 PG_IMAGE=postgres:16-alpine      # README § Test
 GITLEAKS_IMAGE=zricethezav/gitleaks:v8.30.1
+
+# scripts/ci/runner.env: the public runner's CPU count, the one place it is written. Its one key, a positive integer; a
+# missing file, key or value fails here, never a default.
+RUNNER_ENV=scripts/ci/runner.env
+[ -f "$RUNNER_ENV" ] || { echo "ci: $RUNNER_ENV is missing — the runner's shape (CI_RUNNER_CPUS)" >&2; exit 1; }
+CI_RUNNER_CPUS=''
+while IFS= read -r line; do
+  case "$line" in
+    '' | '#'*) ;;
+    CI_RUNNER_CPUS=*) CI_RUNNER_CPUS=${line#*=} ;;
+    *) echo "ci: $RUNNER_ENV: unknown line: $line" >&2; exit 1 ;;
+  esac
+done < "$RUNNER_ENV"
+[[ "$CI_RUNNER_CPUS" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ci: $RUNNER_ENV: CI_RUNNER_CPUS must be a positive integer (is '$CI_RUNNER_CPUS')" >&2; exit 1
+}
+CPU_QUOTA="$((CI_RUNNER_CPUS * 100000)) 100000"   # what cgroup v2 cpu.max reads in a container given --cpus N
 
 # Bind mounts are resolved by the Docker DAEMON. Under Jenkins this script runs inside the controller's container,
 # talking to the host's daemon, so it needs the checkout's path on the HOST: the source of the container mount that
@@ -112,10 +130,44 @@ ruby-pg_suite() {
   return $status
 }
 
+# The react stage runs on the runner's CPU quota, so the daemon must have those CPUs and must APPLY the quota: a rootless
+# dockerd whose user manager was not delegated the cpu controller drops --cpus with only a warning and runs unlimited.
+# Only the run's STDOUT is the measurement (the image is pulled first: pull progress is not cpu.max).
+require_pin() {
+  local got err cpus
+  cpus=$(docker info --format '{{.NCPU}}')
+  if ! [[ "$cpus" =~ ^[0-9]+$ ]]; then
+    echo "ci: docker info did not say how many CPUs the host has (got '$cpus')" >&2
+    return 1
+  fi
+  if [ "$cpus" -lt "$CI_RUNNER_CPUS" ]; then
+    echo "ci: the Docker host has $cpus CPUs, the runner's shape needs $CI_RUNNER_CPUS ($RUNNER_ENV)" >&2
+    return 1
+  fi
+  err=$(mktemp)
+  if ! docker pull -q "$NODE_IMAGE" > /dev/null 2> "$err"; then
+    echo "ci: could not pull $NODE_IMAGE for the CPU-quota probe: $(cat "$err")" >&2
+    rm -f "$err"; return 1
+  fi
+  if ! got=$(docker run --rm --cpus "$CI_RUNNER_CPUS" "$NODE_IMAGE" cat /sys/fs/cgroup/cpu.max 2> "$err"); then
+    echo "ci: the CPU-quota probe did not run: $(cat "$err")" >&2
+    rm -f "$err"; return 1
+  fi
+  if [ "$got" != "$CPU_QUOTA" ]; then
+    echo "ci: the Docker daemon did not limit a container to $CI_RUNNER_CPUS CPUs (cpu.max in it: '$got', want" \
+      "'$CPU_QUOTA'; docker said: '$(tr '\n' ' ' < "$err")') — a rootless dockerd needs the cpu controller delegated to" \
+      "its user manager" >&2
+    rm -f "$err"; return 1
+  fi
+  rm -f "$err"
+}
+
 react_suite() {
+  require_pin || return 1
   # read-only source, copied in without node_modules: npm ci never touches the checkout (vitest reads ../fixtures;
   # Prettier formats ../fixtures too and reads the root's .prettierrc.json, .prettierignore, .editorconfig)
-  docker run --rm --name "$NAME-react" --tmpfs /tmp:exec -v "$HOST_SRC:/src:ro" "$NODE_IMAGE" sh -euc '
+  docker run --rm --name "$NAME-react" --cpus "$CI_RUNNER_CPUS" -e "CI_RUNNER_CPUS=$CI_RUNNER_CPUS" --tmpfs /tmp:exec \
+    -v "$HOST_SRC:/src:ro" "$NODE_IMAGE" sh -euc '
     mkdir -p /w/react && cp -r /src/fixtures /w/fixtures
     cp /src/.prettierrc.json /src/.prettierignore /src/.editorconfig /w/
     cd /src/react && tar cf - --exclude=./node_modules . | tar xf - -C /w/react && cd /w/react
@@ -123,7 +175,7 @@ react_suite() {
     npx tsc --noEmit
     npm run lint
     npm run format:check
-    CI=true npx vitest run'
+    CI=true npx vitest run --maxWorkers="$CI_RUNNER_CPUS"'
 }
 
 # The lockfiles alone are audited: nothing installed, nothing written to the checkout.
@@ -171,15 +223,28 @@ lint_suite() {
   return $status
 }
 
-# The given suites at once. Each one's output goes to its own log (interleaved lines would be unreadable), printed
-# whole once every suite has finished, with its exit status.
+# The given suites at once; the ones after `--then` afterwards, one at a time, each with the runner to itself. The React
+# suite is one of those: beside the two Ruby suites (a worker per test file each) it shared the runner's CPUs and random
+# tests timed out on GitHub's 4-vCPU runner. Each suite's output goes to its own log (interleaved lines would be
+# unreadable), printed whole once every suite has finished, with its exit status.
 all_suites() {
   local logs name failed=0 status
+  local -a together=() after=()
   local -A pid
+  while [ $# -gt 0 ] && [ "$1" != "--then" ]; do together+=("$1"); shift; done
+  [ $# -gt 0 ] && shift && after=("$@")
   logs=$(mktemp -d)
-  for name in "$@"; do "${name}_suite" > "$logs/$name.log" 2>&1 & pid[$name]=$!; done
-  for name in "$@"; do
+  for name in "${together[@]}"; do "${name}_suite" > "$logs/$name.log" 2>&1 & pid[$name]=$!; done
+  for name in "${together[@]}"; do
     status=0; wait "${pid[$name]}" || status=$?
+    echo "$status" > "$logs/$name.status"
+  done
+  for name in "${after[@]}"; do
+    status=0; "${name}_suite" > "$logs/$name.log" 2>&1 || status=$?
+    echo "$status" > "$logs/$name.status"
+  done
+  for name in "${together[@]}" "${after[@]}"; do
+    status=$(cat "$logs/$name.status")
     echo "════ $name (exit $status) ════"; cat "$logs/$name.log"
     [ "$status" -eq 0 ] || failed=1
     echo "$name exit $status" >> "$logs/summary"
@@ -196,6 +261,6 @@ case "${1:-}" in
   react) react_suite ;;
   audit) audit_suite ;;
   secrets) secrets_suite ;;
-  all) all_suites lint ruby-sqlite ruby-pg react audit secrets ;;
+  all) all_suites lint ruby-sqlite ruby-pg audit secrets --then react ;;
   *) echo "usage: $0 lint|ruby-sqlite|ruby-pg|react|audit|secrets|all" >&2; exit 2 ;;
 esac

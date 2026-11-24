@@ -260,11 +260,14 @@ ready: "ready for approval", }
       end
       owners = @store.owner_sessions
       snap["sessions"].each do |s|
-        next unless owners.include?(s["name"]) && Array(s["panes"]).any? { |pn| pn["waiting_for"] }
+        next unless owners.include?(s["name"]) && Array(s["panes"]).any? { |pn| waiting?(pn) }
 
         read_dialog(s["name"], s["socket"] || "default")
       end
     end
+
+    # The agent's own record says it waits, or (an engine with no such record: Hermes) its screen reads as blocked
+    def waiting?(pane) = pane["waiting_for"] || pane.dig("screen", "state") == "blocked"
 
     # One owner's screen in the dialog scan: a failed read skips only this session — the others are still read — and is
     # logged when its reason changes, and once when the session's screen answers again.

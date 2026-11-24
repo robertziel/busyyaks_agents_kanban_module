@@ -1,6 +1,6 @@
 // Engine CI: every pushed branch runs `scripts/ci/test.sh all` — RuboCop + ShellCheck, the Ruby suite on SQLite and on
 // Postgres, the React port's tsc + vitest, the dependency audit (bundle-audit + npm audit) and gitleaks over the full
-// history, at once — and reports ONE GitHub commit status, context `jenkins/ci`,
+// history, at once, then the React suite alone — and reports ONE GitHub commit status, context `jenkins/ci`,
 // whose link is this build. A PR shows its head branch's status.
 //
 // Jenkins side: a multibranch job reading this file from SCM (this repository's own branches and pull requests; a

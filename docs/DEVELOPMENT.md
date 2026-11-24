@@ -1,6 +1,6 @@
 # Development
 
-Everything runs in Docker; the host needs only git and docker. `scripts/ci/test.sh all` runs every gate below at once.
+Everything runs in Docker; the host needs only git and docker. `scripts/ci/test.sh all` runs every gate below at once, then the React suite alone (sharing the CPUs with the Ruby suites timed its tests out).
 
 ## Tests
 

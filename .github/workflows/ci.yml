@@ -1,7 +1,7 @@
 # Public CI: the same gates the maintainer's Jenkins runs (Jenkinsfile), for everyone's pull requests — forks
-# included — and every push to main. One job: scripts/ci/test.sh all (lint · ruby-sqlite · ruby-pg · react · audit ·
-# secrets, at once), on a GitHub-hosted ubuntu-latest runner, which carries Docker; the script needs nothing else. A
-# finding in any stage fails the job; nothing here skips, retries or allows a failure.
+# included — and every push to main. One job: scripts/ci/test.sh all (lint · ruby-sqlite · ruby-pg · audit · secrets
+# at once, then react alone), on a GitHub-hosted ubuntu-latest runner, which carries Docker; the script needs nothing
+# else. A finding in any stage fails the job; nothing here skips, retries or allows a failure.
 #
 # Trigger decision: the job runs on PUBLIC repositories only. A private copy — the maintainer's private local repo, where
 # Jenkins already gates every branch, or anyone's private fork — skips it, so it never spends Actions minutes there
