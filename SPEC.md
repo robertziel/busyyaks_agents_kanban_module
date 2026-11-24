@@ -572,9 +572,10 @@ Newest first; a heading names the `Schema::VERSION` step when the change brought
   `Delivery::Refused`. `kanban_spawn` / `kanban_register` ask it and `Store#lead_by_key!` compares the digest
   (constant time); the agent never sees or passes a key. This is a guard against cooperative agents starting sessions
   without their lead, NOT authentication (residual below).
-- `kanban_register` of a type `under` a lead: refused unless the board's lead runs and the host vouches for it; a lead
-  registered by hand gets NO key (no `key_to`: it cannot `kanban_spawn` — a lead that starts its team is started from
-  the Launch bar). `Store#register_session(lead_id:, from_owner:, key_to:)`: `key_to` receives a lead's key (never the
+- `kanban_register` of a type `under` a lead: refused unless the board's lead runs and the host vouches for it. A
+  LEAD type is never registered by hand: `kanban_register` refuses it (`Denied`, "a lead is started only by the
+  operator's Launch") — a terminal session that called itself the lead would adopt the board's ownerless cards.
+  `Store#register_session(lead_id:, from_owner:, key_to:)`: `key_to` receives a lead's key (never the
   returned Hash); a type under a lead without the open lead registration → `Denied`.
 - `Store#lead_ends`: every lead end in the window but `Store::OPERATOR_STOP` ("stopped by the operator" — a host's Stop
   passes it to `end_session`) and a failed start (that is a launch failure).
