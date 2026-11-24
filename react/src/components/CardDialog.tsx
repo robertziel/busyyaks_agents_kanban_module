@@ -242,19 +242,26 @@ function CardDetail({
   const [dragging, setDragging] = useState(false);
   const [lightbox, setLightbox] = useState<{ url: string; name: string; a?: Attachment; video?: boolean } | null>(null);
   const picker = useRef<HTMLInputElement>(null);
-  // the sticky action block's height, as the dialog's scroll-padding-bottom (kanban.css): a field focused or scrolled into
-  // view is placed above the bar, never under it
+  // the sticky blocks' heights, as the dialog's scroll-padding-bottom (kanban.css): a field focused or scrolled into view
+  // is placed above the action bar and the comment box, never under them
   const [acts, setActs] = useState<HTMLDivElement | null>(null);
+  const [dock, setDock] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
-    const port = acts?.closest<HTMLElement>(".kb-dialog");
-    if (!acts || !port) return;
-    const ro = new ResizeObserver(() => port.style.setProperty("--kb-acts-h", `${acts.offsetHeight}px`));
-    ro.observe(acts);
+    const port = (acts ?? dock)?.closest<HTMLElement>(".kb-dialog");
+    if (!port) return;
+    const sticky = [
+      ["--kb-acts-h", acts],
+      ["--kb-dock-h", dock],
+    ] as const;
+    const ro = new ResizeObserver(() => {
+      for (const [name, el] of sticky) if (el) port.style.setProperty(name, `${el.offsetHeight}px`);
+    });
+    for (const [, el] of sticky) if (el) ro.observe(el);
     return () => {
       ro.disconnect();
-      port.style.removeProperty("--kb-acts-h");
+      for (const [name] of sticky) port.style.removeProperty(name);
     };
-  }, [acts]);
+  }, [acts, dock]);
   const seq = useRef(0);
   // a comment-reference chip (href "#a-<id>") was clicked: scroll that activity entry into view and glow it. Runs
   // after the render that switched details on, so a hidden event is in the DOM by then.
@@ -515,6 +522,14 @@ function CardDetail({
 
       <div className="kb-dbody">
         <div className="kb-main">
+          {/* the box comes after the activity in the tab order: one key from the top of the card to it */}
+          <button
+            type="button"
+            className="btn small kb-skip-comment"
+            onClick={() => dock?.querySelector("textarea")?.focus()}
+          >
+            Write a comment
+          </button>
           <div className="kb-facts">
             {c.assignee && (
               <div>
@@ -845,60 +860,6 @@ function CardDetail({
               </button>
             }
           >
-            {!c.owner_session && (
-              <div className="kb-nolisten-warn" role="status">
-                <b>Nobody is listening: no session owns this card</b>
-                <span>
-                  Comments reach no agent{c.assignee ? ` — ${c.assignee} is assigned but has no session` : ""}. Owner
-                  session:
-                </span>
-                <OwnerSelect card={c} data={data} busy={busy} run={run} id={id} />
-                {data.sessions_error && <span className="ag-err">sessions: {data.sessions_error}</span>}
-              </div>
-            )}
-            <form
-              className="kb-comment"
-              onSubmit={(e: FormEvent) => {
-                e.preventDefault();
-                if (!comment.trim() || commentDictating) return;
-                void sendComment(comment, true);
-              }}
-            >
-              <Avatar name={me} email={me} type={typeOf(me)} />
-              <div className="kb-comment-box">
-                <MarkdownEditor
-                  value={comment}
-                  onChange={setComment}
-                  onUpload={uploadFile}
-                  dictate
-                  dictateToggle={dictateComment}
-                  ariaLabel="Comment"
-                  rows={2}
-                  placeholder="Write a comment… (markdown, @name)"
-                  onSubmit={() => {
-                    if (comment.trim()) void sendComment(comment, true);
-                  }}
-                  onDictatingChange={dictatingChanged}
-                />
-                {comment.trim() && (
-                  <div className="kb-row">
-                    <button
-                      className="btn primary small"
-                      disabled={busy || commentDictating}
-                      title={commentDictating ? "Stop the dictation first: its words are not final yet" : undefined}
-                    >
-                      Save
-                    </button>
-                    <span className="muted kb-hint">{commentDictating ? "stop the mic to save" : "Ctrl+Enter"}</span>
-                  </div>
-                )}
-              </div>
-            </form>
-            {delivered && (
-              <p className={`kb-delivered${delivered.startsWith("none") ? " none" : ""}`} role="status">
-                last comment · {delivered}
-              </p>
-            )}
             <ol className="kb-activity">
               {/* unmounted on a failed poll: nobody lingers through it */}
               {sessionsLive && !live.error && (
@@ -1037,6 +998,63 @@ function CardDetail({
               )}
             </ol>
           </Section>
+          {/* the comment box: pinned to the bottom of the dialog's visible area at every scroll position (kanban.css) */}
+          <div ref={setDock} className="kb-comment-dock">
+            {!c.owner_session && (
+              <div className="kb-nolisten-warn" role="status">
+                <b>Nobody is listening: no session owns this card</b>
+                <span>
+                  Comments reach no agent{c.assignee ? ` — ${c.assignee} is assigned but has no session` : ""}. Owner
+                  session:
+                </span>
+                <OwnerSelect card={c} data={data} busy={busy} run={run} id={id} />
+                {data.sessions_error && <span className="ag-err">sessions: {data.sessions_error}</span>}
+              </div>
+            )}
+            <form
+              className="kb-comment"
+              onSubmit={(e: FormEvent) => {
+                e.preventDefault();
+                if (!comment.trim() || commentDictating) return;
+                void sendComment(comment, true);
+              }}
+            >
+              <Avatar name={me} email={me} type={typeOf(me)} />
+              <div className="kb-comment-box">
+                <MarkdownEditor
+                  value={comment}
+                  onChange={setComment}
+                  onUpload={uploadFile}
+                  dictate
+                  dictateToggle={dictateComment}
+                  ariaLabel="Comment"
+                  rows={2}
+                  placeholder="Write a comment… (markdown, @name)"
+                  onSubmit={() => {
+                    if (comment.trim()) void sendComment(comment, true);
+                  }}
+                  onDictatingChange={dictatingChanged}
+                />
+                {comment.trim() && (
+                  <div className="kb-row">
+                    <button
+                      className="btn primary small"
+                      disabled={busy || commentDictating}
+                      title={commentDictating ? "Stop the dictation first: its words are not final yet" : undefined}
+                    >
+                      Save
+                    </button>
+                    <span className="muted kb-hint">{commentDictating ? "stop the mic to save" : "Ctrl+Enter"}</span>
+                  </div>
+                )}
+              </div>
+            </form>
+            {delivered && (
+              <p className={`kb-delivered${delivered.startsWith("none") ? " none" : ""}`} role="status">
+                last comment · {delivered}
+              </p>
+            )}
+          </div>
         </div>
 
         <aside className="kb-side" aria-label="Card actions">

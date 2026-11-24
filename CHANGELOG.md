@@ -4,6 +4,14 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The comment box stays at the bottom of the card**: in the card dialog the comment box (with the no-listener warning)
+  sits at the card's bottom and stays there while the card scrolls, so writing a comment needs no scrolling; a long draft
+  scrolls inside the box. A "Write a comment" button, shown on keyboard focus at the top of the card, jumps to it.
+
 ## [0.1.0] - 2026-11-25
 
 The first public release, together with [busyyaks](https://github.com/robertziel/busyyaks) 0.1.0 (its reference host;

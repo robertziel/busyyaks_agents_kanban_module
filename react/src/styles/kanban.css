@@ -1083,8 +1083,9 @@
   box-shadow: var(--ak-menu-shadow, var(--ak-shadow-card));
   overflow-y: auto;
   overflow-x: hidden;
-  /* --kb-acts-h = the sticky action block's height, set by CardDialog while it is shown; none shown → no padding */
-  scroll-padding-bottom: var(--kb-acts-h, 0px);
+  /* --kb-acts-h / --kb-dock-h = the sticky action block's and comment box's heights, set by CardDialog while shown. Side
+     by side here (the taller one counts); stacked on a phone (the 760px rule adds them) */
+  scroll-padding-bottom: max(var(--kb-acts-h, 0px), var(--kb-dock-h, 0px));
 }
 .ak-root .kb-dialog::backdrop {
   background: rgba(0, 0, 0, 0.4);
@@ -1134,10 +1135,16 @@
 }
 /* every one-column grid in the dialog is minmax(0, 1fr): an implicit auto track grows to its widest content's min-content
    (a wide markdown table in the handoff QA), which pushed the main column under the rail and scrolled the dialog sideways */
+/* a flex column stretched to the body's height: the comment box is its last item, at the card's bottom on a short card
+   too, and sticks there on a long one (no overflow here: it would become the sticky's scroll port) */
 .ak-root .kb-main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
   gap: 16px;
+  min-width: 0;
+}
+.ak-root .kb-main > * {
   min-width: 0;
 }
 /* a wide screen gets a wider dialog and rail: the main column fits a 3-column QA table, the rail's rows stop wrapping */
@@ -1988,6 +1995,59 @@
 }
 
 /* activity */
+.ak-root .kb-comment-dock {
+  position: sticky;
+  bottom: 0;
+  z-index: 1; /* under the action bar (2) and the editor's menus */
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  padding: 10px 0 12px;
+  background: var(--ak-panel);
+  box-shadow: 0 -1px 0 var(--ak-line);
+  max-height: 60vh; /* never the whole dialog: what does not fit scrolls inside the box */
+  overflow-y: auto;
+}
+/* shown only on keyboard focus */
+.ak-root .kb-skip-comment:not(:focus-visible) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+/* typing in the box: its caret is already on screen. With the padding the browser reads the caret as covered by the box
+   itself and scrolls the card on every keystroke */
+.ak-root .kb-dialog:has(.kb-comment-dock:focus-within) {
+  scroll-padding-bottom: 0;
+}
+/* a long draft scrolls inside the box: the card stays readable above it */
+.ak-root .kb-detail .kb-comment-dock .mde .mde-area > textarea,
+.ak-root .kb-comment-dock .mde-preview {
+  max-height: min(30vh, 240px);
+  overflow-y: auto;
+}
+/* a phone: the draft shares the height with the action bar */
+@media (max-width: 760px) and (min-height: 701px) {
+  .ak-root .kb-detail .kb-comment-dock .mde .mde-area > textarea,
+  .ak-root .kb-comment-dock .mde-preview {
+    max-height: 20vh;
+  }
+}
+/* a short screen: a smaller draft, and while typing only the editor, Save and the warning's headline */
+@media (max-height: 700px) {
+  .ak-root .kb-detail .kb-comment-dock .mde .mde-area > textarea,
+  .ak-root .kb-comment-dock .mde-preview {
+    max-height: 16vh;
+  }
+  /* "Nobody is listening" keeps its headline: it is the one sign this comment reaches no agent */
+  .ak-root .kb-comment-dock:has(textarea:focus) :is(.kb-nolisten-warn > :not(b), .kb-delivered) {
+    display: none;
+  }
+}
 .ak-root .kb-comment {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -2362,6 +2422,25 @@
   .ak-root .kb-side-meta,
   .ak-root .kb-side .kb-owner-panel {
     grid-column: 1 / -1;
+  }
+  /* stacked: the comment box rests on the action bar, edge to edge. The main column's blocks join the body's flex column
+     (like the rail's), so the box is held over the rail's fields too, not only while the main column is on screen */
+  .ak-root .kb-dialog {
+    scroll-padding-bottom: calc(var(--kb-acts-h, 0px) + var(--kb-dock-h, 0px));
+  }
+  .ak-root .kb-main {
+    display: contents;
+  }
+  .ak-root .kb-side > .kb-side-acts {
+    order: 2;
+  }
+  .ak-root .kb-comment-dock {
+    order: 1;
+    bottom: var(--kb-acts-h, 0px);
+    /* the action bar stays on screen while typing: the box takes what is left, and some of the card stays readable */
+    max-height: calc(100vh - var(--kb-acts-h, 0px) - 160px);
+    margin-inline: calc(-1 * var(--kb-gutter));
+    padding-inline: var(--kb-gutter);
   }
   /* the side + bottom gutter, one value: the action bar below cancels exactly these to reach the dialog's edges */
   .ak-root .kb-detail {
