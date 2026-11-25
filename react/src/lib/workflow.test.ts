@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ApprovalStep } from "../types";
-import { approveLabel, approveTitle, operatorMoves, stepAt } from "./workflow";
+import { approveLabel, approveTitle, commentActions, operatorMoves, stepAt } from "./workflow";
 
 const label = (k: string) =>
   ({ review: "Human review", merged: "Merged", await: "Awaiting merge", done: "Done" })[k] ?? k;
@@ -45,6 +45,24 @@ describe("operatorMoves", () => {
     expect(operatorMoves(ts, step, false)).toEqual(operatorMoves(ts));
     expect(operatorMoves(ts, null, true)).toEqual(operatorMoves(ts));
   });
+});
+
+describe("commentActions", () => {
+  const ca = (name: string, to: string, by = "operator") => ({ ...out(name, to, by), comment: true });
+  it("lists the operator's comment: true transitions, one per name + target, in the declared order", () =>
+    expect(
+      commentActions([
+        out("Approve", "merged"),
+        ca("Rework", "doing"),
+        ca("Changes requested", "author", "any"),
+        ca("Rework", "doing"),
+        ca("Bounce", "merged", "agent"),
+      ]).map((a) => [a.label, a.move]),
+    ).toEqual([
+      ["Comment & Rework → doing", { transition: "Rework", column: "doing" }],
+      ["Comment & Changes requested → author", { transition: "Changes requested", column: "author" }],
+    ]));
+  it("is empty when the column has none", () => expect(commentActions(ts)).toEqual([]));
 });
 
 describe("stepAt", () => {

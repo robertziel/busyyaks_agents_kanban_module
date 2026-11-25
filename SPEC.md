@@ -119,7 +119,21 @@ two targets from one column (case-insensitive like the lookup), > 200. Every mov
 an edge for the actor (`Store#move_check!`: agent gates → workflow → parent dependency; ask / handoff run it BEFORE
 writing, so a refusal leaves nothing behind); `move(transition: "Start work")` resolves a name. The engine's own moves
 bypass the graph (watchdog release, answer-by-comment, dialog question / expiry, dependency promotion). A card JSON
-carries `transitions: [{name, to, to_label, by}]` out of its column.
+carries `transitions: [{name, to, to_label, by}]` out of its column (+ `comment: true` on a comment action).
+
+**Comment actions**: an optional `comment: true` on a transition (absent = false; `false` is never written
+out) makes it a COMMENT ACTION — the operator's comment box offers "Comment & <name> → <to label>" beside the plain
+"Comment" (which moves nothing). Refused (`Invalid`): a non-boolean, `by: agent` (the comment box is the operator's),
+`to: "*"` (one target). Stored in `board_transitions.comment` (Schema v18, 0/1). `Store#comment(id, body:, author:,
+operator: true, transition:, column:)` — `transition` must name a comment action out of the card's column for the
+operator (else `Denied` listing the column's comment actions) — posts the comment, then `move`s along that edge, in ONE
+transaction: any refusal of the move (every rule `Store#move` asks, the green-CI step included) posts nothing. The owner
+gets ONE ping (the comment + "moved A → B", the coalescing of § Pings). `Api#comment(id, {body, transition, column?})`
+→ 201 + `counts` when the card moved; 422 with the reason. A comment action may be an approval step's own transition
+("Approve" with a comment): the move is that explicit approval, so a gate with `requires_green_ci` still asks CI and
+a refusal posts nothing. React: `KanbanApi.comment(id, body, move?)`,
+`commentActions(card.transitions)`; the editor's transition panel has a "Comment action" checkbox (off and locked for
+an agents-only edge or a fan-out).
 
 **Repository** (`BoardRepo.new(db, tables:, host:, known:)`): `fetch(slug)` = the project's rows, else — only for a
 slug the host's `known` port confirms is a project (never a ghost row) — the TEMPLATE (slug `""`) instantiated as the
@@ -161,7 +175,7 @@ cards returned to the column of their last move into it, flagged; handoff / appr
 
 `HostConfig#digest` = sha256 of the canonical JSON the client receives (`to_h`); a host may pin it.
 
-## 3. Tables (`Schema`, v17)
+## 3. Tables (`Schema`, v18)
 
 `cards` (+ `parent_id`, `metadata` JSON text since v2), `card_activity`, `board_labels`, `checklists`,
 `checklist_items`, `card_pings`, `card_attachments`, `session_dialogs`, `agent_sessions` (v3: `session`, `socket`,
@@ -174,7 +188,7 @@ nothing about it is stored); v10 adds `cards.gate_head` (the approval PR's head 
 `cards.gate_state` (the last watch pass's view of the card's gate: `ready` or its hold); v11 adds `boards.archived_at` (a session board hidden after `session_boards.idle_hours` idle, § 2b); v12 adds
 `agent_sessions.lead_id` (the lead registration a session runs under), `needs_lead` (0/1: its type is `under` a lead),
 `lead_key_digest` (a lead's key, SHA-256 hex) and the CHECK `needs_lead = 0 OR lead_id IS NOT NULL`; v13 adds the progress watch's stretch on the card — `cards.progress_at`, `progress_marks` (JSON `{kind => {key, text, at}}`), `progress_pinged_at`, `progress_commented_at`, `progress_stale_at`, `progress_error`; v14 is a data step (no DDL): `cards.metadata.prs` becomes a list (§ 9 v14); v15 adds `cards.on_hold_at` /
-`on_hold_by` (§ 9 v15); v16 adds `board_columns.requires_green_ci` (0/1, null = 0: a gate asks CI only where its board says so, § 2 Green CI — no data step, every gate starts at 0); v17 adds `cards.worker_wait_at` / `worker_wait_told_at` and clears every lead assignee (§ 9 v17); v5's `workflows` is carried over and dropped by `BoardRepo#seed!`) — epochs as integers. `migrate!(db, prefix:,
+`on_hold_by` (§ 9 v15); v16 adds `board_columns.requires_green_ci` (0/1, null = 0: a gate asks CI only where its board says so, § 2 Green CI — no data step, every gate starts at 0); v17 adds `cards.worker_wait_at` / `worker_wait_told_at` and clears every lead assignee (§ 9 v17); v18 adds `board_transitions.comment` (0/1, null = 0: a comment action, § 2 Comment actions — no data step); v5's `workflows` is carried over and dropped by `BoardRepo#seed!`) — epochs as integers. `migrate!(db, prefix:,
 to: VERSION)`: a host migration is PINNED to the step it introduced (`to: 5` still creates `workflows`, `to: 6` the
 boards tables), so a fresh DB replays the host's migrations step by step and a rollback lands on that version's shape, JSON as text, done flags 0/1, portable DDL (`text: true` where > 255 chars may occur). `migrate!` is idempotent by introspection; the
 host's own ledger records each run. Prefix `""` = the unprefixed table names (a host whose tables already carry them needs no data move).
@@ -476,6 +490,14 @@ primitives, for a host without its own).
 ## 9. Breaking changes for hosts (config / API)
 
 Newest first; a heading names the `Schema::VERSION` step when the change brought one.
+
+### Schema v18 — comment actions
+
+- `board_transitions.comment` (Integer 0/1, null = 0): a host migration calls `migrate!(db, prefix:, to: 18)`; no
+  data step — no transition is a comment action until a board sets `comment: true` (§ 2 Comment actions).
+- `Api#comment` takes `transition` (+ `column`) beside `body`; the React port's `KanbanApi.comment` takes an optional
+  third argument `{transition, column}` — a host binding it passes both on. The comment box's button reads
+  "Comment" (was "Save").
 
 ### Schema v17 — a lead is never a card's assignee
 

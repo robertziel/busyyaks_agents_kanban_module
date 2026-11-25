@@ -767,7 +767,7 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
                     { value: "*", label: "any column" },
                   ]}
                   value={selTr.to}
-                  onChange={(v) => setTr(selIdx, { to: v })}
+                  onChange={(v) => setTr(selIdx, v === "*" ? { to: v, comment: undefined } : { to: v })}
                   ariaLabel="Transition to"
                 />
               </label>
@@ -776,9 +776,33 @@ export function BoardEditor({ slug, onClose, onSaved }: { slug: string; onClose:
                 <Select
                   options={ACTORS}
                   value={selTr.by}
-                  onChange={(v) => setTr(selIdx, { by: v as WorkflowActor })}
+                  onChange={(v) =>
+                    // a comment action is the operator's: an agent-only edge drops it (the engine refuses it there)
+                    setTr(selIdx, v === "agent" ? { by: v, comment: undefined } : { by: v as WorkflowActor })
+                  }
                   ariaLabel="Transition taken by"
                 />
+              </label>
+              <label
+                className="kb-side-field kb-be-check"
+                title={
+                  selTr.by === "agent"
+                    ? "Only a transition the operator takes (operator or any) can be a comment action"
+                    : selTr.to === "*"
+                      ? "A comment action needs one target column, not any column"
+                      : "On: the card's comment box offers “Comment & " +
+                        (selTr.name || "<name>") +
+                        "”: the comment is posted and the card moves along this transition in one go"
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={!!selTr.comment}
+                  disabled={selTr.by === "agent" || selTr.to === "*"}
+                  aria-label="Comment action"
+                  onChange={(e) => setTr(selIdx, { comment: e.target.checked ? true : undefined })}
+                />
+                <span>Comment action</span>
               </label>
               <div className="kb-be-row">
                 <span className="spacer" />

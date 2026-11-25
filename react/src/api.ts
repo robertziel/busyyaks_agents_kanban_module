@@ -57,7 +57,9 @@ export interface KanbanApi {
   // optional: the operator takes one assigned PR off the card, with the reason (logged on the card); absent = no action
   prUnassign?: (id: number, prUrl: string, reason: string) => Promise<CardData>;
   dialogAnswer(id: number, key: string): Promise<CardData>;
-  comment(id: number, body: string): Promise<CardData>; // + delivered
+  // + delivered. move: a comment action out of the card's column — the comment posted and the card moved
+  // along that transition in one go ({transition, column} sent with the body), or nothing (422 with the reason)
+  comment(id: number, body: string, move?: { transition: string; column: string }): Promise<CardData>;
   commentUpdate(commentId: number, body: string): Promise<CardData>;
   commentDelete(commentId: number): Promise<CardData>;
   checklistCreate(cardId: number, title: string): Promise<CardData>;

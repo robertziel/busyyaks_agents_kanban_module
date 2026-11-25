@@ -144,7 +144,8 @@
       "name": "Changes requested",
       "from": "local_human_review",
       "to": "local_author",
-      "by": "operator"
+      "by": "operator",
+      "comment": true
     },
     {
       "name": "Deploy locally",
@@ -162,7 +163,8 @@
       "name": "Deploy failed",
       "from": "deploy_check",
       "to": "doing",
-      "by": "operator"
+      "by": "operator",
+      "comment": true
     },
     {
       "name": "Public PR opened",
@@ -198,7 +200,8 @@
       "name": "Changes requested",
       "from": "public_human_review",
       "to": "public_author",
-      "by": "operator"
+      "by": "operator",
+      "comment": true
     },
     {
       "name": "Merge",
@@ -210,7 +213,8 @@
       "name": "Reopen",
       "from": "done",
       "to": "doing",
-      "by": "operator"
+      "by": "operator",
+      "comment": true
     },
     {
       "name": "Rework",
@@ -225,7 +229,8 @@
         "awaiting_merge"
       ],
       "to": "doing",
-      "by": "operator"
+      "by": "operator",
+      "comment": true
     },
     {
       "name": "Cancel",

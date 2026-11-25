@@ -48,6 +48,29 @@ export function operatorMoves(ts: Out[], step: ApprovalStep | null = null, gated
   return moves;
 }
 
+// The comment box's actions: the transitions out of the card's column the board marks `comment: true` that
+// the OPERATOR may take — "Comment & <name> → <column>", one per name + target, in the declared order. The workflow
+// decides which a column offers; plain "Comment" (no move) is always the box's own.
+export type CommentAction = { key: string; label: string; title: string; move: { transition: string; column: string } };
+type CommentOut = Out & { comment?: boolean };
+export function commentActions(ts: CommentOut[]): CommentAction[] {
+  const seen = new Set<string>();
+  const out: CommentAction[] = [];
+  for (const t of ts) {
+    if (!t.comment || t.by === "agent") continue;
+    const key = `${t.name.toLowerCase()}:${t.to}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      key,
+      label: `Comment & ${t.name} → ${t.to_label}`,
+      title: `Post the comment and move the card along “${t.name}” to ${t.to_label}; its owner gets one ping with both`,
+      move: { transition: t.name, column: t.to },
+    });
+  }
+  return out;
+}
+
 // ── approval steps (Board#approvals) ─────────────────────────────────────────────────────────
 
 // The approval step a card is AT (the card dialog's approve box): waiting in the step's `from` (a gate); approved in

@@ -29,12 +29,15 @@ columns:
 # transitions: the named edges a card may take ({name, from, to, by}; from a column key, a list of keys or "*" = any;
 # to a key or "*"; by operator | agent | any). A move with no edge for the actor is refused with the edges there are;
 # the gates (the types above) still run first. The last edge keeps this board free.
+# Optional `comment: true`: a COMMENT ACTION — the operator's comment box offers "Comment & <name>": the
+# comment is posted and the card moves along the transition in one go (refused → nothing posted). Only on an edge the
+# operator takes (by operator | any) with one target column; absent = false. Plain "Comment" (no move) is always there.
 transitions:
   - { name: Prioritise,       from: backlog,           to: todo,        by: any }
   - { name: Start work,       from: todo,              to: doing,       by: any }
   - { name: Send for QA,      from: doing,             to: qa,          by: any }
   - { name: Hand over,        from: [doing, qa],       to: human_check, by: agent }
-  - { name: Fixes needed,     from: [qa, human_check], to: doing,       by: any }
+  - { name: Fixes needed,     from: [qa, human_check], to: doing,       by: any, comment: true }
   - { name: Approve,          from: human_check,       to: ready,       by: operator }
   - { name: Merge,            from: ready,             to: merged,      by: any }
   - { name: Move,             from: "*",               to: "*",         by: any }

@@ -86,7 +86,11 @@ function fakeApi(data: BoardData, cards: Card[]): KanbanApi & { calls: string[] 
     setOwner: (id, s) => note(`setOwner ${id} ${s}`, cardData(id)),
     approve: (id, a, f) => note(`approve ${id} ${a}${f ? " force" : ""}`, cardData(id)),
     dialogAnswer: (id, k) => note(`dialogAnswer ${id} ${k}`, cardData(id)),
-    comment: (id, body) => note(`comment ${id} ${body}`, { ...cardData(id), delivered: "queued: s1" }),
+    comment: (id, body, move) =>
+      note(`comment ${id} ${body}${move ? ` & ${move.transition} → ${move.column}` : ""}`, {
+        ...cardData(id),
+        delivered: "queued: s1",
+      }),
     commentUpdate: (id) => note(`commentUpdate ${id}`, cardData(1)),
     commentDelete: (id) => note(`commentDelete ${id}`, cardData(1)),
     checklistCreate: (id, t) => note(`checklistCreate ${id} ${t}`, cardData(id)),
@@ -782,6 +786,34 @@ describe("Board", () => {
     ).toEqual(["In progress", "Send for QA → QA"]); // no agent-only "Hand over"
     fireEvent.click(within(list).getByRole("option", { name: "Send for QA → QA" }));
     await waitFor(() => expect(api.calls).toContain("move 6 qa via Send for QA"));
+  });
+
+  it("the comment box offers Comment plus the column's comment actions (the workflow's comment: true); each posts and moves", async () => {
+    const cards = [
+      card({
+        id: 8,
+        column: "human_check",
+        title: "CA",
+        transitions: [
+          { name: "Approve", to: "ready", to_label: "Ready to merge", by: "operator" },
+          { name: "Fixes needed", to: "doing", to_label: "In progress", by: "any", comment: true },
+          { name: "Bounce", to: "qa", to_label: "QA", by: "agent", comment: true },
+        ],
+      }),
+    ];
+    const api = fakeApi(boardData(coding, cards), cards);
+    render(<Host api={api} view={{ card: 8, panel: null, archived: false }} />);
+    const box = await screen.findByRole("textbox", { name: "Comment" });
+    expect(screen.queryByRole("button", { name: /Comment &/ })).toBeNull(); // nothing typed: no buttons
+    fireEvent.change(box, { target: { value: "footer overlaps" } });
+    const acts = screen.getAllByRole("button", { name: /^Comment/ }).map((b) => b.textContent);
+    expect(acts).toEqual(["Comment", "Comment & Fixes needed → In progress"]); // no agent-only edge, no plain transition
+    fireEvent.click(screen.getByRole("button", { name: "Comment & Fixes needed → In progress" }));
+    await waitFor(() => expect(api.calls).toContain("comment 8 footer overlaps & Fixes needed → doing"));
+    await waitFor(() => expect(box).toHaveValue(""));
+    fireEvent.change(box, { target: { value: "just a note" } });
+    fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+    await waitFor(() => expect(api.calls).toContain("comment 8 just a note"));
   });
 
   it("a card with no transition out of its column for the operator has its Transition list disabled, saying so", async () => {

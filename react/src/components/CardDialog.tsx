@@ -34,7 +34,15 @@ import { CardLinks } from "./CardLinkRow";
 import { KbIcon, type IconName } from "./KbIcon";
 import { MarkdownEditor, UploadChips, type DictateHandle } from "./MarkdownEditor";
 import { matchesCombo, type KeyCombo } from "../lib/shortcut";
-import { approvedNext, approveLabel, approveTitle, forceTitle, operatorMoves, stepAt } from "../lib/workflow";
+import {
+  approvedNext,
+  approveLabel,
+  approveTitle,
+  commentActions,
+  forceTitle,
+  operatorMoves,
+  stepAt,
+} from "../lib/workflow";
 import { Select } from "./Select";
 
 export type Panel = "labels" | "due" | "members" | "checklist" | "cover" | null;
@@ -196,7 +204,7 @@ function CardDetail({
   const [title, setTitle] = useState<string | null>(null);
   const [desc, setDesc] = useState<string | null>(null); // null = not editing
   const [comment, setComment] = useState("");
-  const [commentDictating, setCommentDictating] = useState(false); // Save waits for the dictation's final text
+  const [commentDictating, setCommentDictating] = useState(false); // Comment (and each comment action) waits for the final text
   const dictatingChanged = useCallback(
     (on: boolean) => {
       setCommentDictating(on);
@@ -337,9 +345,10 @@ function CardDetail({
     return null;
   };
   // a comment (or an answer option): the server says who it pings — shown under the box, never silent
-  const sendComment = (body: string, clear: boolean) =>
+  // move: a comment action — the comment posted and the card moved along that transition in one request
+  const sendComment = (body: string, clear: boolean, move?: { transition: string; column: string }) =>
     run(async () => {
-      const r = await api.comment(id, body);
+      const r = move ? await api.comment(id, body, move) : await api.comment(id, body);
       setDelivered(r.delivered ?? null);
       if (clear) setComment("");
     });
@@ -361,6 +370,8 @@ function CardDetail({
     gates.approvals.find((a) => a.from === c.column) ?? null,
     shape.rules.green_ci.includes(c.column),
   );
+  // the comment box's actions: the board's `comment: true` transitions out of this column
+  const actions = commentActions(c.transitions ?? []);
   const moveOptions = [
     { value: c.column, label: colLabel(c.column) },
     ...transitionMoves.map(({ value, label }) => ({ value, label })),
@@ -1040,11 +1051,27 @@ function CardDetail({
                     <button
                       className="btn primary small"
                       disabled={busy || commentDictating}
-                      title={commentDictating ? "Stop the dictation first: its words are not final yet" : undefined}
+                      title={
+                        commentDictating
+                          ? "Stop the dictation first: its words are not final yet"
+                          : "Post the comment; the card stays where it is and its owner is pinged"
+                      }
                     >
-                      Save
+                      Comment
                     </button>
-                    <span className="muted kb-hint">{commentDictating ? "stop the mic to save" : "Ctrl+Enter"}</span>
+                    {actions.map((a) => (
+                      <button
+                        key={a.key}
+                        type="button"
+                        className="btn small kb-comment-action"
+                        disabled={busy || commentDictating}
+                        title={commentDictating ? "Stop the dictation first: its words are not final yet" : a.title}
+                        onClick={() => void sendComment(comment, true, a.move)}
+                      >
+                        {a.label}
+                      </button>
+                    ))}
+                    <span className="muted kb-hint">{commentDictating ? "stop the mic to send" : "Ctrl+Enter"}</span>
                   </div>
                 )}
               </div>

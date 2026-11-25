@@ -301,7 +301,7 @@ module AgentsKanban
           "transitions" => transitions_t.where(project_slug: slug).order(:position, :id).all.map do |r|
             from = JSON.parse(r[:from_keys])
             { "name" => names.fetch(r[:name], r[:name]), "from" => from.is_a?(Array) ? from.map(&key) : key.(from),
-              "to" => key.(r[:to_key]), "by" => r[:by], }
+              "to" => key.(r[:to_key]), "by" => r[:by], **comment_of(r), }
           end,
         }
         b = begin
@@ -400,7 +400,7 @@ module AgentsKanban
             "hide_after_hours" => c[:hide_after_hours], **green_ci_of(c), }
         end
         transitions = trs.map do |r|
-          { "name" => r[:name], "from" => JSON.parse(r[:from_keys]), "to" => r[:to_key], "by" => r[:by] }
+          transition_of(r)
         end
         hash = { "columns" => columns, "transitions" => transitions }
         rs = reshape[slug]
@@ -506,7 +506,7 @@ module AgentsKanban
             "hide_after_hours" => c[:hide_after_hours], **green_ci_of(c), }
         end
         transitions = (trs[slug] || []).map do |r|
-          { "name" => r[:name], "from" => JSON.parse(r[:from_keys]), "to" => r[:to_key], "by" => r[:by] }
+          transition_of(r)
         end
         [slug, board!(slug, { "columns" => columns, "transitions" => transitions })]
       end
@@ -514,6 +514,14 @@ module AgentsKanban
 
     # a stored column's requires_green_ci: 1 = true; 0, null or a table before v16 = false (never asked)
     def green_ci_of(row) = row[:requires_green_ci].to_i == 1 ? { "requires_green_ci" => true } : {}
+
+    # a stored transition row → its declared hash
+    def transition_of(row)
+      { "name" => row[:name], "from" => JSON.parse(row[:from_keys]), "to" => row[:to_key], "by" => row[:by], **comment_of(row) }
+    end
+
+    # a stored transition's comment: 1 = a comment action; 0, null or a table before v18 = none
+    def comment_of(row) = row[:comment].to_i == 1 ? { "comment" => true } : {}
 
     def board!(slug, hash)
       Board.new(hash, host: @host)
@@ -561,9 +569,13 @@ module AgentsKanban
           row.merge!(Schema.legacy_xy(i)) if legacy_xy
           columns_t.insert(row)
         end
+        # a v6 – v17 table (the same replay, before its v18 step) has no comment: no transition is a comment action there
+        comment = transitions_t.columns.include?(:comment)
         board.workflow.to_a.each_with_index do |t, i|
-          transitions_t.insert(project_slug: slug, position: i, name: t["name"], from_keys: JSON.generate(t["from"]),
-                               to_key: t["to"], by: t["by"])
+          row = { project_slug: slug, position: i, name: t["name"], from_keys: JSON.generate(t["from"]), to_key: t["to"],
+                  by: t["by"], }
+          row[:comment] = t["comment"] ? 1 : 0 if comment
+          transitions_t.insert(row)
         end
       end
     end
