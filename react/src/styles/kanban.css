@@ -3358,6 +3358,14 @@
   white-space: normal;
   overflow-wrap: anywhere;
 }
+/* its place in the approved queue */
+.ak-root .kb-queue {
+  font-size: 11px;
+  padding: 0 0.45rem;
+  border-radius: var(--ak-radius-pill);
+  color: var(--ak-ink-dim);
+  background: rgba(var(--ak-ok-rgb), 0.08);
+}
 .ak-root .kb-approve {
   display: grid;
   gap: 6px;

@@ -154,7 +154,7 @@ cards returned to the column of their last move into it, flagged; handoff / appr
 
 | key | the rule it drives |
 |---|---|
-| `priorities`, `label_colors` | the enums (`gray` required) |
+| `priorities`, `label_colors` | the enums (`gray` required); `priorities` is also the RANK, first = highest (§ Priority orders our side) |
 | `system_author` | signs engine entries (`watchdog`, `ping`, dialog `question`, the template's copies), prefixes pings `[name]` |
 | `attachment_url_prefix` | `<prefix>/<id>` (view) and `<prefix>/<id>/download` in JSON, snippets, rendered markdown and the comment→attachment claim |
 | `launchers` `[{key,label,kind,command,args,via_shell}]` | the COMMANDS: `Launch.argv(config, type:, launcher:, prompt:)` is built by the launcher's `kind` (`Launch::KINDS`, one class per CLI family): `claude_code` = `[command, *args, ("--model", model), *extra, prompt, "--remote-control", session]`; `hermes` = `[command, *args, ("-m", model), *extra, ("-q", prompt)]` (no remote control); wrapped in `bash -ic` when `via_shell`. `args` / `extra` may set no option the kind sets itself (claude_code: `--model`, `--remote-control`; hermes: `-m`/`--model`, `-q`/`--query`/`--query-file`); claude_code's appended pair is LAST and wins (Claude Code takes a repeated option's last value — measured on 2.1.317). `Launch.plan` carries `kind` + `remote_control` (what the host checks came up) |
@@ -850,6 +850,25 @@ Newest first; a heading names the `Schema::VERSION` step when the change brought
   operator's Approve in place). Leaving the gate (the agent's move, or the operator's withdraw) ends it.
 - React: `Card.carried_on` (a "✓ approved · <owner> merging" / "→ <next>" badge, `carriedOnText`), `BoardData.approved`
   ("N approved · agent on it" beside "waiting for you").
+
+### Priority orders our side (no schema step)
+
+- Rank = the card's `priority` index in `priorities` (first = highest); none ranks last (`Store#priority_rank`); a
+  stored priority the host no longer lists is refused when the Store starts (`check_priorities!`: `ConfigError` naming the
+  value and its cards — never inside a shared pass), and `priority_rank` raises `Invalid` on one (never read as none). Order only: nothing is
+  refused, held or skipped for it.
+- Adoption: `register_session` (a type's `takes`) and `adopt_ownerless` take the cards by rank, then column, position,
+  id — a lead's `adopted` (its launch prompt's `{cards}`) and its `assigned` pings list the high cards first. The ping
+  to a lead about a worker that ended lists its cards by rank.
+- Pings: `next_pings` / `ping_order` — within each class (typed · operator · lead · rest) the higher-priority card's
+  row first, then the oldest; a row something may already have been typed from stays first. Across sessions: the
+  urgent class, then the head row's card rank, then the oldest.
+- The approved queue: the cards approved into the same column of a board (`approved_step`: their agents carry each
+  on — merge it, take the next step), by rank → `approved_at` → id (`Store#approved_queues`). Card JSON
+  `approved_queue` = `{column, position (1 = next), of, ahead: [{id, priority}]}` | null (decorated cards). The approve
+  ping of a card with cards ahead names them as of that approval ("Approved queue in <column> at this approval: n of m by priority, ahead of it: card #a
+  (high). A card ahead that can go now goes first; one held … does not hold this one"). `approved_ci_pass` asks by
+  rank. React: a "⇅ queue n/m" badge on the card face while it shares the column (`approvedQueueText`).
 
 ### blocked_external is not waiting for the operator (no schema step)
 

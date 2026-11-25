@@ -286,6 +286,9 @@ export type Card = {
   // approved by the operator in a gate whose next step is its agent's: not waiting for you — where the
   // agent takes it next (final = into the done column: it merges); null/absent = not such a card
   carried_on?: CarriedOn | null;
+  // its place among the cards approved into the same column: by priority, then the oldest approval — the
+  // order their agents carry them on (merge); order only, nothing is refused for it. null/absent = not approved there
+  approved_queue?: ApprovedQueue | null;
   question?: string | null;
   question_html?: string | null;
   question_options?: string[] | null;
@@ -534,3 +537,11 @@ export type SessionBoardsData = { idle_hours: number; slug_prefix: string; sessi
 
 // Card.carried_on: where its agent takes an approved gate card next (final = into the done column: it merges)
 export type CarriedOn = { next_column: ColumnKey; next_label: string; final: boolean };
+
+// Card.approved_queue: position 1 = next; ahead = the cards before it, in order
+export type ApprovedQueue = {
+  column: ColumnKey;
+  position: number;
+  of: number;
+  ahead: { id: number; priority: string | null }[];
+};

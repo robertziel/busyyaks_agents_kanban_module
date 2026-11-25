@@ -17,6 +17,10 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
   transition in the board (editor: "Comment action"; Schema v18 `board_transitions.comment`), never in code; refused on
   an agents-only edge or a fan-out. `Api#comment` takes `transition` / `column`; `KanbanApi.comment(id, body, move?)`.
   The local_v4 fixture marks Changes requested, Deploy failed, Reopen and Rework; `board.example.yml` marks Fixes needed.
+- **Priority orders our side**: a card's priority (the `priorities` order, none last) decides which card a session
+  adopts first, which ping is typed first, and the **approved queue** — the cards approved into one column (Awaiting
+  merge: the merge order) by priority, then the oldest approval. Card JSON `approved_queue` `{column, position, of,
+  ahead}`; the approve ping names the cards ahead; a "⇅ queue n/m" badge on the card face. Order only, nothing refused.
 
 ### Changed (breaking for hosts)
 

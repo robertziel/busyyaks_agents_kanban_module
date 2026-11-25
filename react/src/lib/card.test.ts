@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   activityAnchor,
   activityAnchorId,
+  approvedQueueText,
   cardFaceClass,
   carriedOnText,
   jumpNeedsDetails,
@@ -103,5 +104,26 @@ describe("carriedOnText", () => {
     expect(() =>
       carriedOnText({ id: 7, owner_session: null }, { next_column: "done", next_label: "Done", final: true }),
     ).toThrow(/: carried_on without an owner session$/);
+  });
+});
+
+// the approved queue on a card face — only while it shares its column with other approved cards
+describe("approvedQueueText", () => {
+  it("shows the position and names the cards ahead with their priority", () => {
+    expect(
+      approvedQueueText({
+        column: "awaiting_merge",
+        position: 2,
+        of: 3,
+        ahead: [{ id: 12, priority: "high" }],
+      }),
+    ).toEqual({ text: "queue 2/3", title: "approved queue by priority: 2 of 3 — ahead: #12 (high)" });
+  });
+  it("says next for the head, and nothing for a card alone or not queued", () => {
+    expect(approvedQueueText({ column: "m", position: 1, of: 2, ahead: [] })?.title).toBe(
+      "approved queue by priority: 1 of 2 — next",
+    );
+    expect(approvedQueueText({ column: "m", position: 1, of: 1, ahead: [] })).toBeNull();
+    expect(approvedQueueText(null)).toBeNull();
   });
 });
