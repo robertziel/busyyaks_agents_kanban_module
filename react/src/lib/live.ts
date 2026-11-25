@@ -1,13 +1,16 @@
 // Live updates by polling a revision: every `every` ms (tab visible, not paused) `fetchRev()` → the rev string; when
-// it differs from the last one seen, call onChange (the caller refetches). Pausing (a drag, a save in flight) only
+// it differs from the last one SHOWN, call onChange (the caller refetches). Pausing (a drag, a save in flight) only
 // delays: the next poll after it ends catches up. A failed poll is reported, never treated as "no change".
+// A revision counts as shown only once onChange settled: one that rejects (the refetch failed) leaves the last shown
+// revision as it was, so the next poll refetches again, and its error is the live state's ("refresh failed: …") —
+// never a board that silently keeps a card in its old column under a green live mark.
 import { useEffect, useRef, useState } from "react";
 
 export type LiveState = { at: number | null; error: string | null };
 
 export function useLiveRev(
   fetchRev: (() => Promise<string>) | null,
-  onChange: () => void,
+  onChange: () => void | Promise<unknown>,
   opts: { every?: number; paused?: () => boolean } = {},
 ): LiveState {
   const every = opts.every ?? 3000;
@@ -36,7 +39,16 @@ export function useLiveRev(
       try {
         const rev = await fetcher.current();
         if (stop) return;
-        if (last.current !== null && rev !== last.current) change.current();
+        if (last.current !== null && rev !== last.current) {
+          try {
+            await change.current();
+          } catch (e) {
+            if (!stop)
+              setState((s) => ({ ...s, error: `refresh failed: ${e instanceof Error ? e.message : String(e)}` }));
+            return; // `last` stays: the next poll refetches
+          }
+          if (stop) return;
+        }
         last.current = rev;
         setState({ at: Date.now(), error: null });
       } catch (e) {
