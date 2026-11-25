@@ -2,6 +2,7 @@
 
 require "json"
 require "sequel"
+require_relative "column_types"
 
 module AgentsKanban
   # The engine's tables, as plain Sequel DDL the HOST runs from its own migration (Hanami/ROM or Rails/Sequel alike):
@@ -48,7 +49,10 @@ module AgentsKanban
     # operator); a data step (lead_assignees!): every open card whose assignee is a lead's agent name loses it, owner kept
     # 18 = + board_transitions.comment (0/1, null = 0): the transition is a comment action — the operator's
     # comment box offers "Comment & <name>" (Store#comment(transition:)); no data step: no transition starts as one
-    VERSION = 18
+    # 19 = a data step, no DDL (parked_exits!): every stored board's transitions out of a column only the
+    # operator leaves (ColumnTypes operator_exit: parked) become the operator's — `by: agent|any` there was a way for an
+    # agent to prioritise Backlog work; Board refuses such a workflow from v19 on, on save and on load
+    VERSION = 19
     TABLES = %i[cards card_activity board_labels checklists checklist_items card_pings card_attachments session_dialogs
                 agent_sessions ci_watches boards board_columns board_transitions].freeze
 
@@ -108,6 +112,7 @@ module AgentsKanban
         lead_assignees!(db, prefix: prefix, lead_types: lead_types, now: now)
       end
       add_missing(db, t[:board_transitions], [[:comment, Integer]]) if to >= 18
+      parked_exits!(db, prefix: prefix, now: now) if to >= 19
       t
     end
 
@@ -154,6 +159,85 @@ module AgentsKanban
       raise ArgumentError, "step 17 cleared a lead assignee on cards #{ids.sort.join(', ')}: rolling back would restore a " \
                            "lead as a card's assignee — refused (card 612)"
     end
+
+    # v19 (idempotent: a board with no agent way out of a parked column is left as it is): for every stored
+    # board (the template and session boards too), each transition `by: agent|any` whose sources include a column of a
+    # type only the operator leaves (ColumnTypes operator_exit) — named, in a list, or under "*" — is split: its other
+    # sources keep their `by` (one source left = that key, several = the list; "*" becomes the list of the board's
+    # other columns in board order), and the parked sources become the operator's in a transition of the same name
+    # right after it — left out where an operator transition of that name and target already leaves them (no duplicate
+    # edge). A transition whose every source is parked simply turns `by: operator`. An edge into its own source is none
+    # (Workflow drops it), so `from: "*"` → a parked column is no way out of it and is kept. The changed boards record
+    # `by` / `now` as their last save. → the slugs changed.
+    def parked_exits!(db, prefix: "", by: "migration", now: Time.now.to_i)
+      t = tables(prefix)
+      closed = ColumnTypes::ALL.select(&:operator_exit).map(&:key)
+      changed = []
+      db.transaction do
+        db[t[:boards]].select_map(:project_slug).each do |slug|
+          keys = db[t[:board_columns]].where(project_slug: slug).order(:position, :id).select_map(%i[key type])
+          parked = keys.select { |_, ty| closed.include?(ty) }.map(&:first)
+          next if parked.empty?
+
+          rows = db[t[:board_transitions]].where(project_slug: slug).order(:position, :id).all
+                   .map { |r| r.slice(:name, :from_keys, :to_key, :by) }
+          out = parked_split(rows, keys.map(&:first), parked)
+          next if out == rows
+
+          db[t[:board_transitions]].where(project_slug: slug).delete
+          out.each_with_index { |r, i| db[t[:board_transitions]].insert(r.merge(project_slug: slug, position: i)) }
+          db[t[:boards]].where(project_slug: slug).update(updated_by: by, updated_at: now)
+          changed << slug
+        end
+      end
+      changed
+    end
+
+    # A board hash {columns, transitions} (string keys) with parked_split applied: what a migration that builds a board
+    # (BoardRepo#migrate_v3!, written before v19 but run by today's Board) stores, so it loads.
+    def parked_safe(hash)
+      closed = ColumnTypes::ALL.select(&:operator_exit).map(&:key)
+      keys = hash["columns"].map { |c| c["key"] }
+      parked = hash["columns"].select { |c| closed.include?(c["type"]) }.map { |c| c["key"] }
+      return hash if parked.empty?
+
+      rows = hash["transitions"].map do |t|
+        { name: t["name"], from_keys: JSON.generate(t["from"]), to_key: t["to"], by: t["by"] }
+      end
+      trs = parked_split(rows, keys, parked).map do |r|
+        { "name" => r[:name], "from" => JSON.parse(r[:from_keys]), "to" => r[:to_key], "by" => r[:by] }
+      end
+      hash.merge("transitions" => trs)
+    end
+
+    # The transition rows (name, from_keys JSON, to_key, by) with every agent way out of `parked` made the operator's.
+    def parked_split(rows, keys, parked)
+      ops = rows.select { |r| r[:by] == "operator" }
+      covered = lambda do |name, to, k|
+        ops.any? do |o|
+          f = JSON.parse(o[:from_keys])
+          o[:name].casecmp?(name) && o[:to_key] == to && (f == "*" || Array(f).include?(k))
+        end
+      end
+      rows.flat_map do |r|
+        next [r] if r[:by] == "operator"
+
+        f = JSON.parse(r[:from_keys])
+        sources = f == "*" ? keys : Array(f)
+        out = sources.select { |k| parked.include?(k) && r[:to_key] != k }
+        next [r] if out.empty?
+
+        rest = sources - out
+        mine = out.reject { |k| covered.(r[:name], r[:to_key], k) }
+        kept = rest.empty? ? [] : [r.merge(from_keys: from_json(rest))]
+        op = mine.empty? ? [] : [r.merge(from_keys: from_json(mine), by: "operator")]
+        ops.concat(op) # a later row of the same name and target finds these covered too
+        kept + op
+      end
+    end
+
+    # a transition's sources as stored: one key alone, several as a list
+    def from_json(keys) = JSON.generate(keys.size == 1 ? keys.first : keys)
 
     PR_URL = %r{\Ahttps://github\.com/([\w.-]+/[\w.-]+)/pull/([1-9]\d*)\z}
 

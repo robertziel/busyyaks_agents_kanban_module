@@ -20,6 +20,12 @@ class BoardTest < Minitest::Test
   def host_raw = JSON.parse(JSON.generate(config.to_h))
   def col(key, type, label: key.capitalize) = { "key" => key, "label" => label, "type" => type }
   def move = { "name" => "Move", "from" => "*", "to" => "*", "by" => "any" }
+  # the catch-all on a board with parked columns: free for agents everywhere but out of them
+  def free(cols)
+    parked = cols.select { |c| c["type"] == "parked" }.map { |c| c["key"] }
+    [{ "name" => "Move", "from" => cols.map { |c| c["key"] } - parked, "to" => "*", "by" => "any" },
+     { "name" => "Move", "from" => parked, "to" => "*", "by" => "operator" },]
+  end
   def steps(board) = board.approvals.map { |a| [a.from, a.to, a.then, a.name, a.final] }
 
   # ── approval steps: a gate's ONE forward operator exit ────────────────────────────────────────
@@ -76,7 +82,7 @@ class BoardTest < Minitest::Test
   def test_an_approval_step_is_one_forward_operator_exit_of_a_gate
     cols = [col("w", "working"), col("g", "gate"), col("r", "review"), col("s", "review"), col("p", "parked"),
             col("d", "done"), col("c", "cancelled"),]
-    b = ->(ts) { B.new({ "columns" => cols, "transitions" => [move] + ts }, host: config) }
+    b = ->(ts) { B.new({ "columns" => cols, "transitions" => free(cols) + ts }, host: config) }
     go = ->(to, by: "operator", from: "g") { { "name" => "Go #{to}", "from" => from, "to" => to, "by" => by } }
     assert_equal [%w[g r]], b.([go.("r")]).approvals.map { |a| [a.from, a.to] }
     assert_nil b.([go.("r")]).approvals.first.then
@@ -222,7 +228,7 @@ host: config)
 
   def test_a_board_without_gates_derives_none_and_the_first_column_is_the_default
     cols = [col("inbox", "parked"), col("work", "working"), col("out", "done")]
-    b = B.new({ "columns" => cols, "transitions" => [move] }, host: config)
+    b = B.new({ "columns" => cols, "transitions" => free(cols) }, host: config)
     assert_equal "inbox", b.default_column
     assert_nil b.handoff
     assert_empty b.approvals

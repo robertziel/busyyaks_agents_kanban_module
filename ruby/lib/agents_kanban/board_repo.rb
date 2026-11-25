@@ -409,7 +409,8 @@ module AgentsKanban
           report["moved"] = remap_cards(slug, rs.fetch("cards"), cards_t, who, clock.call)
         end
         b = begin
-          Board.new(hash, host: @host)
+          # today's Board refuses an agent way out of a parked column (v19): the v3 board is stored without one
+          Board.new(Schema.parked_safe(hash), host: @host)
         rescue Invalid => e
           raise Invalid, "board of #{slug == Board::TEMPLATE ? 'the template' : slug} after v3: #{e.message}"
         end

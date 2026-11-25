@@ -48,7 +48,7 @@
       "name": "Prioritise",
       "from": "backlog",
       "to": "todo",
-      "by": "any"
+      "by": "operator"
     },
     {
       "name": "Start work",
@@ -88,9 +88,15 @@
     },
     {
       "name": "Move",
-      "from": "*",
+      "from": ["todo", "doing", "qa", "human_check", "ready", "merged"],
       "to": "*",
       "by": "any"
+    },
+    {
+      "name": "Move",
+      "from": "backlog",
+      "to": "*",
+      "by": "operator"
     }
   ]
 }

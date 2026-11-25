@@ -28,9 +28,15 @@
   "transitions": [
     {
       "name": "Move",
-      "from": "*",
+      "from": ["queued", "running", "done"],
       "to": "*",
       "by": "any"
+    },
+    {
+      "name": "Move",
+      "from": "waiting",
+      "to": "*",
+      "by": "operator"
     }
   ]
 }

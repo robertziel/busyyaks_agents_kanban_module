@@ -279,7 +279,7 @@ class LeadFirstTest < Minitest::Test
   end
 
   def test_a_stale_key_dies_with_its_lead
-    id = kb.create(slug: "g/r", title: "x", by: "op", column: "backlog")
+    id = kb.create(slug: "g/r", title: "x", by: "op", column: "todo")
     lead, key = lead!
     @live.delete(lead)
     kb.sessions_sync(@live.to_set, grace: 0)
@@ -289,7 +289,7 @@ class LeadFirstTest < Minitest::Test
 
   def test_kanban_spawn_respects_the_caps_and_a_failed_start_releases_the_card
     lead, key = lead!
-    ids = Array.new(3) { |i| kb.create(slug: "g/r", title: "c#{i}", by: "op", column: "backlog") }
+    ids = Array.new(3) { |i| kb.create(slug: "g/r", title: "c#{i}", by: "op", column: "todo") }
     ids.first(2).each { |i| @live << spawn(i, lead)["session"] }
     e = assert_raises(AgentsKanban::Denied) { spawn(ids[2], lead) }
     assert_match(%r{2/2 worker sessions are running}, e.message)

@@ -83,7 +83,18 @@ class ToolsTest < Minitest::Test
                  c.values_at("column", "column_label", "position", "labels", "metadata")
     assert_equal %w[agent-a tl_g_r], c.values_at("assignee", "owner_session"),
                  "an agent-made card is owned by its session from the start"
-    ok("kanban_create", project: "g/r", title: "Other", author: "agent-a", tmux_session: "tl_g_r", column: "todo")
+    # an agent's card starts in Backlog: never straight in the work flow
+    assert_match(/agents create cards only in Backlog: the operator moves a card into the work flow \(To do refused\)/,
+                 err("kanban_create", project: "g/r", title: "Other", author: "agent-a", tmux_session: "tl_g_r",
+                                      column: "todo"))
+    # Backlog is parked: an agent neither moves its own card out nor claims one there
+    assert_match(/sits in Backlog: only the operator moves a card out of it/,
+                 err("kanban_move", id: c["id"], column: "todo", author: "tl_g_r"))
+    assert_match(/no agent claims a parked card/,
+                 err("kanban_claim", id: c["id"], assignee: "tl_g_r", tmux_session: "tl_g_r"))
+    assert_equal %w[backlog 0], ok("kanban_move", id: c["id"], column: "backlog", position: 0, author: "tl_g_r")
+                                  .values_at("column", "position").map(&:to_s), "a reorder inside Backlog stays the agent's"
+    kb.move(c["id"], column: "todo", by: "op")
     assert_equal "tl_g_r", ok("kanban_claim", id: c["id"], assignee: "tl_g_r", tmux_session: "tl_g_r")["assignee"]
     moved = ok("kanban_move", id: c["id"], column: "todo", position: 0, author: "tl_g_r")
     assert_equal ["todo", 0], moved.values_at("column", "position")
@@ -100,7 +111,7 @@ class ToolsTest < Minitest::Test
     assert_equal ["Fix login flow"], board["columns"][4]["cards"].map { |x| x["title"] }
     assert_nil board["backlog_md"]
     assert_equal config.to_h, board["config"]
-    assert_equal ["Other"], ok("kanban_board", project: "g/r", column: "todo")["columns"][0]["cards"].map { |x| x["title"] }
+    assert_equal [], ok("kanban_board", project: "g/r", column: "todo")["columns"][0]["cards"].map { |x| x["title"] }
     card = ok("kanban_card", id: c["id"])
     assert_equal "**why**", card["card"]["description"]
     refute card["card"].key?("description_html")
@@ -129,9 +140,7 @@ class ToolsTest < Minitest::Test
   end
 
   def test_claim_requires_a_live_session_and_update_refuses_an_assignee
-    c = ok("kanban_create", project: "g/r", title: "T", author: "claude-shop-lead", tmux_session: "tl_g_r")
-    kb.set_owner(c["id"], session: "", by: "test") # ownerless and unassigned, for the claim rules below
-    kb.update(c["id"], { "assignee" => "" }, by: "test")
+    c = { "id" => kb.create(slug: "g/r", title: "T", by: "op", column: "todo") } # ownerless and unassigned
     msg = err("kanban_update", id: c["id"], author: "claude-shop-lead", assignee: "claude-shop-lead")
     assert_match(/use kanban_claim\(id, assignee, tmux_session\)/, msg)
     assert_match(/use kanban_claim/, err("kanban_create", project: "g/r", title: "U", author: "a", assignee: "a"))
@@ -146,11 +155,11 @@ class ToolsTest < Minitest::Test
     got = ok("kanban_claim", id: c["id"], assignee: "claude-shop-lead", tmux_session: "lead_1")
     assert_equal %w[claude-shop-lead lead_1], got.values_at("assignee", "owner_session")
     # a board that names its sessions (content: news_articles, news-articles-*) refuses a LIVE session of another host
-    content = AgentsKanban::Tools.new(store: store(KanbanTest.config("content")), attachments: @att,
+    content_store = store(KanbanTest.config("content"))
+    content = AgentsKanban::Tools.new(store: content_store, attachments: @att,
                                       projects: ->(s) { @projects[s] }, sessions: -> {
  %w[coding_lead news_articles news-articles-4] }, card_url: CARD_URL)
-    cc = JSON.parse(content.call("kanban_create", "project" => "p", "title" => "article: japan", "author" => "lead",
-                                                  "tmux_session" => "news-articles-4", "column" => "queued"))
+    cc = { "id" => content_store.create(slug: "p", title: "article: japan", by: "op", column: "queued") }
     e = assert_raises(AgentsKanban::Invalid) do
       content.call("kanban_claim", "id" => cc["id"], "assignee" => "news-writer", "tmux_session" => "coding_lead")
     end
@@ -165,8 +174,7 @@ class ToolsTest < Minitest::Test
   end
 
   def test_ask_flags_the_card_with_a_question_and_block_flags_a_blocker
-    c = ok("kanban_create", project: "g/r", title: "Security triage", author: "lead", tmux_session: "tl_g_r", column: "doing")
-    kb.set_owner(c["id"], session: "", by: "test")
+    c = { "id" => kb.create(slug: "g/r", title: "Security triage", by: "op", column: "doing") }
     assert_match(/no owner session.*kanban_claim/, err("kanban_ask", id: c["id"], question: "Which first?", author: "lead"))
     ok("kanban_claim", id: c["id"], assignee: "lead", tmux_session: "lead_1")
     assert_match(/array of strings/, err("kanban_ask", id: c["id"], question: "Q", options: "A,B", author: "lead"))
@@ -278,11 +286,12 @@ class ToolsTest < Minitest::Test
     # the operator removes the review column: the board still READS; the task whose status has no column is an error,
     # never guessed
     shape = KanbanTest.board_hash("coding")
+    columns = shape["columns"].reject { |c| c["key"] == "qa" }
     transitions = [
-      { "name" => "Move", "from" => "*", "to" => "*", "by" => "any" },
+      { "name" => "Move", "from" => columns.map { |c| c["key"] } - ["backlog"], "to" => "*", "by" => "any" },
+      { "name" => "Move", "from" => "backlog", "to" => "*", "by" => "operator" },
       { "name" => "Approve", "from" => "human_check", "to" => "ready", "by" => "operator" },
     ]
-    columns = shape["columns"].reject { |c| c["key"] == "qa" }
     kb.board_save("g/r", shape.merge("columns" => columns, "transitions" => transitions), by: "op")
     j = JSON.parse(tools.call("kanban_board", { "project" => "g/r" }))
     tasks = j["backlog_md"]["tasks"].map { |t| t.values_at("id", "column") }.sort_by { |t| t[0] }

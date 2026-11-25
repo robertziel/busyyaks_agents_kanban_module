@@ -68,7 +68,7 @@ class StoreTest < Minitest::Test
     assert_match(/agents cannot create cards in Ready to merge: create it, do the work, then kanban_handoff/, e.message)
     moves = kb.activity(id).select { |a| a[:kind] == "move" }.map { |a| [a[:author], a[:body]] }
     assert_equal [["agent-1", "In progress → Human Check"], ["op", "Human Check → Merged"]], moves
-    d = kb.create(slug: "g/r", title: "z", by: "a")
+    d = kb.create(slug: "g/r", title: "z", by: "a", column: "todo")
     assert_match(/only an approved card in Human Check \/ Ready to merge can be moved to Merged; agents stop at the gate/,
                  assert_raises(Denied) { kb.move(d, column: "merged", by: "a", agent: true) }.message)
     assert_match(/kanban_handoff/, assert_raises(Denied) { kb.move(d, column: "ready", by: "a", agent: true) }.message)
@@ -953,6 +953,10 @@ class StoreTest < Minitest::Test
     assert_match(/no handoff gate \(no gate column\)/,
                  assert_raises(Invalid) { s.handoff(id, qa: "x", pr_url: "", ci_url: "", ui_change: false, by: "a") }.message)
     assert_match(/no approval step/, assert_raises(Invalid) { s.approve(id, by: "op") }.message)
+    # waiting is parked: only the operator moves a card out of it
+    assert_match(/sits in Waiting: only the operator moves a card out of it/,
+                 assert_raises(Denied) { s.move(id, column: "done", by: "worker", agent: true) }.message)
+    s.move(id, column: "queued", by: "op")
     assert_equal "done", s.move(id, column: "done", by: "worker", agent: true)[:column]
     assert_raises(Denied) { s.move(id, column: "running", by: "worker", agent: true) }
   end
@@ -1022,11 +1026,11 @@ class StoreTest < Minitest::Test
     assert_match(/cannot enter/,
                  assert_raises(Invalid) { s.create(slug: "p", title: "x", by: "l", column: "running", parent: parent) }.message)
 
-    s.move(parent, column: "done", by: "worker", agent: true)
+    s.move(parent, column: "done", by: "op") # only the operator's finish promotes (an agent's: parked_test)
     c = s.card(child)
     assert_equal ["queued", []], c.values_at(:column, :blocked_by), "promoted when the parent finished"
     mv = s.activity(child).last
-    assert_equal ["board", "Waiting → Queued (parent ##{parent} done, by worker)"], mv.values_at(:author, :body)
+    assert_equal ["board", "Waiting → Queued (parent ##{parent} done, by op)"], mv.values_at(:author, :body)
     s.claim(child, assignee: "w", session: "news-articles-1")
     assert_equal %w[w news-articles-1], s.card(child).values_at(:assignee, :owner_session)
     assert_equal 1, s.card(parent)[:children]
@@ -1219,16 +1223,17 @@ ping[:text])
   # a session registered for g/r creating a card on p's board does not own it, and cannot claim it
   def test_a_session_owns_cards_only_on_the_board_it_is_registered_for
     kb.register_session(session: "tl_g_r", project: "g/r", type: "lead", launcher: "fullclaude", by: "op")
-    id = kb.create(slug: "p", title: "for p", by: "claude-tl_g_r", owner_session: "tl_g_r", column: "todo", agent: true)
+    id = kb.create(slug: "p", title: "for p", by: "claude-tl_g_r", owner_session: "tl_g_r", agent: true)
     c = kb.card(id)
     assert_equal [nil, nil, "claude-tl_g_r"], c.values_at(:owner_session, :assignee, :created_by)
-    assert_equal "created in To do · not owned: tl_g_r is registered for g/r, not p", kb.activity(id).first[:body]
+    assert_equal "created in Backlog · not owned: tl_g_r is registered for g/r, not p", kb.activity(id).first[:body]
     e = assert_raises(AgentsKanban::Denied) { kb.claim(id, assignee: "claude-tl_g_r", session: "tl_g_r") }
     assert_match(/registered for g\/r: it cannot own a card on p's board/, e.message)
     assert_equal [nil, nil], kb.card(id).values_at(:owner_session, :assignee), "a refused claim changes nothing"
     # its own board: owned as before; an unregistered session (started by hand) cannot be checked → owned
     own = kb.create(slug: "g/r", title: "mine", by: "claude-tl_g_r", owner_session: "tl_g_r", agent: true)
     assert_equal "tl_g_r", kb.card(own)[:owner_session]
+    kb.move(id, column: "todo", by: "op") # out of Backlog by the operator: a claim follows
     kb.claim(id, assignee: "hand", session: "hand_1")
     assert_equal "hand_1", kb.card(id)[:owner_session]
   end

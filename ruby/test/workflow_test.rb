@@ -11,7 +11,7 @@ class WorkflowTest < Minitest::Test
   Denied = AgentsKanban::Denied
 
   STRICT = [
-      { "name" => "Prioritise", "from" => "backlog", "to" => "todo", "by" => "any" },
+      { "name" => "Prioritise", "from" => "backlog", "to" => "todo", "by" => "operator" },
       { "name" => "Shelve", "from" => "todo", "to" => "backlog", "by" => "any" },
       { "name" => "Start work", "from" => "todo", "to" => "doing", "by" => "any" },
       { "name" => "Send for review", "from" => "doing", "to" => "qa", "by" => "agent" },

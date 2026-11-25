@@ -187,7 +187,7 @@ class OperatorUnstuckTest < Minitest::Test
   # "Move" has none Ready to merge → Human Check; the button was refused by the graph).
   def test_withdraw_needs_no_workflow_edge_back
     hash = KanbanTest.board_hash
-    hash["transitions"] = hash["transitions"].reject { |t| t["from"] == "*" }
+    hash["transitions"] = hash["transitions"].reject { |t| t["name"] == "Move" }
     kb.board_save("g/r", hash, by: OP)
     id = kb.create(slug: "g/r", title: "t", by: "me", column: "doing")
     kb.update(id, { "assignee" => LEAD }, by: LEAD)

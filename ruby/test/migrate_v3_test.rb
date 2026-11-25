@@ -91,8 +91,11 @@ class MigrateV3Test < Minitest::Test
     b = repo.fetch("g/r", by: "x")
     assert_equal %w[backlog todo doing qa human_check ready merged], b.keys
     assert_equal %w[gate gate], %w[human_check ready].map { |k| b.type_of(k).key }
-    assert_equal ["Start work", "Hand over", "Approve", "Merge", "Move"],
+    assert_equal ["Start work", "Hand over", "Approve", "Merge", "Move", "Move"],
                  b.to_h["transitions"].map { |x| x["name"] }, "the edges into / out of the ask column are gone"
+    assert_equal [[%w[todo doing qa human_check ready merged], "any"], %w[backlog operator]],
+                 b.to_h["transitions"].last(2).map { |x| x.values_at("from", "by") },
+                 "the catch-all no longer leaves Backlog for agents (stored v19-safe)"
     assert_equal "doing", b.to_h["transitions"][1]["from"], "a list that lost the ask column shrinks to one key"
     rows = t(:cards).where(id: [asked, dialog, stale, archived, checked]).order(:id).all
     assert_equal ["doing", 700, "Which?"], rows[0].values_at(:column, :asked_at, :question), "back where it came from, flagged"

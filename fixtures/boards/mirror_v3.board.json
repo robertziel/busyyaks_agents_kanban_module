@@ -90,7 +90,7 @@
       "name": "Prioritise",
       "from": "backlog",
       "to": "todo",
-      "by": "any"
+      "by": "operator"
     },
     {
       "name": "Deprioritise",
