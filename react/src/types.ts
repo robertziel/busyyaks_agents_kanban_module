@@ -138,6 +138,8 @@ export type AgentTypeConfig = {
   max_per_project: number | null;
   under?: string | null; // lead-first: the lead type a session of this type runs under (only while it runs, on its launcher)
   standalone?: boolean; // a plain session that runs without a lead (prompt null, takes [])
+  launchable?: boolean; // false = only its lead's kanban_spawn starts one: the Launch bar leaves it out (absent = true)
+  launch_label?: string | null; // the Launch bar button's text (absent / null = the label)
 };
 // Api#launches: the Launch bar's data — the types with their launchers and who runs now against the cap
 export type LaunchType = {
@@ -156,6 +158,9 @@ export type LaunchType = {
   // the board's running lead a session of this type runs under (Store#running_lead): its launcher is the only one a
   // launch may use; null with `under` set = no lead runs, the engine refuses the launch ("launch the lead first")
   follows?: { type: string; session: string; launcher: string } | null;
+  // false = the Launch bar never offers it: only its lead's kanban_spawn starts one (a worker for a card)
+  launchable: boolean;
+  launch_label: string | null; // the button's text; null = the label
 };
 export type RegisteredSession = {
   id: number;
@@ -210,8 +215,11 @@ export type LeadEnd = {
 export type BoardLead = {
   type: string;
   label: string;
+  launch_label?: string | null; // the Launch bar button's text (null = the label)
   session: string | null;
-  ended?: { session: string; reason: string | null; at: string } | null;
+  // old_name = the name a launch of the lead gets now, when the ended session's name is not one (an earlier
+  // session_name): the banner marks the ended name old
+  ended?: { session: string; reason: string | null; at: string; old_name?: string | null } | null;
   error?: string | null;
 };
 // Api#launch 201: the registration + what the host's start answered (`result`, the host's own shape)

@@ -261,6 +261,20 @@ describe("Board", () => {
     expect(document.querySelector("[data-no-lead]")!.textContent).toBe("Launch session unknown: launcher down");
   });
 
+  // an ended lead registered under an earlier session_name is marked old (the engine's old_name), and the button
+  // named is the lead's launch label
+  it("the no-lead banner marks an ended lead of an old session name and names the lead's launch button", async () => {
+    const cards = [card({ id: 1, column: "todo", title: "Waits" })];
+    const ended = { session: "tl_g_r", reason: "done", at: "2026-11-15T03:09:34Z", old_name: "by_g_r_teamlead" };
+    const lead = { type: "lead", label: "Team lead", launch_label: "Launch team lead", session: null, ended };
+    render(<Host api={fakeApi({ ...boardData(coding, cards), lead }, cards)} />);
+    await screen.findByText("Waits");
+    const flash = document.querySelector("[data-no-lead]")!;
+    expect(flash.textContent).toMatch(
+      /^no lead: press Launch team lead — ownerless cards wait for it · tl_g_r \(old name · a launch now names it by_g_r_teamlead\) ended /,
+    );
+  });
+
   // a card blocked on the world (another card, CI, a third party) is not waiting for the operator
   it("a blocked_external card is counted as blocked externally, not as waiting for you", async () => {
     const blocked = { reason: "waits for card #3", url: "https://ci/1", by: "lead", at: "2026-11-11T00:00:00Z" };

@@ -44,6 +44,7 @@ import { cardFaceClass, carriedOnText, splitCard } from "../lib/card";
 import type { DictationApi } from "../lib/dictation";
 import { comboLabel, isMac, type KeyCombo } from "../lib/shortcut";
 import { useFetch } from "../lib/fetch";
+import { buttonText, leadEnded } from "../lib/launch";
 import { isoAgo, isoAt } from "../lib/format";
 import { useGlide } from "../lib/glide";
 import { foldSummary, type SumColumn } from "../lib/summary";
@@ -786,9 +787,8 @@ export function Board({
             <span>
               {data.lead.error
                 ? `${data.lead.label} session unknown: ${data.lead.error}`
-                : `no lead: press ${data.lead.label} — ownerless cards wait for it`}
-              {data.lead.ended &&
-                ` · ${data.lead.ended.session} ended ${isoAt(data.lead.ended.at)}${data.lead.ended.reason ? ` (${data.lead.ended.reason})` : ""}`}
+                : `no lead: press ${buttonText(data.lead)} — ownerless cards wait for it`}
+              {data.lead.ended && ` · ${leadEnded(data.lead.ended)}`}
             </span>
           </div>
         )}

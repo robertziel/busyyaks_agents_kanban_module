@@ -29,6 +29,8 @@ const data = (running = 1, runningHere = 0): LaunchesData => ({
       running: runningHere,
       running_here: runningHere,
       under: null,
+      launchable: true,
+      launch_label: null,
     },
     {
       key: "plain",
@@ -42,6 +44,8 @@ const data = (running = 1, runningHere = 0): LaunchesData => ({
       running: 0,
       running_here: 0,
       under: null,
+      launchable: true,
+      launch_label: null,
     },
   ],
   concurrency: conc(running),
@@ -74,6 +78,32 @@ function fakeApi(d: LaunchesData, refuse?: string): LaunchApi & { calls: unknown
 const lead = () => document.querySelector<HTMLButtonElement>('[data-type="lead"] .ak-launch-main')!;
 
 describe("LaunchBar", () => {
+  it("the Launch bar never offers Worker, and the lead's button says its launch label", async () => {
+    const d = data();
+    d.types[0] = { ...d.types[0]!, label: "Team lead", launch_label: "Launch team lead" };
+    d.types.push({
+      key: "worker",
+      label: "Worker",
+      launchers: [{ key: "fullclaude", label: "fullclaude" }],
+      model: null,
+      takes: [],
+      max: null,
+      max_per_project: null,
+      prompt: true,
+      running: 2,
+      running_here: 2,
+      under: "lead",
+      follows: { type: "lead", session: "g_r_teamlead", launcher: "fullclaude" },
+      launchable: false,
+      launch_label: null,
+    });
+    render(<LaunchBar api={fakeApi(d)} slug="g/r" refreshEvery={0} />);
+    expect(await screen.findByText("Launch team lead")).toBeInTheDocument();
+    expect(document.querySelector('[data-type="worker"]')).toBeNull();
+    expect(screen.queryByText("Worker")).toBeNull();
+    expect(document.querySelector('[data-type="plain"]')).not.toBeNull();
+  });
+
   it("renders a pill per type, the launcher menu for a type with several, and the cap line", async () => {
     render(<LaunchBar api={fakeApi(data())} slug="g/r" refreshEvery={0} />);
     expect(await screen.findByText("1 / 3 running")).toBeInTheDocument();
@@ -145,6 +175,8 @@ describe("LaunchBar", () => {
       running_here: 0,
       under: "lead",
       follows: null,
+      launchable: true,
+      launch_label: null,
     });
     render(<LaunchBar api={fakeApi(d)} slug="g/r" refreshEvery={0} />);
     const btn = await screen.findByRole("button", { name: "Sub team" });
@@ -170,6 +202,8 @@ describe("LaunchBar", () => {
       running_here: 0,
       under: "lead",
       follows: { type: "lead", session: "g_r_teamlead", launcher: "localclaude" },
+      launchable: true,
+      launch_label: null,
     });
     const api = fakeApi(d);
     render(<LaunchBar api={api} slug="g/r" refreshEvery={0} />);

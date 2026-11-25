@@ -15,10 +15,11 @@ class LeadFirstTest < Minitest::Test
   # session only — a test sets keys[s] to play a stale / wrong key.
   class FakeLauncher
     attr_reader :started, :keys
-    attr_accessor :fail
+    attr_accessor :fail, :fixed_name
 
     def initialize = (@started = []; @n = 0; @keys = {})
-    def name(project:, base:) = "#{base}_#{@n += 1}"
+    # fixed_name: the name a host gave a session before the host's session_name changed (an old registration)
+    def name(project:, base:) = fixed_name || "#{base}_#{@n += 1}"
 
     def start(**kw)
       raise AgentsKanban::Delivery::Refused, "tmux failed: no server" if @fail
@@ -392,7 +393,7 @@ class LeadFirstTest < Minitest::Test
     assert_empty @l.started, "the notifier starts nobody"
     assert_nil kb.card(id)[:owner_session]
     _, b = @api.board("g/r")
-    assert_equal({ type: "lead", label: "Launch", session: nil, ended: nil }, b[:lead])
+    assert_equal({ type: "lead", label: "Launch", launch_label: nil, session: nil, ended: nil }, b[:lead])
     lead, = lead!
     _, b = @api.board("g/r")
     assert_equal lead, b[:lead][:session]
@@ -452,7 +453,8 @@ class LeadFirstTest < Minitest::Test
     assert_nil api.board("g/r")[1][:lead]
     down = AgentsKanban::Api.new(store: kb, attachments: nil, markdown: md, projects: ->(s) { @projects[s] },
                                  sessions: -> { raise AgentsKanban::Delivery::Unavailable, "launcher down" })
-    assert_equal({ type: "lead", label: "Launch", session: nil, error: "launcher down" }, down.board("g/r")[1][:lead])
+    assert_equal({ type: "lead", label: "Launch", launch_label: nil, session: nil, error: "launcher down" },
+                 down.board("g/r")[1][:lead])
   end
 
   # A registered alive owner fills a missing assignee with no taker running (moved from the spawn tests).
@@ -466,5 +468,81 @@ class LeadFirstTest < Minitest::Test
     db[:"#{KanbanTest::PREFIX}cards"].where(id: id).update(assignee: nil)
     assert_equal [id], kb.adopt_ownerless(live: Set["w_1", *@live])
     assert_equal %w[worker-w_1 w_1], kb.card(id).values_at(:assignee, :owner_session)
+  end
+
+  # ── the Launch bar: a type only its lead starts, and the lead's button text ─────────────────────
+
+  def bar_config
+    raw = raw_config
+    raw["agent_types"].find { |t| t["key"] == "worker" }["launchable"] = false
+    raw["agent_types"].find { |t| t["key"] == "lead" }["launch_label"] = "Launch team lead"
+    AgentsKanban::HostConfig.new(raw)
+  end
+
+  def bar_api(cfg)
+    st = store(cfg)
+    [st, AgentsKanban::Api.new(store: st, attachments: nil, markdown: md, projects: ->(s) { @projects[s] },
+                                  sessions: -> { @live }, launcher: @l, grace: 0),
+     AgentsKanban::Tools.new(store: st, attachments: nil, projects: ->(s) { @projects[s] },
+                             sessions: -> { @live }, card_url: CARD_URL, grace: 0, launcher: @l),]
+  end
+
+  def test_the_launch_bar_never_offers_worker
+    st, api, tools = bar_api(bar_config)
+    _, l = api.launches("g/r")
+    bar = l[:types].to_h { |t| [t[:key], t.slice(:label, :launchable, :launch_label)] }
+    assert_equal({ label: "Worker", launchable: false, launch_label: nil }, bar["worker"])
+    assert_equal({ label: "Launch", launchable: true, launch_label: "Launch team lead" }, bar["lead"])
+    assert_equal [true, nil], bar["team"].values_at(:launchable, :launch_label), "a type that says nothing is offered"
+    # the operator's launch of it is refused — with no lead, and with one running
+    s, j = api.launch("g/r", { "type" => "worker", "launcher" => "localclaude" }, by: "op")
+    want = "Worker (worker) is not launched from the Launch bar: the board's lead starts one for a card (kanban_spawn)"
+    assert_equal [422, want], [s, j[:error]]
+    s, j = api.launch("g/r", { "type" => "lead", "launcher" => "localclaude" }, by: "op")
+    assert_equal 201, s, j.inspect
+    lead = j[:session]
+    @live << lead
+    s, = api.launch("g/r", { "type" => "worker", "launcher" => "localclaude" }, by: "op")
+    assert_equal 422, s
+    assert_equal %w[lead], @l.started.map { |x| x[:type] }, "nothing was started for the refused launches"
+    # its lead's kanban_spawn still starts one for a card
+    id = st.create(slug: "g/r", title: "work", by: "op", column: "todo")
+    r = JSON.parse(tools.call("kanban_spawn", { "id" => id, "type" => "worker", "tmux_session" => lead,
+                                                "author" => "claude-#{lead}", }))
+    assert_equal "worker", @l.started.last[:type]
+    assert_equal r["session"], st.card(id)[:owner_session]
+    _, b = api.board("g/r")
+    assert_equal "Launch team lead", b[:lead][:launch_label]
+  end
+
+  def test_launchable_and_launch_label_are_checked
+    bad = lambda do |key, mut|
+      r = raw_config
+      mut.(r["agent_types"].find { |t| t["key"] == key })
+      assert_raises(AgentsKanban::ConfigError) { AgentsKanban::HostConfig.new(r) }.message
+    end
+    assert_match(/worker\].launchable must be true or false/, bad.("worker", ->(t) { t["launchable"] = "no" }))
+    assert_match(/plain\]: launchable: false needs `under: <lead type>`/, bad.("plain", ->(t) { t["launchable"] = false }))
+    assert_match(/lead\]: launchable: false needs `under/, bad.("lead", ->(t) { t["launchable"] = false }))
+    assert_match(/worker\].launch_label must be null/, bad.("worker", ->(t) { t["launch_label"] = " " }))
+    assert_match(/worker\]: launch_label names a Launch bar button, and launchable is false/,
+                 bad.("worker", ->(t) { t.merge!("launchable" => false, "launch_label" => "Start") }))
+    w = bar_config.agent_type("worker")
+    assert_equal [false, nil], [w.launchable, w.launch_label]
+    assert_equal [true, nil], [config.agent_type("worker").launchable, config.agent_type("worker").launch_label]
+  end
+
+  def test_the_board_banner_marks_an_ended_lead_of_an_old_session_name
+    @l.fixed_name = "tl_g_r"
+    old, = lead!
+    @l.fixed_name = nil
+    kb.end_session(old, reason: "done", by: "op")
+    _, b = @api.board("g/r")
+    assert_equal({ session: "tl_g_r", reason: "done", old_name: "g_r_teamlead" }, b[:lead][:ended].except(:at),
+                 "a name a launch no longer gives is old: the banner says so and names today's")
+    now, = lead!
+    kb.end_session(now, reason: "done", by: "op")
+    _, b = @api.board("g/r")
+    assert_equal [now, nil], b[:lead][:ended].values_at(:session, :old_name), "today's name (the host's suffix too)"
   end
 end

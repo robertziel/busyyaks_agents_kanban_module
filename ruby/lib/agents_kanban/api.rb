@@ -346,12 +346,13 @@ module AgentsKanban
           takes: t.takes, max: t.max, max_per_project: t.max_per_project, prompt: !t.prompt.nil?,
           running: conc && conc[:types][t.key][:running], running_here: here&.size,
           sessions_here: here&.map { |x| x[:session] },
-          under: t.under, follows: follows, }
+          under: t.under, follows: follows, launchable: t.launchable, launch_label: t.launch_label, }
       end
       [200, { types: types, concurrency: conc, sessions_error: err }]
     end
 
-    # POST {type, launcher?}: Team#start — the caps on a fresh live list (422 with who runs); a type under a lead only
+    # POST {type, launcher?}: a type with launchable: false → 422 (only its lead's kanban_spawn starts one).
+    # Team#start — the caps on a fresh live list (422 with who runs); a type under a lead only
     # while the board's lead runs (422 "launch the lead first"), on the lead's launcher; registered (adopting the
     # project's ownerless cards of the type's `takes` columns) before the host starts it; a start that fails ends the
     # registration and releases what it adopted. 201 {session, type, launcher, agent, lead, adopted, result (the
@@ -363,6 +364,10 @@ module AgentsKanban
       refusing do
         only!(b, %w[type launcher])
         t = @config.agent_type(b["type"])
+        unless t.launchable
+          raise Invalid, "#{t.label} (#{t.key}) is not launched from the Launch bar: the board's #{t.under} starts one " \
+                         "for a card (kanban_spawn)"
+        end
         out = team.start(project: p, type: t.key, by: by, asked_launcher: b["launcher"])
         reg = out[:reg]
         adopted = reg[:adopted].map { |id| @store.card_json(@store.card(id)) }
@@ -651,7 +656,8 @@ module AgentsKanban
       return nil if @config.lead_types.empty? || @sessions.nil?
 
       live, err = live_sessions
-      return { type: @config.lead_types.first.key, label: @config.lead_types.first.label, session: nil, error: err } if err
+      lt = @config.lead_types.first
+      return { type: lt.key, label: lt.label, launch_label: lt.launch_label, session: nil, error: err } if err
 
       @store.lead_state(slug, live: live, grace: @grace)
     end

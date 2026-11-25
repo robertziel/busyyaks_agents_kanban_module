@@ -73,6 +73,9 @@ launchers:
 #   standalone       (optional) true = a PLAIN session that runs without a lead: prompt null and takes [] (anything told
 #                    what to do or adopting cards runs `under` the lead). Every type is a lead (some type is under it),
 #                    `under` one, or standalone — refused otherwise, so no type runs leaderless by omission
+#   launchable       (optional, default true) false = the Launch bar never offers it and the operator's launch is
+#                    refused: only its lead's kanban_spawn starts one (a worker for a card). Needs `under`
+#   launch_label     (optional) the Launch bar button's text (e.g. "Launch team lead"); null/absent = the label
 #   max              sessions of this type at once over every project (null = only the global cap)
 #   max_per_project  sessions of this type at once for ONE project (null = no limit): 1 = never two leads on a board
 agent_types:

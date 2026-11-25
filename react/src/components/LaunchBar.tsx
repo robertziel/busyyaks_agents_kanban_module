@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { errMsg, type LaunchApi } from "../api";
 import { useFetch } from "../lib/fetch";
-import { capLine, launchBlocked, launcherLock, pickLauncher } from "../lib/launch";
+import { buttonText, capLine, launchBlocked, launcherLock, offered, pickLauncher } from "../lib/launch";
 import type { LaunchesData, LaunchResult } from "../types";
 import { Select } from "./Select";
 
@@ -81,7 +81,7 @@ export function LaunchBar({
   };
   return (
     <span className={`ak-launchbar${compact ? " compact" : ""} ${className ?? ""}`}>
-      {data.types.map((t) => {
+      {offered(data.types).map((t) => {
         const key = `ak-launcher:${t.key}`;
         const lock = launcherLock(t);
         const launcher = lock ? pickLauncher(t, null) : (choice[t.key] ?? pickLauncher(t, readKey(key)));
@@ -104,10 +104,10 @@ export function LaunchBar({
               ) : compact ? (
                 <>
                   <span aria-hidden="true">＋ </span>
-                  {t.label}
+                  {buttonText(t)}
                 </>
               ) : (
-                t.label
+                buttonText(t)
               )}
               {t.running ? <span className="ak-launch-n">{t.running}</span> : null}
             </button>
