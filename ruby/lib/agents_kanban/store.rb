@@ -1078,7 +1078,13 @@ module AgentsKanban
     # needs_operator (an agent's question — not a session dialog, which is answered by pressing a key) IS the answer:
     # the flag clears (the card keeps its column; logged as the operator's answer) and the owner gets ONE ping that
     # carries the answer and says so.
-    def comment(id, body:, author:, operator: false)
+    # transition: (the operator's only) the name of a COMMENT ACTION out of the card's column (a workflow edge
+    # with comment: true; column: picks its target when the name has several): the comment is posted and the card moves
+    # along it, in ONE transaction — a refused move (any rule Store#move asks) posts nothing.
+    def comment(id, body:, author:, operator: false, transition: nil, column: nil)
+      return comment_and_move(id, body: body, author: author, transition: transition, column: column) \
+        unless transition.to_s.strip.empty? && column.to_s.strip.empty?
+
       c = card!(id)
       raise Invalid, "body is required" if body.to_s.strip.empty?
 
@@ -1112,6 +1118,36 @@ module AgentsKanban
         end
         cid
       end
+    end
+
+    def comment_and_move(id, body:, author:, transition:, column:)
+      raise Invalid, "a comment action needs its transition's name" if transition.to_s.strip.empty?
+
+      c = card!(id)
+      b = board_of(c[:project_slug])
+      to = column.to_s.strip.empty? ? nil : column.to_s
+      e = b.workflow.named(from: c[:column], name: transition, actor: :operator, to: to)
+      unless e&.comment
+        acts = b.workflow.from(c[:column], actor: :operator).select(&:comment).map(&:name).uniq
+        raise Denied, "workflow: #{transition.to_s.inspect} is no comment action from #{b.label(c[:column])} " \
+                      "(#{acts.empty? ? 'none' : acts.join(', ')})"
+      end
+      raise Invalid, "body is required" if body.to_s.strip.empty?
+
+      # a move refused after the comment rolls both back; the refusal is raised outside the transaction (a raise inside
+      # one reaches the host wrapped)
+      refusal = nil
+      cid = nil
+      @db.transaction do
+        cid = comment(c[:id], body: body, author: author, operator: true)
+        move(c[:id], transition: e.name, column: e.to, by: author)
+      rescue Invalid => err # Denied is an Invalid
+        refusal = err
+        raise Sequel::Rollback
+      end
+      raise refusal if refusal
+
+      cid
     end
 
     # ── the needs_operator flag: an agent asks the operator; the card stays where it is ─────────────
@@ -3745,9 +3781,12 @@ module AgentsKanban
       t.length > 160 ? "#{t[0, 159]}…" : t
     end
 
-    # The transitions out of `column` on board b, for the card JSON and the clients: [{name, to, to_label, by}].
+    # The transitions out of `column` on board b, for the card JSON and the clients: [{name, to, to_label, by}] + comment:
+    # true on a comment action (the comment box's "Comment & <name>").
     def transitions_json(b, column)
-      b.workflow.from(column).map { |e| { name: e.name, to: e.to, to_label: b.label(e.to), by: e.by } }
+      b.workflow.from(column).map do |e|
+        { name: e.name, to: e.to, to_label: b.label(e.to), by: e.by }.merge(e.comment ? { comment: true } : {})
+      end
     end
 
     # every unarchived card sitting in a gate column of its board, with that board → [[card row, board], …]

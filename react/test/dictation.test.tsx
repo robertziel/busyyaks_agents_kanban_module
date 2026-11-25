@@ -1,5 +1,5 @@
 // The comment box's dictation over a fake DictationApi and a fake microphone: the mic shows only when the host injects
-// the port; Dictate → listening → Stop puts the words into the comment, which Save sends; Alt+M anywhere in the card does
+// the port; Dictate → listening → Stop puts the words into the comment, which Comment sends; Alt+M anywhere in the card does
 // the same; a refused microphone or a failed transcription shows the reason.
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -117,7 +117,7 @@ describe("comment dictation", () => {
     expect(screen.queryByRole("button", { name: "Dictate" })).toBeNull();
   });
 
-  it("Dictate → listening → Stop writes the words into the comment; Save sends them", async () => {
+  it("Dictate → listening → Stop writes the words into the comment; Comment sends them", async () => {
     mic.open = () => Promise.resolve(speakingMic());
     const transcribe = vi.fn(() =>
       Promise.resolve({
@@ -134,7 +134,7 @@ describe("comment dictation", () => {
     await waitFor(() => expect(box).toHaveValue("Ship it today."), SLOW);
     expect(box).not.toHaveAttribute("readonly");
     expect(transcribe).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Comment" }));
     await waitFor(() => expect(api.calls).toContain("comment 7 Ship it today."), SLOW);
   });
 
@@ -276,7 +276,7 @@ describe("comment dictation", () => {
     );
   });
 
-  it("while it dictates, Save waits and Ctrl+Enter stops the mic; Esc stops it and keeps the card open", async () => {
+  it("while it dictates, Comment waits and Ctrl+Enter stops the mic; Esc stops it and keeps the card open", async () => {
     mic.open = () => Promise.resolve(speakingMic());
     const api = renderBoard({
       transcribe: () => Promise.resolve({ text: "", words: [w(" Ship", 0, 0.5)] }),
@@ -286,11 +286,11 @@ describe("comment dictation", () => {
     fireEvent.change(box, { target: { value: "Draft" } });
     fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
     await screen.findByText(/listening/, undefined, SLOW);
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Comment" })).toBeDisabled();
     fireEvent.keyDown(box, { key: "Enter", code: "Enter", ctrlKey: true });
     await waitFor(() => expect(box).toHaveValue("Draft Ship"), SLOW);
     expect(api.calls).toEqual([]); // nothing was posted
-    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Comment" })).toBeEnabled();
     // again, now stopped by Esc on the card: the dialog's cancel stops the mic instead of closing
     fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
     await screen.findByText(/listening/, undefined, SLOW);
@@ -321,7 +321,7 @@ describe("comment dictation", () => {
     expect(transcribe).toHaveBeenCalledTimes(2);
   });
 
-  it("a kept recording locks the box until Retry or Discard: no edit, no Save, no Ctrl+Enter, no second recording", async () => {
+  it("a kept recording locks the box until Retry or Discard: no edit, no Comment, no Ctrl+Enter, no second recording", async () => {
     mic.open = () => Promise.resolve(speakingMic());
     const transcribe = vi.fn(() => Promise.reject(new Error("speech server unreachable")));
     const { api } = renderBoardIn({ transcribe, shortcut: ALT_M });
@@ -332,7 +332,7 @@ describe("comment dictation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop dictation" }));
     expect(await screen.findByRole("alert", undefined, SLOW)).toHaveTextContent("Your recording is kept.");
     expect(box).toHaveAttribute("readonly");
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Comment" })).toBeDisabled();
     fireEvent.keyDown(box, { key: "Enter", ctrlKey: true });
     fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
     expect(screen.queryByText(/listening/)).toBeNull();
@@ -340,7 +340,7 @@ describe("comment dictation", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     expect(box).not.toHaveAttribute("readonly");
     expect(box).toHaveValue("Note:");
-    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Comment" })).toBeEnabled();
     expect(api.calls.filter((c) => c.startsWith("comment"))).toEqual([]);
   });
 

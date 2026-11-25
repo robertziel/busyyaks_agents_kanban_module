@@ -46,7 +46,9 @@ module AgentsKanban
     # 17 = a lead is never a card's assignee: + cards.worker_wait_at (since when the card waits for a worker,
     # Store#worker_watch_pass) and worker_wait_told_at (the watch pinged the lead: the card counts as waiting for the
     # operator); a data step (lead_assignees!): every open card whose assignee is a lead's agent name loses it, owner kept
-    VERSION = 17
+    # 18 = + board_transitions.comment (0/1, null = 0): the transition is a comment action — the operator's
+    # comment box offers "Comment & <name>" (Store#comment(transition:)); no data step: no transition starts as one
+    VERSION = 18
     TABLES = %i[cards card_activity board_labels checklists checklist_items card_pings card_attachments session_dialogs
                 agent_sessions ci_watches boards board_columns board_transitions].freeze
 
@@ -105,6 +107,7 @@ module AgentsKanban
         add_missing(db, t[:cards], [[:worker_wait_at, Integer], [:worker_wait_told_at, Integer]])
         lead_assignees!(db, prefix: prefix, lead_types: lead_types, now: now)
       end
+      add_missing(db, t[:board_transitions], [[:comment, Integer]]) if to >= 18
       t
     end
 

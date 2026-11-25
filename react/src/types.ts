@@ -301,7 +301,8 @@ export type Card = {
   children: number;
   blocked_by: number[];
   // The board's transitions out of the card's column: named edges the actor may take ([] = nobody moves it from here).
-  transitions: { name: string; to: string; to_label: string; by: WorkflowActor }[];
+  // comment: true = a comment action: the comment box posts and moves along it in one go
+  transitions: { name: string; to: string; to_label: string; by: WorkflowActor; comment?: boolean }[];
   metadata: Record<string, unknown> | null;
   column: ColumnKey;
   column_label?: string; // the column's label as the engine prints it (agents read it; the board uses config)
@@ -505,7 +506,14 @@ export type MoveResult = { card: Card; counts: Record<ColumnKey, number>; delive
 // AgentsKanban::Workflow (SPEC.md § 2): a board's named transitions, as declared. `from` = a column key, a list of keys
 // or "*" (every column); `to` = a column key or "*" (a fan-out: named together with the column it goes to).
 export type WorkflowActor = "operator" | "agent" | "any";
-export type WorkflowTransition = { name: string; from: string | string[]; to: string; by: WorkflowActor };
+// `comment: true` = a comment action: the comment box offers "Comment & <name>" (absent = false).
+export type WorkflowTransition = {
+  name: string;
+  from: string | string[];
+  to: string;
+  by: WorkflowActor;
+  comment?: boolean;
+};
 
 // Api#session_boards 200: the boards of ONE agent session each (HostConfig#session_boards), read-only for the operator
 export type SessionBoardColumn = { key: ColumnKey; label: string; type: ColumnTypeKey };

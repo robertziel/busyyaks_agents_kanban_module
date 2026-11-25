@@ -51,7 +51,7 @@ class WorkflowTest < Minitest::Test
     end
     go = { "name" => "Go", "from" => "todo", "to" => "doing", "by" => "any" }
     bad.call(nil, /transitions must be a list/)
-    bad.call([go.merge("extra" => 1)], /transitions\[0\] must be an object with exactly/)
+    bad.call([go.merge("extra" => 1)], /transitions\[0\] must be an object with name, from, to, by \(optional: comment\)/)
     bad.call([go.merge("to" => "nope")], /transitions\[0\]\.to/)
     bad.call([go.merge("by" => "bot")], /by must be one of operator, agent, any/)
     bad.call([go.merge("to" => %w[doing qa])], /one column/)

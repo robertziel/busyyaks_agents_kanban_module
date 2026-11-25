@@ -16,14 +16,18 @@ module AgentsKanban
   #
   # `from` / `to`: a column key, a list of keys (from only), or "*" (every column; an edge to "*" fans out and is named by
   # `transition:` only together with the `column` it goes to). `by`: operator | agent | any. A name has one target per
-  # source column otherwise. A bad list raises Invalid (an operator's edit, refused with the reason).
+  # source column otherwise. Optional `comment: true` (absent = false): the transition is a COMMENT ACTION —
+  # the operator's comment box offers "Comment & <name>": the comment is posted and the card moves along it, in one go
+  # (Store#comment(transition:)); only on an edge the operator takes (`by` operator | any) with one target (not "*").
+  # A bad list raises Invalid (an operator's edit, refused with the reason).
   class Workflow
     EDGE_KEYS = %w[name from to by].freeze
+    OPTIONAL_EDGE_KEYS = %w[comment].freeze
     ACTORS = %w[operator agent any].freeze
     ANY = "*"
     EDGE_NAME = /\A[[:alnum:]][[:alnum:] _.\/'-]{0,59}\z/
     MAX_TRANSITIONS = 200
-    Edge = Struct.new(:name, :from, :to, :by, :fan_out, keyword_init: true) do
+    Edge = Struct.new(:name, :from, :to, :by, :fan_out, :comment, keyword_init: true) do
       def usable_by?(actor) = by == "any" || by == actor.to_s
     end
 
@@ -36,6 +40,7 @@ module AgentsKanban
 
       @keys = keys.map(&:to_s).freeze
       t = JSON.parse(JSON.generate(transitions)) # string keys, detached: what to_a returns and the rows store
+      t.each { |e| e.delete("comment") if e.is_a?(Hash) && e["comment"] == false } # absent = false: one spelling
       @declared = t.freeze
       @edges = t.each_with_index.flat_map { |e, i| expand(e, i) }.freeze
       unique!
@@ -59,8 +64,8 @@ module AgentsKanban
 
     def expand(e, i)
       where = "transitions[#{i}]"
-      unless e.is_a?(Hash) && e.keys.sort == EDGE_KEYS.sort
-        raise Invalid, "#{where} must be an object with exactly #{EDGE_KEYS.join(', ')}"
+      unless e.is_a?(Hash) && (EDGE_KEYS - e.keys).empty? && (e.keys - EDGE_KEYS - OPTIONAL_EDGE_KEYS).empty?
+        raise Invalid, "#{where} must be an object with #{EDGE_KEYS.join(', ')} (optional: #{OPTIONAL_EDGE_KEYS.join(', ')})"
       end
       unless e["name"].is_a?(String) && e["name"].match?(EDGE_NAME)
         raise Invalid, "#{where}.name must match #{EDGE_NAME.source} (got #{e['name'].inspect})"
@@ -68,11 +73,27 @@ module AgentsKanban
       raise Invalid, "#{where}.by must be one of #{ACTORS.join(', ')} (got #{e['by'].inspect})" unless ACTORS.include?(e["by"])
       raise Invalid, "#{where}.to must be one column or \"*\" (a transition has one target)" if e["to"].is_a?(Array)
 
+      comment = comment!(e, where)
       froms = columns!(e["from"], "#{where}.from")
       tos = columns!(e["to"], "#{where}.to")
       froms.product(tos).reject { |f, t| f == t }.map do |f, t|
-        Edge.new(name: e["name"], from: f, to: t, by: e["by"], fan_out: e["to"] == ANY).freeze
+        Edge.new(name: e["name"], from: f, to: t, by: e["by"], fan_out: e["to"] == ANY, comment: comment).freeze
       end
+    end
+
+    # `comment`: true / false, absent = false; true only where the operator's comment box can take the edge
+    def comment!(e, where)
+      return false unless e.key?("comment")
+
+      v = e["comment"]
+      unless [true, false].include?(v)
+        raise Invalid, "#{where}.comment must be true or false (absent = false; got #{v.inspect})"
+      end
+      return false unless v
+      raise Invalid, "#{where}.comment: a comment action is the operator's — by must be operator or any" if e["by"] == "agent"
+      raise Invalid, "#{where}.comment: a comment action needs one target column, not \"*\"" if e["to"] == ANY
+
+      true
     end
 
     def columns!(v, where)

@@ -307,6 +307,34 @@ describe("BoardEditor", () => {
     expect(a.saved[0]!.columns.filter((c) => c.requires_green_ci).map((c) => c.key)).toEqual(["human_check"]);
   });
 
+  it("Comment action: a transition's own opt-in (comment: true), saved with it; off and locked for an agent's edge", async () => {
+    const a = api();
+    const dlg = await open(a);
+    fireEvent.click(within(dlg).getAllByRole("button", { name: /^Transition Fixes needed/ })[0]!);
+    const box = () => within(dlg).getByLabelText<HTMLInputElement>("Comment action");
+    expect([box().checked, box().disabled]).toEqual([false, false]);
+    fireEvent.click(box());
+    expect(box().checked).toBe(true);
+    const takenBy = async (who: string) => {
+      fireEvent.click(within(dlg).getByRole("button", { name: "Transition taken by" }));
+      fireEvent.click(
+        await within(within(dlg).getByRole("listbox", { name: "Transition taken by" })).findByRole("option", {
+          name: who,
+        }),
+      );
+    };
+    // taken by agents only → cleared and locked: a comment action is the operator's
+    await takenBy("agents");
+    expect([box().checked, box().disabled]).toEqual([false, true]);
+    await takenBy("anyone");
+    fireEvent.click(box());
+    fireEvent.click(within(dlg).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(a.saved).toHaveLength(1));
+    expect(a.saved[0]!.transitions.filter((t) => t.comment).map((t) => [t.name, t.by])).toEqual([
+      ["Fixes needed", "any"],
+    ]);
+  });
+
   it("clicking an arrow edits it: name, who takes it, delete", async () => {
     const a = api();
     const dlg = await open(a);

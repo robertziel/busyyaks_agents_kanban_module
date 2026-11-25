@@ -428,12 +428,17 @@ module AgentsKanban
       end
     end
 
-    # 201 {card, activity, delivered} — on an ask-gate card the operator's comment is the answer.
+    # 201 {card, activity, delivered, counts} — on an ask-gate card the operator's comment is the answer. {transition,
+    # column?}: a comment action — the comment posted and the card moved along that transition, or nothing.
     def comment(id, b, by:)
       c = card!(id) or return not_found("no card #{id}")
       refusing do
-        @store.comment(c[:id], body: b["body"], author: by, operator: true)
-        [201, card_body(@store.card(c[:id])).merge(delivered: @store.delivery(c, by))]
+        @store.comment(c[:id], body: b["body"], author: by, operator: true, transition: b["transition"],
+                               column: b["column"])
+        moved = @store.card(c[:id])
+        body = card_body(moved).merge(delivered: @store.delivery(c, by))
+        body[:counts] = @store.counts(moved[:project_slug])[moved[:project_slug]] if moved[:column] != c[:column]
+        [201, body]
       end
     end
 

@@ -11,6 +11,12 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 - **The comment box stays at the bottom of the card**: in the card dialog the comment box (with the no-listener warning)
   sits at the card's bottom and stays there while the card scrolls, so writing a comment needs no scrolling; a long draft
   scrolls inside the box. A "Write a comment" button, shown on keyboard focus at the top of the card, jumps to it.
+- **Comment actions**: a workflow transition with `comment: true` is offered in the card's comment box as
+  "Comment & <name> → <column>" beside the plain "Comment" (was "Save"): the comment is posted and the card moves along
+  that transition in one transaction (a refused move posts nothing), the owner gets one ping with both. Defined per
+  transition in the board (editor: "Comment action"; Schema v18 `board_transitions.comment`), never in code; refused on
+  an agents-only edge or a fan-out. `Api#comment` takes `transition` / `column`; `KanbanApi.comment(id, body, move?)`.
+  The local_v4 fixture marks Changes requested, Deploy failed, Reopen and Rework; `board.example.yml` marks Fixes needed.
 
 ## [0.1.0] - 2026-11-25
 
