@@ -76,6 +76,7 @@
     "owner_idle_hours": 4
   },
   "progress_watch": { "stale_minutes": 30 },
+  "worker_watch": { "wait_minutes": 15 },
   "handoff": {
     "requires_pr_url": true,
     "requires_ci_url": true,

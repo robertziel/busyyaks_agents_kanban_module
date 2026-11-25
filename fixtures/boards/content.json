@@ -36,6 +36,7 @@
   "theme": {},
   "idle_watch": null,
   "progress_watch": { "stale_minutes": null },
+  "worker_watch": { "wait_minutes": null },
   "handoff": null,
   "dependencies": true,
   "session_boards": null,

@@ -315,16 +315,16 @@ class ToolsTest < Minitest::Test
     assert_equal [a, b], reg[:adopted]
     assert_equal [["doing", "In progress"], ["human_check", "Human Check"]],
                  reg[:adopted].map { |id| row = ok("kanban_card", id: id)["card"]; row.values_at("column", "column_label") }
-    assert_equal %w[claude-tl_g_r tl_g_r], kb.card(a).values_at(:assignee, :owner_session)
+    assert_equal [nil, "tl_g_r"], kb.card(a).values_at(:assignee, :owner_session), "the lead is no assignee"
     assert_equal "relay", kb.pings(a).first[:reason], "the operator's unheard comment reaches the new owner"
     # the registered agent name is the author: the card is owned with no tmux_session and no claim
     c = ok("kanban_create", project: "g/r", title: "D", author: "claude-tl_g_r")
-    assert_equal %w[claude-tl_g_r tl_g_r], c.values_at("assignee", "owner_session")
+    assert_equal [nil, "tl_g_r"], c.values_at("assignee", "owner_session")
     assert_includes ok("kanban_card", id: c["id"])["activity"].first["body"], "owner session: tl_g_r"
     # ask with tmux_session claims and asks in one step
     e = kb.create(slug: "g/r", title: "E", by: "op", column: "doing")
     asked = ok("kanban_ask", id: e, question: "Which?", author: "claude-tl_g_r", tmux_session: "tl_g_r", options: %w[x y])
-    assert_equal %w[doing claude-tl_g_r tl_g_r], asked.values_at("column", "assignee", "owner_session")
+    assert_equal ["doing", nil, "tl_g_r"], asked.values_at("column", "assignee", "owner_session"), "a lead asks unassigned"
     # registered already: refused (the session is not registered twice)
     msg = err("kanban_register", project: "g/r", type: "plain", tmux_session: "tl_g_r", author: "x")
     assert_match(/already registered as lead for g\/r/, msg)

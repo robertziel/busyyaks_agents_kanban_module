@@ -613,6 +613,7 @@ export function Board({
               held={data.held}
               external={data.external}
               approved={data.approved}
+              workerless={data.workerless ?? 0}
               showEmpty={showEmpty}
               onShowEmpty={setShowEmpty}
             />
@@ -634,7 +635,12 @@ export function Board({
               <span className={`kb-waiting${waiting === 0 ? " zero" : ""}`} title={waitingTitle}>
                 <b>{waiting}</b> waiting for you
               </span>
-              <HeldPills held={data.held} external={data.external} approved={data.approved} />
+              <HeldPills
+                held={data.held}
+                external={data.external}
+                approved={data.approved}
+                workerless={data.workerless ?? 0}
+              />
             </div>
           )}
           {/* one grid (kanban.css .kb-head): the summary rows over the filter row, the tools (live · Archived ·
@@ -1230,6 +1236,19 @@ function CardItem({
               ⌛ {c.progress_stale.slice(0, 60)}
             </span>
           )}
+          {c.waiting_for_worker &&
+            (c.waiting_for_worker.stale ? (
+              <span className="kb-stale" title={`waiting for you: ${c.waiting_for_worker.stale} — the lead was told`}>
+                ⌛ {c.waiting_for_worker.stale.slice(0, 60)}
+              </span>
+            ) : (
+              <span
+                className="kb-held kb-workerless"
+                title={`no worker on it${c.waiting_for_worker.since ? ` since ${c.waiting_for_worker.since}` : ""}: the lead hands it to one`}
+              >
+                waiting for a worker
+              </span>
+            ))}
           {c.review_round != null && reviewCols.includes(c.column) && (
             <span
               className="kb-round"
@@ -1525,10 +1544,29 @@ function QuickAdd({ api, slug, column, colLabel, open, setOpen, onAdded, onError
 }
 
 // "N waiting for CI" (gate cards whose Approve would not pass now), "N blocked externally" and "N approved · agent on
-// it" (gate cards the operator approved that their agent carries on): none waits for you
-function HeldPills({ held, external, approved }: { held: number; external: number; approved: number }) {
+// it" (gate cards the operator approved that their agent carries on), "N waiting for a worker" (the lead hands
+// them out): none waits for you
+function HeldPills({
+  held,
+  external,
+  approved,
+  workerless,
+}: {
+  held: number;
+  external: number;
+  approved: number;
+  workerless: number;
+}) {
   return (
     <>
+      {workerless > 0 && (
+        <span
+          className="kb-held kb-workerless"
+          title="cards with no worker: the lead gives each to an idle worker or starts one — not counted"
+        >
+          <b>{workerless}</b> waiting for a worker
+        </span>
+      )}
       {approved > 0 && (
         <span
           className="kb-held kb-carried"
@@ -1567,6 +1605,7 @@ function FoldedSummary({
   held,
   external,
   approved,
+  workerless,
   showEmpty,
   onShowEmpty,
 }: {
@@ -1577,6 +1616,7 @@ function FoldedSummary({
   held: number;
   external: number;
   approved: number;
+  workerless: number;
   showEmpty: boolean;
   onShowEmpty: (v: boolean) => void;
 }) {
@@ -1586,7 +1626,7 @@ function FoldedSummary({
       <span className={`kb-waiting${waiting === 0 ? " zero" : ""}`} title={waitingTitle}>
         <b>{waiting}</b> waiting for you
       </span>
-      <HeldPills held={held} external={external} approved={approved} />
+      <HeldPills held={held} external={external} approved={approved} workerless={workerless} />
       {showEmpty
         ? cols.map((c) => (
             <span key={c.key} className={`kb-pill kb-c-${c.key}${c.count === 0 ? " zero" : ""}`} title={c.label}>

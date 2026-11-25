@@ -219,6 +219,12 @@ function PeekBody({ id, read }: { id: number; read: Read }) {
         {c.blocked && <span className="kb-extblocked">blocked externally</span>}
         {c.gate_hold && <span className="kb-held">⏳ {c.gate_hold}</span>}
         {c.progress_stale && <span className="kb-stale">⌛ {c.progress_stale}</span>}
+        {c.waiting_for_worker &&
+          (c.waiting_for_worker.stale ? (
+            <span className="kb-stale">⌛ {c.waiting_for_worker.stale}</span>
+          ) : (
+            <span className="kb-held kb-workerless">waiting for a worker</span>
+          ))}
         {c.blocked_by.length > 0 && <span className="kb-blocked">⧗ waits for #{c.blocked_by.join(", #")}</span>}
         {c.approved && <span className="kb-approved">✓ approved</span>}
         {c.review_round != null && <span className="kb-round">round {c.review_round}</span>}

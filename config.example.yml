@@ -162,6 +162,13 @@ idle_watch: { ci_ping_after_minutes: 10, ci_comment_after_minutes: 20, owner_idl
 # comment; N min after that the card counts as waiting for the operator ("no progress for M min") until progress resets
 # the stretch (each step once per stretch).
 progress_watch: { stale_minutes: 30 }
+# waiting-for-a-worker watch (card 612; Store#worker_watch_pass, every notifier watch pass). A lead is never a card's
+# assignee: a card in a column a LEAD type `takes`, not in a terminal column, not flagged, with no assignee is "waiting
+# for a worker" — on its face, in the board header and in the waiting list's `workerless` (not needs-you); the lead
+# gives it to an idle worker (kanban_assign_worker) or starts one (kanban_spawn). wait_minutes (N) is required:
+# null = off. Waiting N min → ONE ping to the board's running lead, and from then on the card counts as waiting for the
+# operator ("no worker for M min") until it gets a worker.
+worker_watch: { wait_minutes: 15 }
 # the handoff gate's requirements on a board with a GATE column (kanban_handoff: how to check it + PR / CI URLs when
 # required, screenshots attached first when ui_change and ui_change_needs_screenshots). null = this host has no handoff
 # gate — a board with a gate column is then refused when read.

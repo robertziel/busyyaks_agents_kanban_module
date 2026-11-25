@@ -33,6 +33,8 @@ module AgentsKanban
   #   3e. the progress watch (config.progress_watch): a card in a working / review column with no progress for
   #       stale_minutes pings its owner, then gets a comment, then counts as waiting (Store#progress_watch_pass); a card
   #       the Store's ci: port cannot answer is said once per change of reason;
+  #   3f. the worker watch (config.worker_watch, card 612): a card waiting for a worker gets its since; waiting
+  #       wait_minutes pings the board's running lead once and then counts as waiting (Store#worker_watch_pass);
   #   4. owner sessions the collector snapshot shows waiting get their screen read: a dialog becomes ONE ask-gate question
   #      once it has stayed on the screen session_dialogs.settle_seconds (first seen → still there that much later);
   #      a host with no collector (agents Refused) or an unreachable one turns off only this step ("dialog scan off");
@@ -113,7 +115,8 @@ module AgentsKanban
       expired = @store.expire_dialogs(check: ->(session, socket) { @client.dialog(session: session, socket: socket) })
       @log.puts("dialogs expired on cards #{expired.join(', ')}") if expired.any?
       released = @store.watch_owners(live, grace: @grace)
-      # every taken card gets an ALIVE owner and an assignee — on the first pass after the host starts too
+      # every taken card gets an ALIVE owner, and an assignee unless its owner is a lead (card 612: it waits for a
+      # worker) — on the first pass after the host starts too
       taken = @store.adopt_ownerless(live: live, grace: @grace)
       @log.puts("intake assigned cards #{taken.join(', ')}") if taken.any?
       @log.puts("watchdog released cards #{released.join(', ')}") if released.any?
@@ -141,6 +144,7 @@ module AgentsKanban
       guard("pr watch") { pr_watch }
       guard("approved CI") { approved_ci }
       guard("progress watch") { progress_watch }
+      guard("worker watch") { worker_watch(live) }
       guard("dialog scan") { watch_dialogs }
     end
 
@@ -231,6 +235,14 @@ ready: "ready for approval", }
                closed_nobody: "PR closed without merging, no owner session to ping", }
       pass.each { |id, what| @log.puts("pr watch: card #{id} #{said.fetch(what)}") if what.is_a?(Symbol) }
       @pr_watch_failed = failed
+    end
+
+    # Cards waiting for a worker (Store#worker_watch_pass, card 612): each escalation is said.
+    def worker_watch(live)
+      said = { told: "no worker yet, the lead pinged", told_nobody: "no worker yet, no lead runs to ping" }
+      @store.worker_watch_pass(live: live, grace: @grace).each do |id, what|
+        @log.puts("worker watch: card #{id} #{said[what]}") if said.key?(what)
+      end
     end
 
     # Cards in work columns that stopped moving (Store#progress_watch_pass): each escalation step is said; a card whose

@@ -1081,10 +1081,14 @@ class StoreTest < Minitest::Test
     assert_nil kb.card(id)[:owner_session], "Backlog is parked"
     kb.move(id, column: "todo", by: "operator@example.com")
     c = kb.card(id)
-    assert_equal %w[claude-tl_g_r tl_g_r todo], c.values_at(:assignee, :owner_session, :column)
-    assert_match(/assigned to claude-tl_g_r — session tl_g_r \(lead\) takes To do cards/,
+    # card 612: the lead owns it (routing) and is never its assignee — it waits for a worker, and the lead hears so
+    assert_equal [nil, "tl_g_r", "todo"], c.values_at(:assignee, :owner_session, :column)
+    assert_match(/owner session tl_g_r \(claude-tl_g_r, the lead\) — session tl_g_r \(lead\) takes To do cards · waiting for/,
                  kb.activity(id).map { |a| a[:body] }.join("\n"))
-    assert_includes kb.pings(id).map { |p| p[:reason] }, "assigned"
+    ping = kb.pings(id).find { |p| p[:reason] == "lead_dispatch" }
+    assert_match(/waits for a worker\. You never work it yourself: give it to an idle worker with kanban_assign_worker/,
+ping[:text])
+    assert_equal({ since: nil, stale: nil }, c[:waiting_for_worker])
     assert_empty kb.adopt_ownerless(live: Set["tl_g_r"]), "an owned card is never re-assigned"
   end
 
@@ -1098,14 +1102,19 @@ class StoreTest < Minitest::Test
     dead = kb.create(slug: "g/r", title: "dead owner", by: "op", column: "human_check")
     kb.update(dead, { "assignee" => "claude-old" }, by: "op")
     kb.set_owner(dead, session: "old", by: "op")
+    # card 612: a lead owner's missing assignee stays missing — the card waits for a worker
+    assert_empty kb.adopt_ownerless, "a lead never becomes the assignee"
+    assert_equal [nil, "tl_g_r"], kb.card(hand).values_at(:assignee, :owner_session)
+    kb.register_session(session: "pl_1", project: "g/r", type: "plain", launcher: "fullclaude", by: "op")
+    kb.set_owner(hand, session: "pl_1", by: "op")
     assert_equal [hand], kb.adopt_ownerless, "without a live list only the missing assignee is fixed"
-    assert_equal %w[claude-tl_g_r tl_g_r], kb.card(hand).values_at(:assignee, :owner_session)
-    assert_match(/assignee filled from its owner session tl_g_r/, kb.activity(hand).last[:body])
-    assert_equal [dead], kb.adopt_ownerless(live: Set["tl_g_r"], grace: 60)
-    assert_equal %w[claude-tl_g_r tl_g_r], kb.card(dead).values_at(:assignee, :owner_session)
+    assert_equal %w[claude-pl_1 pl_1], kb.card(hand).values_at(:assignee, :owner_session)
+    assert_match(/assignee filled from its owner session pl_1/, kb.activity(hand).last[:body])
+    assert_equal [dead], kb.adopt_ownerless(live: Set["tl_g_r", "pl_1"], grace: 60)
+    assert_equal [nil, "tl_g_r"], kb.card(dead).values_at(:assignee, :owner_session)
     assert_match(/owner session old is not alive — handed to session tl_g_r/, kb.activity(dead).map { |a| a[:body] }.join("\n"))
-    assert_includes kb.pings(dead).map { |p| p[:reason] }, "assigned"
-    assert_empty kb.adopt_ownerless(live: Set["tl_g_r"], grace: 60), "settled: nothing changes twice"
+    assert_includes kb.pings(dead).map { |p| p[:reason] }, "lead_dispatch"
+    assert_empty kb.adopt_ownerless(live: Set["tl_g_r", "pl_1"], grace: 60), "settled: nothing changes twice"
   end
 
   def test_the_sweep_assigns_a_card_a_session_released_and_skips_sessions_not_live
@@ -1127,11 +1136,12 @@ class StoreTest < Minitest::Test
     r = kb.register_session(session: "tl_g_r", project: "g/r", type: "lead", launcher: "fullclaude", by: "operator@example.com")
     assert_equal ["tl_g_r", "default", "lead", "fullclaude", "claude-tl_g_r", "g/r", [a, b]],
                  r.values_at(:session, :socket, :type, :launcher, :agent, :project, :adopted)
-    assert_equal %w[claude-tl_g_r tl_g_r], kb.card(a).values_at(:assignee, :owner_session)
-    assert_equal %w[claude-tl_g_r tl_g_r], kb.card(b).values_at(:assignee, :owner_session)
+    assert_equal [nil, "tl_g_r"], kb.card(a).values_at(:assignee, :owner_session), "card 612: a lead is no assignee"
+    assert_equal [nil, "tl_g_r"], kb.card(b).values_at(:assignee, :owner_session)
     assert_equal [nil, nil], kb.card(other).values_at(:assignee, :owner_session)
     assert_equal "lead_1", kb.card(owned)[:owner_session], "an owned card is never taken"
-    assert_match(/adopted by claude-tl_g_r — session tl_g_r \(lead\) registered for g\/r/, kb.activity(a).last[:body])
+    assert_match(%r{adopted by claude-tl_g_r — session tl_g_r \(lead\) registered for g/r · waiting for a worker},
+                 kb.activity(a).last[:body])
     assert_equal "relay", kb.pings(a).first[:reason], "the operator's unheard comment is relayed to the adopter"
     assert_empty kb.pings(b)
     # a type that takes nothing adopts nothing; a plain session's name is still the board's
@@ -1153,8 +1163,11 @@ class StoreTest < Minitest::Test
     assert_match(/not one of this board's sessions/, e.message)
     # a card created with the registered agent's session is owned from its first second
     id = kb.create(slug: "g/r", title: "D", by: "claude-tl_g_r", owner_session: "tl_g_r")
-    assert_equal %w[claude-tl_g_r tl_g_r], kb.card(id).values_at(:assignee, :owner_session)
-    assert_equal "created in Backlog · owner session: tl_g_r (claude-tl_g_r)", kb.activity(id).first[:body]
+    assert_equal [nil, "tl_g_r"], kb.card(id).values_at(:assignee, :owner_session), "card 612: the lead's card has no assignee"
+    assert_equal "created in Backlog · owner session: tl_g_r (claude-tl_g_r, a lead: never the assignee)",
+                 kb.activity(id).first[:body]
+    id = kb.create(slug: "g/r", title: "E", by: "claude-lead_1", owner_session: "lead_1")
+    assert_equal %w[claude-lead_1 lead_1], kb.card(id).values_at(:assignee, :owner_session)
   end
 
   # a face's colour: each agent name's registered type on the project, the newest registration winning; a name nobody

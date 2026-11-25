@@ -121,12 +121,14 @@ module AgentsKanban
           { project: p[:slug], columns: columns_json(b), columns_order: b.keys, waiting_columns: b.waiting,
             counts: c, total: c.values.sum, waiting: waits.waiting[p[:slug]], held: waits.held[p[:slug]],
             external: waits.external[p[:slug]], approved: waits.approved[p[:slug]], flagged: flagged[p[:slug]] || 0,
+            workerless: waits.workerless[p[:slug]],
             backlog_md: bm, }
         end
         tpl = boards[Board::TEMPLATE]
         [200, { columns: columns_json(tpl), columns_order: tpl.keys, waiting_columns: tpl.waiting,
                 waiting: rows.sum { |b| b[:waiting] }, held: rows.sum { |b| b[:held] },
-                external: rows.sum { |b| b[:external] }, approved: rows.sum { |b| b[:approved] }, boards: rows.sort_by { |b|
+                external: rows.sum { |b| b[:external] }, approved: rows.sum { |b| b[:approved] },
+                workerless: rows.sum { |b| b[:workerless] }, boards: rows.sort_by { |b|
  [-b[:total], b[:project]] }, },]
       end
     end
@@ -162,6 +164,8 @@ module AgentsKanban
         end
         [200, { waiting_columns: boards[Board::TEMPLATE].waiting, total: by_slug.values.sum(&:size), projects: sorted,
                 held: aside.call(w.held), external: aside.call(w.external), approved: aside.call(w.approved),
+                # card 612: the cards waiting for a worker — the lead's to hand out, never counted as needs-you
+                workerless: aside.call(w.workerless),
                 launch_failures: @store.launch_failures(slugs),
                 lead_ends: @store.lead_ends(slugs), },]
       end
@@ -183,7 +187,7 @@ module AgentsKanban
         w = @store.waiting_counts([p[:slug]], boards: { p[:slug] => b })
         [200, body.merge(columns_order: b.keys, waiting_columns: b.waiting, listened_columns: b.listened,
                          waiting: w.waiting[p[:slug]], held: w.held[p[:slug]], external: w.external[p[:slug]],
-                         approved: w.approved[p[:slug]], flagged: flagged,
+                         approved: w.approved[p[:slug]], flagged: flagged, workerless: w.workerless[p[:slug]],
                          # the progress watch: N min, what counts as progress here (null = off)
                          progress_watch: @store.progress_watch_json,
                          priorities: @config.priorities, label_colors: @config.label_colors,
@@ -718,6 +722,8 @@ module AgentsKanban
         gate_hold: c[:gate_hold],
         # the progress watch's reason (no progress for N min), when that is why it waits
         progress_stale: c[:progress_stale],
+        # no worker on it ({since, stale} | nil); stale = why it now waits for the operator
+        waiting_for_worker: c[:waiting_for_worker],
         # who approved it and when (null = not approved), its owner session, and — carried on by its agent
         # (the one predicate, Store#carried_on_json) — where the agent takes it next; an approved card nobody owns
         # waits here with carried_on null
