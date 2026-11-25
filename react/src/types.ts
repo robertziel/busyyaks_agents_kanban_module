@@ -269,6 +269,10 @@ export type Card = {
   // the progress watch's last step: why the card waits for the operator ("no progress for 90 min (since 14:02)"); null =
   // it moves, or is not watched
   progress_stale?: string | null;
+  // card 612 — a lead is never a card's assignee: an open card in a column a lead takes with no assignee waits for a
+  // worker (since = when the watch first saw it; stale = why it now waits for the operator, after worker_watch); null =
+  // it has one, or no worker is wanted where it sits
+  waiting_for_worker?: { since: string | null; stale: string | null } | null;
   // approved on a PR that conflicts with its base (card 497): the agent rebases onto base (base_sha), re-runs CI and
   // merges once green; null = not marked
   needs_rebase?: { pr: number | null; state: string; base: string; base_sha: string; at: string } | null;
@@ -481,6 +485,8 @@ export type BoardData = {
   external: number;
   // gate cards the operator approved that their agent carries on: shown apart, never counted as waiting
   approved: number;
+  // cards waiting for a worker (card 612) and for nobody else: the lead's to hand out, never counted as waiting for you
+  workerless?: number;
   flagged: number;
   // the progress watch (config progress_watch): its period and what counts as progress on this host (evidence: "card
   // activity" + the host port's kinds; port false = card activity only); null = off

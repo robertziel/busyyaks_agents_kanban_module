@@ -311,7 +311,9 @@ module AgentsKanban
     # held: {slug => [card]} — the gate cards waiting for CI (gate_hold), not for the operator; external: {slug => [card]}
     # — the cards only blocked_external (waiting for the world: another card, CI, a third party), not for the operator
     # approved: {slug => [card]} — the gate cards the operator approved whose agent carries them on (carried_on?)
-    WaitingCards = Struct.new(:by_slug, :boards, :held, :external, :approved)
+    # workerless: {slug => [card]} — the cards waiting for a worker (card 612) the watch has not escalated yet: the lead's
+    # to hand out, not the operator's
+    WaitingCards = Struct.new(:by_slug, :boards, :held, :external, :approved, :workerless)
 
     # Live cards of these projects waiting for the operator: the ones flagged needs_operator (a question asked, a
     # dialog on the owner's screen) in whatever column they sit, and the cards in their boards' WAITING columns (a
@@ -325,20 +327,24 @@ module AgentsKanban
       boards = boards_for(rows.map { |c| c[:project_slug] }.uniq + [Board::TEMPLATE])
       picked = rows.select do |c|
         b = boards[c[:project_slug]]
-        flagged?(c) || b.waiting.include?(c[:column]) || progress_stale(c, b)
+        flagged?(c) || b.waiting.include?(c[:column]) || progress_stale(c, b) || waiting_for_worker?(c, b)
       end
       all = decorate(picked.map { |c| hydrate(c, boards[c[:project_slug]]) }, boards)
       external, rest = all.partition { |c| external?(c) }
       held, rest = rest.partition { |c| c[:gate_hold] && !flagged?(c) }
-      approved, list = rest.partition { |c| carried_on?(c, boards[c[:project_slug]], c[:gate_hold]) }
+      approved, rest = rest.partition { |c| carried_on?(c, boards[c[:project_slug]], c[:gate_hold]) }
+      # a card waiting for a worker that waits for nobody else (its gate holds, asks nothing) is the lead's, not yours
+      workerless, list = rest.partition { |c| c[:waiting_for_worker] && !c[:waiting] }
       acts = activity_t.where(card_id: list.map { |c| c[:id] }, kind: %w[move create])
         .select(:card_id, :body, :created_at)
         .all
         .group_by { |a| a[:card_id] }
       external.each { |c| c[:since] = flag_since(c) }
       approved.each { |c| c[:since] = c[:approved_at] }
+      workerless.each { |c| c[:since] = c[:worker_wait_at] }
       list.each do |c|
         c[:since] = flag_since(c) || (c[:progress_stale] && c[:progress_stale_at]) ||
+                    (c[:waiting_for_worker]&.dig(:stale) && c[:worker_wait_at]) ||
                     (acts[c[:id]] || []).select { |a| a[:body].end_with?(c[:column_label]) }.map { |a| a[:created_at] }.max
       end
       sorted = list.sort_by do |c|
@@ -347,7 +353,8 @@ module AgentsKanban
       end
       WaitingCards.new(sorted.group_by { |c| c[:project_slug] }, boards, held.group_by { |c| c[:project_slug] },
                        external.sort_by { |c| [c[:since], c[:id]] }.group_by { |c| c[:project_slug] },
-                       approved.sort_by { |c| [c[:since], c[:id]] }.group_by { |c| c[:project_slug] })
+                       approved.sort_by { |c| [c[:since], c[:id]] }.group_by { |c| c[:project_slug] },
+                       workerless.sort_by { |c| [c[:since] || 0, c[:id]] }.group_by { |c| c[:project_slug] })
     end
 
     # The cross-cutting flags (SPEC § 4): a flagged card keeps its column, waits for the operator (or the world) and
@@ -365,7 +372,7 @@ module AgentsKanban
     # A card the progress watch escalated to its last step (progress_stale) waits for the operator too.
     def waits_for_operator?(c, b, hold)
       needs_operator?(c) || (!external?(c) && hold.nil? && !carried_on?(c, b, hold) && b.waiting.include?(c[:column])) ||
-        !progress_stale(c, b).nil?
+        !progress_stale(c, b).nil? || !worker_stale(c, b).nil?
     end
 
     # Approved and carried on by its agent: a card in a waiting gate the operator approved, whose next step is
@@ -467,6 +474,8 @@ module AgentsKanban
             gate_hold: c[:gate_hold], # waiting for CI, not for the operator (gate_hold; decorated cards only)
             # the progress watch's last step: why the card waits for the operator (decorated cards only)
             progress_stale: c[:progress_stale],
+            # no worker on it (card 612: a lead is never an assignee): {since, stale} | nil (decorated cards only)
+            waiting_for_worker: c[:waiting_for_worker],
             # why the progress watch could not read this card's evidence on its last pass (nil = it could)
             progress_error: progress_watch? ? c[:progress_error] : nil,
             # approved on a PR that conflicts with its base (card #497; decorated cards only): what to rebase onto
@@ -568,17 +577,25 @@ module AgentsKanban
       reg = owner && open_session(owner)
       elsewhere = reg && reg[:project_slug] != slug ? reg[:project_slug] : nil
       owner = nil if elsewhere
+      # a lead owns the cards it creates (their pings reach it) but is never their assignee: they wait for a worker
+      lead_made = owner && (lead_reg?(reg) || lead_agent?(by))
+      no_lead_assignee!(assignee) unless assignee.nil? # given with or without an owner: a lead named is refused
+      who = if lead_made then nil
+            elsif owner then by
+            else assignee!(assignee)
+            end
       # validate before the transaction: Sequel wraps anything raised inside one in a DatabaseError
       row = { project_slug: slug, column: column, title: title!(title), notes: notes.to_s,
               labels: JSON.generate(labels!(labels, slug)),
-              assignee: owner ? by : assignee!(assignee), priority: priority!(priority), due_at: due!(due),
+              assignee: who, priority: priority!(priority), due_at: due!(due),
               created_by: by, created_at: now, updated_at: now,
               parent_id: pid, metadata: metadata.nil? ? nil : JSON.generate(metadata!(no_pr_keys!(metadata))),
               owner_session: owner, owner_socket: owner && owner_socket.to_s, }
       blocked!(b, column, unfinished([pid].compact), "card")
       @db.transaction do
         id = cards.insert(row.merge(position: live(slug).where(column: column).count))
-        note = if owner then " · owner session: #{owner} (#{by})"
+        note = if lead_made then " · owner session: #{owner} (#{by}, a lead: never the assignee)"
+               elsif owner then " · owner session: #{owner} (#{by})"
                elsif elsewhere then " · not owned: #{owner_session.to_s.strip} is registered for #{elsewhere}, not #{slug}"
                else ""
                end
@@ -601,6 +618,7 @@ module AgentsKanban
       set[:notes] = a[:notes].to_s if a.key?(:notes)
       set[:labels] = labels!(a[:labels], c[:project_slug]) if a.key?(:labels)
       set[:assignee] = assignee!(a[:assignee]) if a.key?(:assignee)
+      no_lead_assignee!(set[:assignee]) if set[:assignee]
       set[:priority] = priority!(a[:priority]) if a.key?(:priority)
       set[:due_at] = due!(a[:due]) if a.key?(:due)
       set[:due_done] = bool!(a[:due_done], "due_done") if a.key?(:due_done)
@@ -1104,7 +1122,11 @@ module AgentsKanban
     def ask(id, question:, by:, options: nil, session: nil)
       c = card!(id)
       b = board_of(c[:project_slug])
-      c = claim(c[:id], assignee: by, session: session) if session && c[:owner_session].nil?
+      if session && c[:owner_session].nil?
+        # a lead asking owns the card (the answer reaches it) but never claims it (card 612: no lead assignee)
+        lead = lead_reg?(open_session(session.to_s.strip))
+        c = lead ? set_owner(c[:id], session: session, by: by) : claim(c[:id], assignee: by, session: session)
+      end
       raise Invalid, "card ##{c[:id]} is archived" if c[:archived_at]
       if b.terminal?(c[:column])
         raise Denied, "card ##{c[:id]} is in #{b.label(c[:column])} — its work is over; ask with kanban_comment"
@@ -1530,6 +1552,10 @@ module AgentsKanban
                       "it cannot own a card on #{c[:project_slug]}'s board — " \
                       "leave it to #{c[:project_slug]}'s sessions"
       end
+      if lead_reg?(reg) || lead_agent?(assignee)
+        raise Denied, "#{lead_reg?(reg) ? "session #{reg[:session]}" : assignee} is a lead and cannot claim card " \
+                      "##{c[:id]}: #{NO_LEAD_ASSIGNEE}"
+      end
       update(c[:id], { "assignee" => assignee }, by: assignee)
       set_owner(c[:id], session: session, socket: socket, by: assignee)
     end
@@ -1705,6 +1731,9 @@ module AgentsKanban
       by = who!(by)
       not_registered!(s)
       lead = lead_row!(t, project, lead_id)
+      if for_cards && @config.lead_type?(t)
+        raise Denied, "a #{t.key} session is not started for a card: #{NO_LEAD_ASSIGNEE}"
+      end
       agent = @config.agent_name(t, session: s, slug: project)
       now = @clock.call
       adopted = []
@@ -1729,10 +1758,12 @@ module AgentsKanban
             adopted << cid
           end
         elsif (takes = board_of(project).takes_columns(t)).any?
+          leads = @config.lead_type?(t) # a lead owns what it adopts (routing) and assigns none of it to itself
           live(project).where(column: takes, owner_session: nil).order(:column, :position, :id).all.each do |c|
             cards.where(id: c[:id]).update(owner_session: s, owner_socket: socket.to_s, owner_missing_since: nil,
-                                           assignee: agent, updated_at: now)
-            log(c[:id], "owner", "adopted by #{agent} — session #{s} (#{t.key}) registered for #{project}", by)
+                                           assignee: leads ? nil : agent, updated_at: now)
+            wait = leads ? " · waiting for a worker" : ""
+            log(c[:id], "owner", "adopted by #{agent} — session #{s} (#{t.key}) registered for #{project}#{wait}", by)
             relay_undelivered(c[:id])
             adopted << c[:id]
           end
@@ -1874,6 +1905,8 @@ module AgentsKanban
           next if owner_ok && !c[:assignee].to_s.strip.empty?
 
           own = owner_ok && rows.find { |r| r[:session] == c[:owner_session] }
+          next if own && lead_reg?(own) # the lead owns it and waits for a worker: never its assignee (card 612)
+
           if owner_ok && own
             r = own
             why = "assignee filled from its owner session #{r[:session]}"
@@ -1890,12 +1923,18 @@ module AgentsKanban
                     "session #{r[:session]} (#{t.key}) takes #{b.label(c[:column])} cards"
                   end
           end
+          leads = lead_reg?(r)
           @db.transaction do
             cards.where(id: c[:id]).update(owner_session: r[:session], owner_socket: r[:socket], owner_missing_since: nil,
-                                           assignee: r[:agent_name], updated_at: now)
-            log(c[:id], "owner", "assigned to #{r[:agent_name]} — #{why}", by)
+                                           assignee: leads ? nil : r[:agent_name], updated_at: now)
+            if leads
+              log(c[:id], "owner",
+"owner session #{r[:session]} (#{r[:agent_name]}, the lead) — #{why} · waiting for a worker", by)
+            else
+              log(c[:id], "owner", "assigned to #{r[:agent_name]} — #{why}", by)
+            end
             relay_undelivered(c[:id]) if c[:owner_session] != r[:session]
-            enqueue_ping(card(c[:id]), "assigned", by, "assigned")
+            enqueue_ping(card(c[:id]), leads ? "lead_dispatch" : "assigned", by, leads ? "waits" : "assigned")
           end
           changed << c[:id]
         end
@@ -2213,6 +2252,12 @@ module AgentsKanban
                "Read the card with kanban_card id=#{c[:id]}, act on it, and reply with kanban_comment."
              when "ci_idle", "pr_closed", "progress", "rebase_cleared"
                "#{tag} #{body}"
+             when "lead_dispatch"
+               "#{tag} Card ##{c[:id]} \"#{c[:title]}\" (#{b.label(c[:column])}, #{c[:project_slug]}) " \
+                 "#{body == "waits" ? 'waits for a worker' : body}. #{DISPATCH_ACTION}"
+             when "worker_assigned"
+               "#{tag} Card ##{c[:id]} \"#{c[:title]}\" (#{b.label(c[:column])}, #{c[:project_slug]}) " \
+                 "is yours: #{body} gave it to you. Read it with kanban_card id=#{c[:id]} and start the work."
              when "assigned"
                "#{tag} Card ##{c[:id]} \"#{c[:title]}\" (#{b.label(c[:column])}, #{c[:project_slug]}) " \
                "is assigned to you — your session takes #{b.label(c[:column])} cards. " \
@@ -2310,7 +2355,7 @@ module AgentsKanban
     # One ping per event — ask, handoff, block, session end, the progress watch's first step — never per comment. Only a
     # session registered UNDER a lead has one; none when the lead itself acted, or its registration ended. A row of its
     # own: it never waits for the worker's turn, and a worker's pending pings never hold it back (next_pings).
-    LEAD_PINGS = %w[lead_ask lead_handoff lead_block lead_session_end lead_progress].freeze
+    LEAD_PINGS = %w[lead_ask lead_handoff lead_block lead_session_end lead_progress lead_dispatch].freeze
     OPERATOR_COMMENT = "operator_comment"
     OPERATOR_PINGS = ["answer", "approve", "move", "relay", OPERATOR_COMMENT].freeze
     # next_pings' order: a row that may sit in the input, the operator's rows, lead events, the rest
@@ -2608,7 +2653,8 @@ module AgentsKanban
     # nothing (gate_hold), plus the ones asking elsewhere. `held` = {slug => n} of gate cards waiting for CI, `external` =
     # {slug => n} of cards only blocked_external (external?), in any column.
     # `approved` = {slug => n} of gate cards the operator approved whose agent carries them on (carried_on?).
-    WaitingCounts = Struct.new(:waiting, :held, :external, :approved)
+    # `workerless` = {slug => n} of cards waiting for a worker and for nobody else (card 612).
+    WaitingCounts = Struct.new(:waiting, :held, :external, :approved, :workerless)
 
     def waiting_counts(slugs, boards: nil)
       rows = cards.where(archived_at: nil, on_hold_at: nil, project_slug: slugs.to_a).all
@@ -2619,7 +2665,10 @@ module AgentsKanban
       held = Hash.new(0)
       external = Hash.new(0)
       approved = Hash.new(0)
+      workerless = Hash.new(0)
       rows.each do |r|
+        workerless[r[:project_slug]] += 1 if waiting_for_worker?(r, boards[r[:project_slug]]) &&
+                                             !waits_for_operator?(r, boards[r[:project_slug]], holds[r[:id]])
         if waits_for_operator?(r, boards[r[:project_slug]], holds[r[:id]])
           waiting[r[:project_slug]] += 1
         elsif external?(r)
@@ -2630,7 +2679,163 @@ module AgentsKanban
           approved[r[:project_slug]] += 1
         end
       end
-      WaitingCounts.new(waiting, held, external, approved)
+      WaitingCounts.new(waiting, held, external, approved, workerless)
+    end
+
+    # ── a lead is never a card's assignee; it gives each waiting card to a worker (card 612) ──────────
+    #
+    # A lead OWNS what it adopts (owner_session: the card's pings reach it, it routes them) but is never a card's
+    # ASSIGNEE: every write that would make one is refused (update, claim, create, a spawn for a lead), adoption and the
+    # assignee fill leave it empty. A card in a column a lead type takes, open and unflagged, with no assignee is WAITING
+    # FOR A WORKER: the lead gives it to an idle worker (assign_worker) or starts one (kanban_spawn).
+    NO_LEAD_ASSIGNEE = "a lead is never a card's assignee (card 612) — it gives each card waiting for a worker to an " \
+                       "idle worker of the board (kanban_assign_worker) or starts a new one (kanban_spawn)"
+    DISPATCH_ACTION = "You never work it yourself: give it to an idle worker with kanban_assign_worker(id, " \
+                      "worker_session, tmux_session) — kanban_board lists them under `dispatch` — or start a new one " \
+                      "with kanban_spawn(id, type, tmux_session)."
+
+    def lead_type_keys = @config.lead_types.map(&:key)
+    def lead_reg?(r) = !r.nil? && lead_type_keys.include?(r[:type_key])
+
+    # The agent name (or the tmux session) of any registration, open or ended, of a lead type: read off the registry,
+    # never off the name's shape.
+    def lead_agent?(name)
+      n = name.to_s.strip
+      return false if n.empty? || lead_type_keys.empty?
+
+      sessions_t.where(type_key: lead_type_keys).where(Sequel.|({ agent_name: n }, { session: n })).any?
+    end
+
+    def no_lead_assignee!(name)
+      raise Denied, "#{name} is a lead: #{NO_LEAD_ASSIGNEE}" if lead_agent?(name)
+    end
+
+    # The columns a worker is wanted in: every column a lead type takes on this board.
+    def worker_columns(b) = @config.lead_types.flat_map { |t| b.takes_columns(t) }.uniq
+
+    def waiting_for_worker?(c, b)
+      return false if lead_type_keys.empty? || session_slug?(c[:project_slug]) || c[:archived_at] || c[:on_hold_at]
+      return false if !b.column?(c[:column]) || b.terminal?(c[:column]) || flagged?(c) || !c[:assignee].to_s.strip.empty?
+
+      worker_columns(b).include?(c[:column])
+    end
+
+    # Why the card counts as waiting for the operator (the watch pinged the lead and still no worker), or nil.
+    def worker_stale(c, b)
+      return nil unless @config.worker_watch.on? && c[:worker_wait_told_at] && c[:worker_wait_at] &&
+                        waiting_for_worker?(c, b)
+
+      "no worker for #{(c[:worker_wait_told_at] - c[:worker_wait_at]) / 60} min (since #{hhmm(c[:worker_wait_at])})"
+    end
+
+    # card JSON `waiting_for_worker`: {since (the first watch pass that saw it; null before), stale (worker_stale)} | nil
+    def waiting_for_worker_json(c, b)
+      return nil unless waiting_for_worker?(c, b)
+
+      { since: iso(c[:worker_wait_at]), stale: worker_stale(c, b) }
+    end
+
+    # Every notifier watch pass: a card that waits for a worker gets its since (worker_wait_at), one that no longer
+    # waits loses it; with worker_watch on, a card waiting wait_minutes pings the board's running lead ONCE and counts as
+    # waiting for the operator from then on (worker_stale) until it gets a worker. → [[card_id, :waiting | :told |
+    # :told_nobody]]
+    def worker_watch_pass(live:, grace:)
+      return [] if lead_type_keys.empty?
+
+      now = @clock.call
+      rows = project_cards.where(archived_at: nil, on_hold_at: nil).order(:id).all
+      boards = boards_for(rows.map { |c| c[:project_slug] }.uniq)
+      rows.filter_map do |c|
+        b = boards[c[:project_slug]]
+        unless waiting_for_worker?(c, b)
+          cards.where(id: c[:id]).update(worker_wait_at: nil, worker_wait_told_at: nil) if c[:worker_wait_at]
+          next
+        end
+        if c[:worker_wait_at].nil?
+          cards.where(id: c[:id]).update(worker_wait_at: now, worker_wait_told_at: nil)
+          next [c[:id], :waiting]
+        end
+        next unless @config.worker_watch.on? && c[:worker_wait_told_at].nil? &&
+                    now - c[:worker_wait_at] >= @config.worker_watch.wait_minutes * 60
+
+        [c[:id], worker_wait_told!(c, b, now, live, grace)]
+      end
+    end
+
+    def worker_wait_told!(c, b, now, live, grace)
+      lead = @config.lead_types.lazy.map { |t| running_lead(t.key, c[:project_slug], live: live, grace: grace) }
+                    .find(&:itself)
+      mins = (now - c[:worker_wait_at]) / 60
+      sys = @config.system_author
+      @db.transaction do
+        cards.where(id: c[:id]).update(worker_wait_told_at: now)
+        touch(c[:id])
+        if lead
+          text = "[#{sys}] Card ##{c[:id]} \"#{c[:title]}\" (#{b.label(c[:column])}, #{c[:project_slug]}) has " \
+                 "waited #{mins} min for a worker and now counts as waiting for the operator. #{DISPATCH_ACTION}"
+          queue_ping(c[:id], lead[:session], lead[:socket], text, "lead_dispatch")
+        end
+        who = lead ? "pinged the lead #{lead[:session]}" : "no lead runs to ping — press Launch"
+        log(c[:id], "worker", "no worker for #{mins} min — #{who}; counts as waiting for the operator", sys)
+      end
+      lead ? :told : :told_nobody
+    end
+
+    # The idle sessions a lead may give a card to: open registrations under THIS lead (lead_id), on its board, alive
+    # (`live`), that own no open card (not archived, not in a terminal column). → rows, oldest first.
+    def idle_workers(lead, live:)
+      under = @config.agent_types.select { |t| t.under == lead[:type_key] }.map(&:key)
+      b = board_of(lead[:project_slug])
+      closed = b.keys.select { |k| b.terminal?(k) }
+      sessions_t.where(ended_at: nil, project_slug: lead[:project_slug], type_key: under, lead_id: lead[:id])
+                .order(:id).all
+                .select { |r| live.include?(r[:session]) }
+                .reject do |r|
+        cards.where(owner_session: r[:session], owner_socket: r[:socket], archived_at: nil).exclude(column: closed).any?
+      end
+    end
+
+    # The lead gives a card waiting for a worker to one of its idle workers (idle_workers): owner + assignee = that
+    # worker, the operator's unheard comments relayed, one `worker_assigned` ping. lead: the caller's lead registration
+    # (Tools proved it through the host). Refused: another board's card, a card that is not waiting for a worker, one
+    # owned by another session, a worker that is not idle (the refusal names the idle ones), an unfinished parent.
+    def assign_worker(id, worker:, lead:, live:, by:)
+      c = card!(id)
+      raise Invalid, "no card #{id}" if on_hold?(c)
+      unless c[:project_slug] == lead[:project_slug]
+        raise Denied, "card ##{c[:id]} is on #{c[:project_slug]}, not on #{lead[:project_slug]} (your board)"
+      end
+
+      b = board_of(c[:project_slug])
+      unless waiting_for_worker?(c, b)
+        why = if !c[:assignee].to_s.strip.empty? then "its assignee is #{c[:assignee]}"
+              elsif flagged?(c) then "it is flagged (it waits for the operator or the world)"
+              else "#{b.label(c[:column])} is no column a worker is wanted in"
+              end
+        raise Denied, "card ##{c[:id]} is not waiting for a worker: #{why}"
+      end
+      unless c[:owner_session].nil? || c[:owner_session] == lead[:session]
+        raise Denied, "card ##{c[:id]} is owned by #{c[:owner_session]} — a lead hands out only its own or ownerless cards"
+      end
+      blocked!(b, nil, c[:blocked_by], "card ##{c[:id]}", claim: true)
+      idle = idle_workers(lead, live: live)
+      w = idle.find { |r| r[:session] == worker.to_s.strip }
+      unless w
+        names = idle.map { |r| "#{r[:session]} (#{r[:type_key]})" }
+        raise Denied, "#{worker} is not an idle worker of #{lead[:project_slug]} (registered under you, alive, owning no " \
+                      "open card) — idle now: #{names.empty? ? 'none: start one with kanban_spawn' : names.join(', ')}"
+      end
+      by = who!(by)
+      @db.transaction do
+        cards.where(id: c[:id]).update(owner_session: w[:session], owner_socket: w[:socket], owner_missing_since: nil,
+                                       assignee: w[:agent_name], worker_wait_at: nil, worker_wait_told_at: nil,
+                                       updated_at: @clock.call)
+        log(c[:id], "owner", "assigned to #{w[:agent_name]} — session #{w[:session]} (#{w[:type_key]}), an idle " \
+                             "worker, by the lead #{lead[:agent_name]}", by)
+        relay_undelivered(c[:id])
+        enqueue_ping(card(c[:id]), "worker_assigned", by, "the lead #{lead[:agent_name]}")
+      end
+      card(c[:id])
     end
 
     # ── idle watch (config.idle_watch): CI finished and nobody acted; a live owner gone quiet ─────────────────────
@@ -3849,6 +4054,7 @@ module AgentsKanban
         c[:needs_rebase] = marks[c[:id]]
         c[:gate_hold] = holds[c[:id]]
         c[:progress_stale] = progress_stale(c, b)
+        c[:waiting_for_worker] = waiting_for_worker_json(c, b)
         c[:waiting] = waits_for_operator?(c, b, c[:gate_hold])
         c[:carried_on] = carried_on_json(c, b)
         c[:transitions] = b.column?(c[:column]) ? transitions_json(b, c[:column]) : []

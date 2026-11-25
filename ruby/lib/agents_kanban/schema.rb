@@ -43,7 +43,10 @@ module AgentsKanban
     # board's normal view, every watch and count, and every agent's sight (Tools: no such card) until released
     # 16 = + board_columns.requires_green_ci (0/1, null = 0): a gate column's own choice whether its approval step waits
     # for green CI — was the host-wide approval.requires_green_ci; no data step: every gate starts at 0
-    VERSION = 16
+    # 17 = a lead is never a card's assignee: + cards.worker_wait_at (since when the card waits for a worker,
+    # Store#worker_watch_pass) and worker_wait_told_at (the watch pinged the lead: the card counts as waiting for the
+    # operator); a data step (lead_assignees!): every open card whose assignee is a lead's agent name loses it, owner kept
+    VERSION = 17
     TABLES = %i[cards card_activity board_labels checklists checklist_items card_pings card_attachments session_dialogs
                 agent_sessions ci_watches boards board_columns board_transitions].freeze
 
@@ -59,7 +62,9 @@ module AgentsKanban
     # 20261124 → 9, 20261125 → 10).
     # Default: the current version.
     # prs: the host's PR roles port (Store.new's), needed by step 13 once a card holds PRs in the old shape
-    def migrate!(db, prefix: "", to: VERSION, prs: nil, now: Time.now.to_i)
+    # lead_types: the host's lead agent type keys (HostConfig#lead_types), needed by step 17 once a card's assignee is the
+    # agent name of a registered session (whose type it then reads)
+    def migrate!(db, prefix: "", to: VERSION, prs: nil, now: Time.now.to_i, lead_types: nil)
       raise ArgumentError, "to must be 1..#{VERSION} (got #{to.inspect})" unless to.is_a?(Integer) && (1..VERSION).cover?(to)
 
       t = tables(prefix)
@@ -96,7 +101,55 @@ module AgentsKanban
       prs_to_lists!(db, prefix: prefix, prs: prs, now: now) if to >= 14
       add_missing(db, t[:cards], [[:on_hold_at, Integer], [:on_hold_by, String]]) if to >= 15
       add_missing(db, t[:board_columns], [[:requires_green_ci, Integer]]) if to >= 16
+      if to >= 17
+        add_missing(db, t[:cards], [[:worker_wait_at, Integer], [:worker_wait_told_at, Integer]])
+        lead_assignees!(db, prefix: prefix, lead_types: lead_types, now: now)
+      end
       t
+    end
+
+    # The activity line step 17 leaves on each card it changed: its body starts with this (lead_assignees_down!).
+    LEAD_ASSIGNEE_CLEARED = "assignee cleared by the v17 migration: "
+
+    # v17 (card 612; idempotent: a second run finds no lead assignee): every OPEN card (not archived, not in a terminal
+    # column of its board) whose assignee is the agent name of a registration of a lead type (`lead_types`) loses its
+    # assignee — the owner session (the lead: it routes the card's pings) is kept — with an activity line by "migration"
+    # saying why. The card then waits for a worker. lead_types nil while any open card's assignee is a registered agent's
+    # name → ArgumentError (which of them are leads is the host's config, never guessed). → the card ids changed.
+    def lead_assignees!(db, prefix: "", lead_types: nil, now: Time.now.to_i)
+      t = tables(prefix)
+      agents = db[t[:agent_sessions]].distinct.select_map(:agent_name)
+      open = db[t[:cards]].where(archived_at: nil, assignee: agents).exclude(assignee: nil)
+      terminal = db[t[:board_columns]].where(type: %w[done cancelled]).select_map(%i[project_slug key]).to_set
+      rows = open.select(:id, :project_slug, :column, :assignee).all.reject { |c|
+ terminal.include?([c[:project_slug], c[:column]]) }
+      return [] if rows.empty?
+      raise ArgumentError, "lead_types: is required (step 17): open cards are assigned to registered agents" if lead_types.nil?
+
+      leads = db[t[:agent_sessions]].where(type_key: Array(lead_types)).distinct.select_map(:agent_name)
+      mine = rows.select { |c| leads.include?(c[:assignee]) }
+      db.transaction do
+        mine.each do |c|
+          db[t[:cards]].where(id: c[:id]).update(assignee: nil, updated_at: now)
+          db[t[:card_activity]].insert(card_id: c[:id], kind: "owner", author: "migration", created_at: now,
+                                       body: "#{LEAD_ASSIGNEE_CLEARED}#{c[:assignee]} is a lead, and a lead is never a " \
+                                             "card's assignee (card 612) — the card waits for a worker; its owner " \
+                                             "session is kept")
+        end
+      end
+      mine.map { |c| c[:id] }
+    end
+
+    # A host's rollback of step 17: refused (ArgumentError) while any card carries step 17's line — undoing it would mean
+    # making a lead a card's assignee again, which no version of the rule allows to be restored blindly.
+    def lead_assignees_down!(db, prefix: "")
+      t = tables(prefix)
+      ids = db[t[:card_activity]].where(author: "migration", kind: "owner")
+                                 .where(Sequel.like(:body, "#{LEAD_ASSIGNEE_CLEARED}%")).distinct.select_map(:card_id)
+      return if ids.empty?
+
+      raise ArgumentError, "step 17 cleared a lead assignee on cards #{ids.sort.join(', ')}: rolling back would restore a " \
+                           "lead as a card's assignee — refused (card 612)"
     end
 
     PR_URL = %r{\Ahttps://github\.com/([\w.-]+/[\w.-]+)/pull/([1-9]\d*)\z}

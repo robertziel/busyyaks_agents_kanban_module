@@ -3653,6 +3653,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.ak-root .kb-held.kb-workerless {
+  color: var(--ak-ink-dim);
+  background: color-mix(in srgb, var(--ak-ink-dim) 14%, transparent);
+}
 .ak-root .kb-held.kb-carried {
   color: var(--ak-ok);
   background: rgba(var(--ak-ok-rgb), 0.14);

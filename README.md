@@ -80,6 +80,9 @@ re-vendors it. It lives in **its own repo with its own history** so other projec
 - **Lead-first boards** — a board starts with its lead (the operator's Launch) and only the lead starts its team
   (`kanban_spawn`; the host checks the named session is the lead it started — a guard against cooperative agents, not authentication: one MCP bearer can name any tmux session): a session `under` a lead exists only while that lead runs, and the
   engine starts nothing on its own. A lead that died is on the waiting list and the board says "no lead: press Launch".
+  The lead owns what it adopts but is never a card's assignee: a card with no worker says "waiting for a worker", and the
+  lead gives it to an idle worker (`kanban_assign_worker`) or starts one; waiting too long pings the lead and then waits
+  for the operator (`worker_watch`).
 - **Gates and flags** — an agent hands work over only through `kanban_handoff` (QA steps, PR, CI, screenshots) into a
   gate column; only the operator approves. A question for the operator (`kanban_ask`) or an external blocker
   (`kanban_block`) is a FLAG on the card: it keeps its place, agents wait, the operator's comment answers it, a

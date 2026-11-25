@@ -51,7 +51,7 @@ module AgentsKanban
                kanban_checklist_add kanban_checklist_rename kanban_checklist_delete kanban_checklist_item_add
                kanban_checklist_item_edit
                kanban_checklist_toggle kanban_checklist_item_delete kanban_attach kanban_attachments kanban_attachment_get
-               kanban_checklist_item_convert kanban_session_board kanban_spawn].freeze
+               kanban_checklist_item_convert kanban_session_board kanban_spawn kanban_assign_worker].freeze
 
     def self.handles?(name) = NAMES.include?(name)
 
@@ -110,7 +110,9 @@ module AgentsKanban
       if lt
         parts << "Lead-first boards: a board's #{lt.key} session starts its team — kanban_spawn(id, type, tmux_session) " \
                  "gives a card its own session under it; nothing else starts one, and with no #{lt.key} running an " \
-                 "ownerless card waits for the operator's Launch."
+                 "ownerless card waits for the operator's Launch. The #{lt.key} owns the cards it adopts but is never " \
+                 "a card's assignee: a card with no assignee in a column it takes waits for a worker, and the " \
+                 "#{lt.key} gives it to an idle worker (kanban_assign_worker) or starts one (kanban_spawn)."
       end
       parts << "Opened a pull request for a card: kanban_pr_assign(id, pr_url, role, author) at once — every PR, on " \
                "every repo the card changes (it adds; a card holds any number) — the board knows a card's PRs only " \
@@ -483,7 +485,7 @@ module AgentsKanban
                     inputSchema: { type: "object", properties: { id: INT, note: { type: "string" }, author: AUTHOR },
                                    required: %w[id author], }, })
       defs << session_board_definition if host.session_boards
-      defs << spawn_definition if host.lead_types.any?
+      defs.push(spawn_definition, assign_worker_definition) if host.lead_types.any?
       defs
     end
 
@@ -503,6 +505,20 @@ module AgentsKanban
                        properties: { id: INT, type: { type: "string", enum: under.map(&:key) },
                                      tmux_session: SESSION_ARG, author: AUTHOR, },
                        required: %w[id type tmux_session author], }, }
+    end
+
+    # Card 612: the lead hands a card waiting for a worker to an idle one. Offered on a host with a lead type only.
+    def assign_worker_definition
+      { name: "kanban_assign_worker",
+        description: "LEAD ONLY: give a card that waits for a worker (no assignee, in a column you take — a lead is " \
+                     "never a card's assignee) to an IDLE worker of your board: a session registered under you, alive, " \
+                     "owning no open card (kanban_board lists them under `dispatch.idle_workers`). tmux_session: YOUR " \
+                     "(the lead's) tmux session, checked as kanban_spawn does. The worker becomes the card's owner " \
+                     "and assignee and gets one ping. No idle worker → start one with kanban_spawn. → the card.",
+        inputSchema: { type: "object",
+                       properties: { id: INT, worker_session: { type: "string", description: "the idle worker's tmux session" },
+                                     tmux_session: SESSION_ARG, author: AUTHOR, },
+                       required: %w[id worker_session tmux_session author], }, }
     end
 
     def session_board_definition
@@ -559,7 +575,16 @@ module AgentsKanban
 
         opened = @store.session_board!(session, by: str!(a, "author"))
         dump(board_json({ slug: opened[:slug] }).merge(session: session, state: opened[:state]))
-      when "kanban_board" then dump(board_json(project!(a), column: a["column"], archived: a["archived"] == true))
+      when "kanban_board"
+        p = project!(a)
+        out = board_json(p, column: a["column"], archived: a["archived"] == true)
+        # the lead's dispatch view (card 612) — on the agents' board read only: the API's board polls never ask the host
+        # for its live sessions on its account
+        if @config.lead_types.any? && !@store.session_slug?(p[:slug])
+          shown = a["column"] ? @store.board(p[:slug]).values.flatten : out[:columns].flat_map { |c| c[:cards] }
+          out[:dispatch] = dispatch_json(p[:slug], shown)
+        end
+        dump(out)
       when "kanban_workflow" then dump(@store.board_json(project!(a)[:slug]))
       when "kanban_card" then dump(markdown_only(card_body(@store.card!(int!(a, "id")))))
       when "kanban_create"
@@ -636,11 +661,30 @@ module AgentsKanban
         session = live_session!(a)
         dump(row(@store.claim(id, assignee: who, session: session)))
       when "kanban_spawn" then spawn(a)
+      when "kanban_assign_worker"
+        raise ArgumentError, "Tools needs a launcher: port for kanban_assign_worker" unless @launcher
+
+        lead = host_lead!(live_session!(a))
+        dump(row(@store.assign_worker(int!(a, "id"), worker: str!(a, "worker_session"), lead: lead, live: live_sessions!,
+                                                     by: str!(a, "author"))))
       when "kanban_attach" then attach(a)
       when "kanban_attachments" then dump(@attachments.list_json(@store.card!(int!(a, "id"))[:id]))
       when "kanban_attachment_get" then dump(@attachments.read_for_agent(int!(a, "attachment_id")))
       else labels_and_checklists(name, a)
       end
+    end
+
+    # The lead's dispatch view: the cards waiting for a worker (ids, board order) and the running lead's idle
+    # workers. The live session list unreadable → idle_workers null + idle_error (never a guessed list).
+    def dispatch_json(slug, cards)
+      waiting = cards.select { |c| c[:waiting_for_worker] }.map { |c| c[:id] }
+      live = @sessions.call
+      lead = @config.lead_types.lazy.map { |t| @store.running_lead(t.key, slug, live: live, grace: @grace) }.find(&:itself)
+      rows = lead ? @store.idle_workers(lead, live: live) : []
+      idle = rows.map { |r| { session: r[:session], agent: r[:agent_name], type: r[:type_key] } }
+      { waiting_for_worker: waiting, lead: lead&.dig(:session), idle_workers: idle }
+    rescue Delivery::Unavailable, Delivery::Refused => e
+      { waiting_for_worker: waiting, lead: nil, idle_workers: nil, idle_error: "cannot read the live sessions: #{e.message}" }
     end
 
     # kanban_spawn: the named tmux_session is the board's lead (a live session whose open registration's key digest

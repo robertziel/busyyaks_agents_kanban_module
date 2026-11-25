@@ -290,6 +290,33 @@ describe("Board", () => {
     expect(screen.getByText(/blocked externally$/).textContent).toBe("2 blocked externally");
   });
 
+  // card 612: a lead is never a card's assignee — a card with no worker is the lead's to hand out, not yours, until
+  // the worker watch escalates it
+  it("a card waiting for a worker is counted apart and says so on its face; escalated, it waits for you", async () => {
+    const cards = [
+      card({
+        id: 1,
+        column: "todo",
+        title: "No worker",
+        waiting_for_worker: { since: "2026-11-24T10:00:00Z", stale: null },
+      }),
+      card({
+        id: 2,
+        column: "doing",
+        title: "Still none",
+        waiting: true,
+        waiting_for_worker: { since: "2026-11-24T10:00:00Z", stale: "no worker for 15 min (since 10:00)" },
+      }),
+      card({ id: 3, column: "doing", title: "Has one", assignee: "worker-w_1" }),
+    ];
+    render(<Host api={fakeApi(boardData(coding, cards), cards)} />);
+    await screen.findByText("No worker");
+    expect(screen.getByText(/waiting for you/).textContent).toMatch(/^1 waiting for you/);
+    expect(document.querySelector(".kb-head .kb-workerless")?.textContent).toBe("1 waiting for a worker");
+    expect(document.querySelector(".kb-card .kb-workerless")?.textContent).toBe("waiting for a worker");
+    expect(screen.getByText("⌛ no worker for 15 min (since 10:00)")).toBeInTheDocument();
+  });
+
   it("draws the configured columns, the theme tokens and a card's badges", async () => {
     const cards = [
       card({ id: 1, column: "todo" }),

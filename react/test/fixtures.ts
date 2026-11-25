@@ -240,6 +240,7 @@ export function boardData(f: Fixture, cards: Card[], theme: Record<string, strin
     held: cards.filter((c) => !!c.gate_hold && c.waiting !== true && !(c.blocked && !c.needs_operator)).length,
     external: cards.filter((c) => !!c.blocked && !c.needs_operator).length,
     approved: cards.filter((c) => !!c.carried_on).length,
+    workerless: cards.filter((c) => !!c.waiting_for_worker && c.waiting !== true).length,
     flagged: cards.filter((c) => !f.board.rules.waiting.includes(c.column) && c.needs_operator).length,
     priorities: cfg.priorities,
     assignees: ["me"],

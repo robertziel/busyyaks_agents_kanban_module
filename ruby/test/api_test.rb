@@ -339,7 +339,7 @@ class ApiTest < Minitest::Test
     assert_equal ["--remote-control", "g_r_teamlead_1"], st[:argv].last(2)
     assert_equal "##{a}", st[:vars][:cards]
     assert_match(/\{dir\}/, st[:prompt_template])
-    assert_equal %w[claude-g_r_teamlead_1 g_r_teamlead_1], kb.card(a).values_at(:assignee, :owner_session)
+    assert_equal [nil, "g_r_teamlead_1"], kb.card(a).values_at(:assignee, :owner_session), "card 612: no lead assignee"
     # the second lead for the board is refused by the type's per-project cap; nothing started
     s, j = api.launch("g/r", { "type" => "lead", "launcher" => "localclaude" }, by: "op")
     assert_equal 422, s
