@@ -4,7 +4,11 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-11-25
+
+The first public release, together with [busyyaks](https://github.com/robertziel/busyyaks) 0.1.0 (its reference host;
+the two always carry the same version). Pre-1.0 (0.x): the host config keys, the `Api` / `Tools` surface and the
+schema steps may still change, each change recorded here.
 
 ### Added
 
@@ -20,27 +24,6 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 - **Hermes's dangerous-command panel is a session dialog**: `SessionDialog.parse` reads it from real
   screens (digits answer it; its countdown is never hashed; "Show full command" is shown, never clickable), and the
   notifier's dialog scan also reads a session whose screen shows `blocked` (Hermes keeps no status record).
-
-### Fixed
-
-- **CI: the React suite runs alone**: `scripts/ci/test.sh all` runs lint, both Ruby suites, audit and secrets at once,
-  then `react` with the runner to itself. Beside the two Ruby suites it shared GitHub's 4 vCPUs and random tests timed
-  out: runs 44430241873 (`feature/card-pr-lists`, 2026-11-19) and 45395693342 red, 45401030980 green with this change
-  (`test.sh all` 2 min 11 s).
-
-### Changed
-
-- **Agent-facing text**: no tool text tells a session that was not launched to register itself: `kanban_register` is
-  "only when the operator explicitly asks you to"; a session started by hand works the board only when the operator asks.
-- **Green CI is a gate column's setting, off by default**: `requires_green_ci: true` on a GATE
-  column (Board, Schema v16 `board_columns.requires_green_ci`, `rules.green_ci`, the editor's "Requires green CI"
-  checkbox, the gate's card "waits for you · CI") makes the approval out of that gate and a handoff into it wait for
-  green PR checks — the prefetch, gate hold, gate watch and Force exist only there. **Breaking**: the host config's
-  `approval` key is removed and refused, naming the move; after the v16 migration no gate asks CI until its board sets
-  it. A Store without a `ci:` port refuses to save a board that sets it. README § Use case: a gate that waits for green CI.
-
-### Added
-
 - **On hold** (schema v15): the operator parks a card where it sits — `Store#hold` / `Api#hold`
   (`cards.on_hold_at` / `on_hold_by`). A held card keeps its column and leaves the flow: the board's normal view (the
   header's "On hold · N" toggle shows the held cards in the same columns), every count, waiting list and watch, and
@@ -125,7 +108,6 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 - **`kanban_pr_assign(id, pr_url, role, author)`**: the agent that opened a PR assigns it to its
   card — metadata `prs.<role>` = the URL, merged into the card's metadata (`Store#assign_pr`). The MCP instructions
   tell agents to call it at once after opening a PR; a host reads a card's PRs from it, never from branch names or text.
-
 - **PR roles port**: `Store.new(prs:)` → `pr_roles(card)` → `{role => {repos:, required:, error:}}`;
   `kanban_pr_assign` refuses a role the host does not read, a PR on a repo its role does not take, a PR already on
   another card; an agent cannot move a card out of a working column into review / a gate / done while a required role
@@ -145,93 +127,6 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
   repeating the role left out) and never folds them; a PR row's `#N <repo>` label wraps at `_ - . /` instead of being
   cut; `CardLink.struck` draws history (a removed PR struck through, one line); chip
   text reads ≥ 4.5:1 on its tint; on a phone the rail spans the dialog's side columns.
-
-### Changed
-
-- **Board header, one grid**: summary pills, tools and filter controls share one height (28 px) on one row pitch; the
-  summary rows sit over the filter row and the tools (live · Archived · Workflow · ?) end that row. Under 760 px it is
-  one column: summary, filter, tools on one row. DOM (Tab) order = reading order: summary, filter, tools. The filter
-  (`.kb-filter`) and the new `.kb-tools` are children of `.kb-head`; the header's `.spacer` is gone.
-- **The idle watch skips only the card whose PR the `ci:` port cannot answer**: `[id, "CI skipped: <why>"]`
-  for that card, the others still pinged — one bad assignment no longer silences the watch for every project.
-
-### Changed (breaking for hosts)
-
-- **BREAKING: `Store.new` requires `prs:`** — the PR roles port, `pr_roles(card)` →
-  `{role => {repos:, required:, error:}}`; without it the Store raises `ArgumentError` at construction. Migration: pass
-  `prs:` (a host whose cards carry no PRs passes an object whose `pr_roles` answers `{}`). A host that wrote
-  `metadata.prs` itself moves to `kanban_pr_assign` / `Store#assign_pr`.
-- **BREAKING: a card's PRs are a list — Schema v14** (a card changes several repos and every
-  PR must show). Metadata `prs` was `{role => url}` (one PR per role, re-assigning replaced it); it is now
-  `[{url, repo, number, role, by, at}]` and `kanban_pr_assign` ADDS (it never replaces). A host that reads
-  `metadata.prs.<role>` reads the list instead (every entry of the role). Migration: a host migration
-  `Schema.migrate!(db, prefix:, to: 14, prs: <the Store's PR roles port>)` (= `Schema.prs_to_lists!`: text naming several
-  PRs → one entry each, a role key the host does not read → the one host role whose repos hold the PR's repo, a PR in no
-  role → `prs_removed` only when the port's optional `unread_reason` says why, anything else raises; rollback `Schema.prs_to_roles!`, refused while a card
-  holds what v12 cannot); a `{role => url}` left unconverted is refused on read.
-
-- **`face_roles` and `avatar_url` are required host-config keys** (null allowed; a bad value fails at load):
-  `face_roles` = null or `{role: [name globs]}` (a subagent whose name matches wears that role's colour);
-  `avatar_url` = null or an https template with `{sha256}` (the SHA-256 of the trimmed, lower-cased email, e.g.
-  Gravatar with `d=404`). Add both before upgrading.
-- **`SessionsLive.present` is required**: a `sessionsLive` answer without the `present` list is a failed read (the
-  dialog says so), never "nobody is here".
-- **The workflow graph runs top to bottom, as a flowchart**: `BoardEditor` draws each column as a
-  card (type icon tile, label, mono type line, a status pill from `typeBadge`) on a dotted canvas; dagre lays it out
-  top to bottom along the board order (branches side by side), every route orthogonal with its label as a pill on the
-  line, a route against the board order dashed. `lib/graph`: `layoutGraph(columns, transitions, {typeLabel, badge})`
-  is the whole layout (`typeLabel` required; a node dagre leaves unplaced throws; no fold: the graph scrolls down);
-  `rankGraph`, `foldGraph`, `foldRows`, `splits` and the
-  `maxWidth` / `maxHeight` options are gone; `Layout.rows` is gone; `Route.ortho` is replaced by `Route.back`. `Layout.warnings` lists what the drawing
-  could not keep (shown in the editor); `LayoutOpts.retries`; `Layout.tries` counts the dagre layouts it took; `wrapLabel` wraps onto as many lines as a label needs;
-  a dragged card's routes stay orthogonal (`withMoved`); the port is on the card's right side, live only on the card in
-  focus. New
-  exports: `typeBadge`, `labelW`, `nodeH`, `subY` and the card's offsets (`TILE`, `TILE_X`, `TEXT_X`, `TITLE_Y`, …).
-
-- **`launchers[].kind` is required**: the CLI family the command is, one of `Launch::KINDS` —
-  `claude_code` (the argv every launcher had so far: `--model`, the prompt, `--remote-control <session>` LAST) or
-  `hermes` (`-m <model>`, `-q <prompt>`, no remote control). A host config without it fails `HostConfig` with
-  `launchers[<key>].kind must be one of claude_code, hermes (got nil)`. **Migrating:** add `kind: claude_code` to
-  every launcher — the argv stays byte for byte what it was. `Launch.argv` takes the prompt as `prompt:` (a host
-  that passed it in `extra:` gets the same argv for `claude_code`; `hermes` needs `prompt:`), and `Launch.plan`
-  carries `kind` + `remote_control` (what the host checks came up).
-
-### Changed
-
-- **Public: Create PR** on the private local-repo board (`fixtures/boards/local_v4.board.json`): "Open public PR" moves
-  the card from Local: Deploy check into the new working column Public: Create PR, where the agent opens the public
-  PR; the agent's "Public PR opened" moves it on to Public: Agent review; Cancel and Rework list it.
-  `local_v3.board.json` is kept, frozen.
-- The approve button names its step ("✓ Open public PR → Public: Create PR"), not always "Approve"; `ApprovalStep.name` is a
-  `string` (a step is a named transition), no default.
-- `splits(items, k, fits?)` has no cap: it yields only the splits whose runs fit, so the height fold searches every
-  width-feasible split. `foldRows(base, rows)` is exported (one fold of a given split).
-- The workflow graph's fold takes the box height too (`foldGraph(base, maxWidth, maxHeight)`): of the splits into rows
-  that keep the width, the one that fits the height best — the 15-column local board shows whole at 1920 × 1080.
-  Splits too wide are skipped undrawn; the editor re-folds 120 ms after a resize settles.
-
-### Fixed
-
-- **The Links rail never grows wider than itself**: a row's chips wrap among themselves and a chip
-  wider than the row ends in an ellipsis (the popover has the full text); the rail's grid track is its own width. Many
-  chips, or a long one (`base: feature/live-agent-status`), scrolled the whole rail sideways on a phone, its labels cut.
-
-## [1.0.0-beta.1] - 2026-11-10
-
-Everything below ships as **1.0.0-beta.1**, the first public release, together with
-[busyyaks](https://github.com/robertziel/busyyaks) 1.0.0-beta.1, its reference host. A beta (a SemVer pre-release):
-the host config keys, the `Api` / `Tools` surface and the schema steps may still change before 1.0.0, each change
-recorded here.
-
-### Changed (breaking for hosts)
-
-- **`CardLinks` runs no git.** `CardLinks.build` takes a required `git:` port (`branches`, `default_ref`, `files_at`;
-  SPEC § 1): a checkout's repo config can make the git CLI run programs (filter drivers, textconv, fsmonitor), so how
-  a host reads it — and inside which limits — is the host's. `CardLinks.branches`, `file_at?`, `default_ref` and
-  `GIT_ENV` are gone; a host that passes no port fails on the first build (`ArgumentError`).
-
-### Added
-
 - **Ruby port** (`AgentsKanban`, Ruby 3.4, Sequel on SQLite or Postgres): `Store` (cards, activity, labels,
   checklists, due dates, covers, parent cards, metadata), `BoardRepo` (each project's board in the database: columns,
   column types, named transitions; seeded from a template), `Schema` (migrations a host pins step by step), `Api` (the
@@ -277,5 +172,85 @@ recorded here.
 - Community files: [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md),
   [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), issue and pull request templates, and [NOTICE](NOTICE).
 
-[Unreleased]: https://github.com/robertziel/busyyaks_agents_kanban_module/commits/main
-[1.0.0-beta.1]: https://github.com/robertziel/busyyaks_agents_kanban_module/releases/tag/v1.0.0-beta.1
+### Fixed
+
+- **CI: the React suite runs alone**: `scripts/ci/test.sh all` runs lint, both Ruby suites, audit and secrets at once,
+  then `react` with the runner to itself. Beside the two Ruby suites it shared GitHub's 4 vCPUs and random tests timed
+  out: runs 44430241873 (`feature/card-pr-lists`, 2026-11-19) and 45395693342 red, 45401030980 green with this change
+  (`test.sh all` 2 min 11 s).
+- **The Links rail never grows wider than itself**: a row's chips wrap among themselves and a chip
+  wider than the row ends in an ellipsis (the popover has the full text); the rail's grid track is its own width. Many
+  chips, or a long one (`base: feature/live-agent-status`), scrolled the whole rail sideways on a phone, its labels cut.
+
+### Changed
+
+- **Agent-facing text**: no tool text tells a session that was not launched to register itself: `kanban_register` is
+  "only when the operator explicitly asks you to"; a session started by hand works the board only when the operator asks.
+- **Green CI is a gate column's setting, off by default**: `requires_green_ci: true` on a GATE
+  column (Board, Schema v16 `board_columns.requires_green_ci`, `rules.green_ci`, the editor's "Requires green CI"
+  checkbox, the gate's card "waits for you · CI") makes the approval out of that gate and a handoff into it wait for
+  green PR checks — the prefetch, gate hold, gate watch and Force exist only there. **Breaking**: the host config's
+  `approval` key is removed and refused, naming the move; after the v16 migration no gate asks CI until its board sets
+  it. A Store without a `ci:` port refuses to save a board that sets it. README § Use case: a gate that waits for green CI.
+- **Board header, one grid**: summary pills, tools and filter controls share one height (28 px) on one row pitch; the
+  summary rows sit over the filter row and the tools (live · Archived · Workflow · ?) end that row. Under 760 px it is
+  one column: summary, filter, tools on one row. DOM (Tab) order = reading order: summary, filter, tools. The filter
+  (`.kb-filter`) and the new `.kb-tools` are children of `.kb-head`; the header's `.spacer` is gone.
+- **The idle watch skips only the card whose PR the `ci:` port cannot answer**: `[id, "CI skipped: <why>"]`
+  for that card, the others still pinged — one bad assignment no longer silences the watch for every project.
+- **Public: Create PR** on the private local-repo board (`fixtures/boards/local_v4.board.json`): "Open public PR" moves
+  the card from Local: Deploy check into the new working column Public: Create PR, where the agent opens the public
+  PR; the agent's "Public PR opened" moves it on to Public: Agent review; Cancel and Rework list it.
+  `local_v3.board.json` is kept, frozen.
+- The approve button names its step ("✓ Open public PR → Public: Create PR"), not always "Approve"; `ApprovalStep.name` is a
+  `string` (a step is a named transition), no default.
+- `splits(items, k, fits?)` has no cap: it yields only the splits whose runs fit, so the height fold searches every
+  width-feasible split. `foldRows(base, rows)` is exported (one fold of a given split).
+- The workflow graph's fold takes the box height too (`foldGraph(base, maxWidth, maxHeight)`): of the splits into rows
+  that keep the width, the one that fits the height best — the 15-column local board shows whole at 1920 × 1080.
+  Splits too wide are skipped undrawn; the editor re-folds 120 ms after a resize settles.
+
+### Changed (breaking for hosts)
+
+- **BREAKING: `Store.new` requires `prs:`** — the PR roles port, `pr_roles(card)` →
+  `{role => {repos:, required:, error:}}`; without it the Store raises `ArgumentError` at construction. Migration: pass
+  `prs:` (a host whose cards carry no PRs passes an object whose `pr_roles` answers `{}`). A host that wrote
+  `metadata.prs` itself moves to `kanban_pr_assign` / `Store#assign_pr`.
+- **BREAKING: a card's PRs are a list — Schema v14** (a card changes several repos and every
+  PR must show). Metadata `prs` was `{role => url}` (one PR per role, re-assigning replaced it); it is now
+  `[{url, repo, number, role, by, at}]` and `kanban_pr_assign` ADDS (it never replaces). A host that reads
+  `metadata.prs.<role>` reads the list instead (every entry of the role). Migration: a host migration
+  `Schema.migrate!(db, prefix:, to: 14, prs: <the Store's PR roles port>)` (= `Schema.prs_to_lists!`: text naming several
+  PRs → one entry each, a role key the host does not read → the one host role whose repos hold the PR's repo, a PR in no
+  role → `prs_removed` only when the port's optional `unread_reason` says why, anything else raises; rollback `Schema.prs_to_roles!`, refused while a card
+  holds what v12 cannot); a `{role => url}` left unconverted is refused on read.
+- **`face_roles` and `avatar_url` are required host-config keys** (null allowed; a bad value fails at load):
+  `face_roles` = null or `{role: [name globs]}` (a subagent whose name matches wears that role's colour);
+  `avatar_url` = null or an https template with `{sha256}` (the SHA-256 of the trimmed, lower-cased email, e.g.
+  Gravatar with `d=404`). Add both before upgrading.
+- **`SessionsLive.present` is required**: a `sessionsLive` answer without the `present` list is a failed read (the
+  dialog says so), never "nobody is here".
+- **The workflow graph runs top to bottom, as a flowchart**: `BoardEditor` draws each column as a
+  card (type icon tile, label, mono type line, a status pill from `typeBadge`) on a dotted canvas; dagre lays it out
+  top to bottom along the board order (branches side by side), every route orthogonal with its label as a pill on the
+  line, a route against the board order dashed. `lib/graph`: `layoutGraph(columns, transitions, {typeLabel, badge})`
+  is the whole layout (`typeLabel` required; a node dagre leaves unplaced throws; no fold: the graph scrolls down);
+  `rankGraph`, `foldGraph`, `foldRows`, `splits` and the
+  `maxWidth` / `maxHeight` options are gone; `Layout.rows` is gone; `Route.ortho` is replaced by `Route.back`. `Layout.warnings` lists what the drawing
+  could not keep (shown in the editor); `LayoutOpts.retries`; `Layout.tries` counts the dagre layouts it took; `wrapLabel` wraps onto as many lines as a label needs;
+  a dragged card's routes stay orthogonal (`withMoved`); the port is on the card's right side, live only on the card in
+  focus. New
+  exports: `typeBadge`, `labelW`, `nodeH`, `subY` and the card's offsets (`TILE`, `TILE_X`, `TEXT_X`, `TITLE_Y`, …).
+- **`launchers[].kind` is required**: the CLI family the command is, one of `Launch::KINDS` —
+  `claude_code` (the argv every launcher had so far: `--model`, the prompt, `--remote-control <session>` LAST) or
+  `hermes` (`-m <model>`, `-q <prompt>`, no remote control). A host config without it fails `HostConfig` with
+  `launchers[<key>].kind must be one of claude_code, hermes (got nil)`. **Migrating:** add `kind: claude_code` to
+  every launcher — the argv stays byte for byte what it was. `Launch.argv` takes the prompt as `prompt:` (a host
+  that passed it in `extra:` gets the same argv for `claude_code`; `hermes` needs `prompt:`), and `Launch.plan`
+  carries `kind` + `remote_control` (what the host checks came up).
+- **`CardLinks` runs no git.** `CardLinks.build` takes a required `git:` port (`branches`, `default_ref`, `files_at`;
+  SPEC § 1): a checkout's repo config can make the git CLI run programs (filter drivers, textconv, fsmonitor), so how
+  a host reads it — and inside which limits — is the host's. `CardLinks.branches`, `file_at?`, `default_ref` and
+  `GIT_ENV` are gone; a host that passes no port fails on the first build (`ArgumentError`).
+
+[0.1.0]: https://github.com/robertziel/busyyaks_agents_kanban_module/releases/tag/v0.1.0
