@@ -94,6 +94,22 @@ module AgentsKanban
                                 known: ->(s) { !session_slug?(s) && boards.call(s) })
       @session_board = session_board_shape(config)
       @attachment_ref = %r{\(#{Regexp.escape(config.attachment_url_prefix)}/(\d+)(?:/download)?\)}
+      check_priorities!
+    end
+
+    # A host config whose `priorities` no longer lists a priority a card holds is refused at start: ranking
+    # that card would raise inside the shared passes (pings, adoption, the approved queue) for every board. Put the
+    # value back in `priorities`, or clear it on those cards first. Before the schema exists there are no cards.
+    def check_priorities!
+      return unless @db.table_exists?(@tables[:cards])
+
+      held = cards.exclude(priority: nil).exclude(priority: "").exclude(priority: @config.priorities)
+                  .order(:id).select_map(%i[priority id]).group_by(&:first)
+      return if held.empty?
+
+      list = held.map { |p, rows| "#{p.inspect} (card #{rows.map { |r| "##{r.last}" }.join(', ')})" }.join("; ")
+      raise ConfigError, "priorities: #{@config.priorities.join(', ')} drops what cards hold: #{list} — put it back in " \
+                         "priorities, or clear it on those cards first"
     end
 
     def cards = @db[@tables[:cards]]
@@ -486,6 +502,8 @@ module AgentsKanban
             # approved and carried on by its agent (carried_on_json: {next_column, next_label, final} | nil;
             # decorated cards only)
             carried_on: c[:carried_on],
+            # its place among the approved cards its agents carry on from the same column (decorated only)
+            approved_queue: c[:approved_queue],
             blocked: c[:blocked_at] && { reason: c[:blocked_reason], url: c[:blocked_url], by: c[:blocked_author],
                                          at: iso(c[:blocked_at]), },
             review_round: review_rounds(c)[c[:column]],
@@ -1825,7 +1843,7 @@ module AgentsKanban
           end
         elsif (takes = board_of(project).takes_columns(t)).any?
           leads = @config.lead_type?(t) # a lead owns what it adopts (routing) and assigns none of it to itself
-          live(project).where(column: takes, owner_session: nil).order(:column, :position, :id).all.each do |c|
+          by_priority(live(project).where(column: takes, owner_session: nil).order(:column, :position, :id).all).each do |c|
             cards.where(id: c[:id]).update(owner_session: s, owner_socket: socket.to_s, owner_missing_since: nil,
                                            assignee: leads ? nil : agent, updated_at: now)
             wait = leads ? " · waiting for a worker" : ""
@@ -1966,7 +1984,7 @@ module AgentsKanban
         # taker running (a worker-owned In progress card would otherwise keep no assignee while no lead runs)
         pool = live(slug).where(column: (taken + b.watched_columns).uniq)
         pool = pool.where(id: only) if only
-        pool.order(:column, :position, :id).all.each do |c|
+        by_priority(pool.order(:column, :position, :id).all).each do |c|
           owner_ok = c[:owner_session] && alive.(c[:owner_session])
           next if owner_ok && !c[:assignee].to_s.strip.empty?
 
@@ -2346,7 +2364,8 @@ module AgentsKanban
                  merge = unasked.empty? ? "Merge it now" : "Merge it once its checks are green (red: do not merge, say so)"
                  "#{tag} #{author} APPROVED card ##{c[:id]} \"#{c[:title]}\" (#{c[:project_slug]}) " \
                    "— it is in #{b.label(step.to)}.#{unasked} #{merge}, then move the card to #{b.label(step.then)} " \
-                   "with kanban_move id=#{c[:id]} column=#{step.then} and post the merge commit/PR with kanban_comment."
+                   "with kanban_move id=#{c[:id]} column=#{step.then} and post the merge commit/PR with kanban_comment." \
+                   "#{approved_queue_note(c, b)}"
                else
                  on = if step.then && b.gate?(step.then)
                         # a gate is entered only by a handoff (agents never kanban_move into one)
@@ -2365,7 +2384,7 @@ module AgentsKanban
                  now = unasked.empty? ? "Do the next step now" : wait
                  "#{tag} #{author} APPROVED card ##{c[:id]} \"#{c[:title]}\" (#{c[:project_slug]}) " \
                    "— #{went}.#{unasked} " \
-                   "#{now}#{on}, and post what you did with kanban_comment."
+                   "#{now}#{on}, and post what you did with kanban_comment.#{approved_queue_note(c, b)}"
                end
              else
                "#{tag} #{author} #{body} card ##{c[:id]} \"#{c[:title]}\" (#{c[:project_slug]}). " \
@@ -2458,8 +2477,8 @@ module AgentsKanban
       return if lead.nil? || [lead[:session], lead[:agent_name]].include?(by)
 
       b = board_of(reg[:project_slug])
-      held = cards.where(owner_session: reg[:session], owner_socket: reg[:socket], archived_at: nil, on_hold_at: nil)
-                  .order(:id).all.reject { |c| b.terminal?(c[:column]) }
+      held = by_priority(cards.where(owner_session: reg[:session], owner_socket: reg[:socket], archived_at: nil,
+                                     on_hold_at: nil).order(:id).all.reject { |c| b.terminal?(c[:column]) })
       return if held.empty?
 
       waits, spawn = held.partition { |c| needs_operator?(c) || (b.waiting.include?(c[:column]) && !agents_next_step?(c, b)) }
@@ -2487,18 +2506,28 @@ module AgentsKanban
       done = pings_t.where(session: queues.keys.map(&:first).uniq).exclude(done_at: nil).select_group(:session, :socket)
                     .select_append(Sequel.function(:max, :done_at).as(:last)).all
                     .to_h { |r| [[r[:session], r[:socket]], r[:last]] }
+      prio = ping_priorities(queues.values.flatten)
       heads = queues.map do |key, rows|
-        first = ping_order(rows).first
+        first = ping_order(rows, prio).first
         [rows.any? { |p| PING_RANKS.key?(p[:reason]) } ? 0 : 1,
          first.merge(waiting_since: [first[:created_at], done[key]].compact.max),]
       end
-      heads.sort_by { |urgent, p| [urgent, p[:created_at], p[:id]] }.first(limit).map(&:last)
+      heads.sort_by { |urgent, p| [urgent, prio[p[:card_id]], p[:created_at], p[:id]] }.first(limit).map(&:last)
     end
 
-    def ping_order(rows)
+    # Within each class, the higher-priority card's row first, then the oldest. A row something may already
+    # have been typed from stays first whatever its card's priority: it sits in the composer.
+    def ping_order(rows, prio = ping_priorities(rows))
       rows.sort_by do |p|
-        [p[:attempts].positive? ? PING_RANK_TYPED : PING_RANKS.fetch(p[:reason], PING_RANK_REST), p[:created_at], p[:id]]
+        [p[:attempts].positive? ? PING_RANK_TYPED : PING_RANKS.fetch(p[:reason], PING_RANK_REST), prio[p[:card_id]],
+         p[:created_at], p[:id],]
       end
+    end
+
+    # card id → priority rank, for the ping rows' cards (a card with no priority ranks last)
+    def ping_priorities(rows)
+      ranks = cards.where(id: rows.map { |p| p[:card_id] }.uniq).select_hash(:id, :priority)
+      Hash.new { |h, id| h[id] = priority_rank(ranks[id]) }
     end
 
     # How many of its session's pending rows go before this one (next_pings' order).
@@ -3188,6 +3217,48 @@ module AgentsKanban
 
     def approved_step(c, b) = c[:approved_at] && !b.terminal?(c[:column]) ? b.approval_into(c[:column]) : nil
 
+    # ── the approved queue ─────────────────────────────────────────────────────────────────────────────
+    # The cards approved into the same column of a board (approved_step: their agents carry each on — merge it, build its
+    # next PR), in the order they should go: priority rank (priority_rank), then the oldest approval, then the card id.
+    # Order only: nothing is refused for it — a card ahead that is held (red CI, a question) does not hold the others.
+    # → {card_id => {column, position (1 = next), of, ahead: [{id, priority}]}} for the approved cards among `list`.
+    def approved_queues(list, boards)
+      mine = list.select { |c| c[:approved_at] }
+      return {} if mine.empty?
+
+      slugs = mine.map { |c| c[:project_slug] }.uniq
+      boards = boards ? boards.dup : {}
+      slugs.each { |s| boards[s] ||= board_of(s) }
+      # only the columns an approval step leads into (Board#approval_into), every other approved card is no queue's
+      targets = slugs.flat_map { |s| boards[s].approvals.map(&:to) }.uniq
+      rows = project_cards.where(project_slug: slugs, column: targets, archived_at: nil, on_hold_at: nil)
+                          .exclude(approved_at: nil).select(:id, :project_slug, :column, :priority, :approved_at).all
+      rows.select! { |c| approved_step(c, boards[c[:project_slug]]) }
+      queues = rows.group_by { |c| [c[:project_slug], c[:column]] }.transform_values do |q|
+        q.sort_by { |c| [priority_rank(c[:priority]), c[:approved_at], c[:id]] }
+      end
+      mine.to_h do |c|
+        q = queues[[c[:project_slug], c[:column]]]
+        at = q&.index { |r| r[:id] == c[:id] }
+        next [c[:id], nil] unless at
+
+        [c[:id], { column: c[:column], position: at + 1, of: q.size,
+                   ahead: q.first(at).map { |r| { id: r[:id], priority: r[:priority] } }, },]
+      end
+    end
+
+    # the approve ping's line on the queue: the approved cards ahead of this one in its column (none → "")
+    def approved_queue_note(c, b)
+      q = approved_queues([cards.where(id: c[:id]).first], { c[:project_slug] => b })[c[:id]]
+      return "" if q.nil? || q[:ahead].empty?
+
+      ahead = q[:ahead].map { |a| "card ##{a[:id]}#{" (#{a[:priority]})" if a[:priority]}" }.join(", ")
+      " Approved queue in #{b.label(q[:column])} at this approval: #{q[:position]} of #{q[:of]} by priority, ahead of " \
+        "it: #{ahead}. " \
+        "A card ahead that can go now goes first; one held (red CI, a question, no owner) does not hold this one " \
+        "(kanban_card shows the live approved_queue)."
+    end
+
     # → [:clear] | [:hold, why] | [:unread, why]
     def approved_read(c, step)
       pr = @ci.approval_checks(c, step.to_h)
@@ -3207,7 +3278,7 @@ module AgentsKanban
     # may take a long time to carry it on, so each watch pass asks the step that approved every such card, in any column.
     # Only a question: the answer is discarded here. → [[card_id, state | "no PR" | "unavailable: <why>" | "failed: <why>"]]
     def approved_ci_pass
-      rows = project_cards.where(archived_at: nil, on_hold_at: nil).exclude(approved_at: nil).order(:id).all
+      rows = by_priority(project_cards.where(archived_at: nil, on_hold_at: nil).exclude(approved_at: nil).order(:id).all)
       boards = boards_for(rows.map { |c| c[:project_slug] }.uniq)
       rows.filter_map do |c|
         step = approved_step(c, boards[c[:project_slug]])
@@ -4118,8 +4189,10 @@ module AgentsKanban
       boards ||= boards_for(list.map { |c| c[:project_slug] }.uniq)
       holds = gate_holds(list, boards)
       marks = rebase_marks(ids)
+      queues = approved_queues(list, boards)
       list.each do |c|
         b = boards[c[:project_slug]]
+        c[:approved_queue] = queues[c[:id]]
         c[:needs_rebase] = marks[c[:id]]
         c[:gate_hold] = holds[c[:id]]
         c[:progress_stale] = progress_stale(c, b)
@@ -4253,6 +4326,20 @@ module AgentsKanban
 
       a.empty? ? nil : a
     end
+
+    # A card's priority rank: its index in the host's `priorities` (first = highest); no priority ranks after
+    # every listed one. A stored priority the host no longer lists is refused, naming it: never read as "none". Every
+    # order on our side sorts by it first: adoption, the pings, the approved queue.
+    def priority_rank(p)
+      return @config.priorities.size if p.nil? || p.to_s.empty?
+
+      @config.priorities.index(p.to_s) ||
+        raise(Invalid, "a card's priority #{p.inspect} is not one of the host's priorities " \
+                       "(#{@config.priorities.join(', ')}): set it again or put it back in the config")
+    end
+
+    # rows sorted by priority rank, keeping their given order within a rank (sort_by is not stable: the index decides)
+    def by_priority(rows) = rows.each_with_index.sort_by { |c, i| [priority_rank(c[:priority]), i] }.map(&:first)
 
     def priority!(v)
       return nil if v.nil? || v.to_s.empty?

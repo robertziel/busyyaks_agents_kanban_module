@@ -1,4 +1,4 @@
-import type { Card, CarriedOn } from "../types";
+import type { ApprovedQueue, Card, CarriedOn } from "../types";
 // Quick-add text → a card: a short title plus the rest as the description, so nothing typed or pasted is lost.
 // Multi-line: first line is the title. One long line: its first sentence (or a word-boundary cut) is the title
 // and the whole text becomes the description.
@@ -85,6 +85,17 @@ export function carriedOnText(c: Pick<Card, "id" | "owner_session">, on: Carried
   const who = c.owner_session;
   if (!who) throw new Error(`card ${c.id}: carried_on without an owner session`);
   return on.final ? `approved · ${who} merging` : `approved · ${who} → ${on.next_label}`;
+}
+
+// The approved queue on a card face: "queue 2/3" while other approved cards share its column, with the
+// cards ahead for the tooltip; alone in it → null (nothing to order).
+export function approvedQueueText(q: ApprovedQueue | null | undefined): { text: string; title: string } | null {
+  if (!q || q.of < 2) return null;
+  const ahead = q.ahead.map((a) => `#${a.id}${a.priority ? ` (${a.priority})` : ""}`).join(", ");
+  return {
+    text: `queue ${q.position}/${q.of}`,
+    title: `approved queue by priority: ${q.position} of ${q.of}${ahead ? ` — ahead: ${ahead}` : " — next"}`,
+  };
 }
 
 // Bring an activity entry into view and focus it (a screen reader hears where it landed): centred, or its top at the

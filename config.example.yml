@@ -12,6 +12,8 @@
 # Where the engine reads each key: SPEC.md § 2.
 
 
+# the priority enum, highest first: its order is the rank every order on our side sorts by (adoption, pings, the
+# approved queue — SPEC § Priority orders our side); a card with none ranks last
 priorities: [high, medium, low]
 # label / cover colours; the React board maps each to a --ak-lc-<name> token. gray (= no colour) is required.
 label_colors: [green, yellow, orange, red, purple, blue, teal, pink, gray]

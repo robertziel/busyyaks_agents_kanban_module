@@ -40,7 +40,7 @@ import {
   type Order,
 } from "../lib/board";
 import { edgeBands, edgeScroller, glideTo, nearestStart, stepRoom, stepStart, type EdgeBands } from "../lib/autoscroll";
-import { cardFaceClass, carriedOnText, splitCard } from "../lib/card";
+import { approvedQueueText, cardFaceClass, carriedOnText, splitCard } from "../lib/card";
 import type { DictationApi } from "../lib/dictation";
 import { comboLabel, isMac, type KeyCombo } from "../lib/shortcut";
 import { refreshOrThrow, useFetch } from "../lib/fetch";
@@ -1154,6 +1154,7 @@ function CardItem({
 }: CardItemProps) {
   const ds = dueState(c.due, c.due_done, nowMs);
   const full = c.checklist_total > 0 && c.checklist_done === c.checklist_total;
+  const queue = approvedQueueText(c.approved_queue);
   // the agents at work on the card now (the host's boardPresence): the assignee's own face wears its mood, the others
   // stand beside it and leave when they are gone
   const here = present ?? NOBODY;
@@ -1277,6 +1278,11 @@ function CardItem({
               title={`approved by ${c.approved_by ?? "?"} — its agent moves it on${c.carried_on ? ": not waiting for you" : ""}`}
             >
               ✓ {c.carried_on ? carriedOnText(c, c.carried_on) : "approved"}
+            </span>
+          )}
+          {queue && (
+            <span className="kb-queue" title={queue.title} aria-label={queue.title}>
+              ⇅ {queue.text}
             </span>
           )}
           {c.owner_session && (
