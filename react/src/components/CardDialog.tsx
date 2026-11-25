@@ -11,7 +11,7 @@ import { colLabel as labelOf, useFaceType, useKanbanHost } from "../host";
 import { commentOf, dragHasFiles, eventFiles, filesOf, formatBytes, newestFirst } from "../lib/attachments";
 import { dueLabel, dueState, fromLocalInput, ownerSessionAllowed, toLocalInput } from "../lib/board";
 import { activityAnchor, activityAnchorId, jumpNeedsDetails, jumpTo, SPOKEN } from "../lib/card";
-import { useFetch } from "../lib/fetch";
+import { refreshOrThrow, useFetch } from "../lib/fetch";
 import { isoAt } from "../lib/format";
 import { pingLine } from "../lib/listen";
 import { liveDots, liveMoods } from "../lib/agentLive";
@@ -223,11 +223,7 @@ function CardDetail({
   const pause = useRef(false);
   pause.current = busy;
   const seenTitle = useRef<string | null>(null);
-  useLiveRev(
-    () => api.cardRev(id),
-    () => void reload(),
-    { paused: () => pause.current },
-  );
+  useLiveRev(() => api.cardRev(id), refreshOrThrow(reload), { paused: () => pause.current });
   // what the card's agent sessions do now (the host's optional sessionsLive port): the owner's line above the newest
   // comment, a dot on each running session's newest comment
   const sessionsLive = api.sessionsLive;

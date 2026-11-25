@@ -18,6 +18,12 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
   an agents-only edge or a fan-out. `Api#comment` takes `transition` / `column`; `KanbanApi.comment(id, body, move?)`.
   The local_v4 fixture marks Changes requested, Deploy failed, Reopen and Rework; `board.example.yml` marks Fixes needed.
 
+### Fixed
+
+- **A failed board refresh is retried**: `useLiveRev` takes a new revision as seen only once its refresh landed; a
+  refresh that fails is asked again on the next poll and its error is the live state's ("refresh failed: …"), so a card
+  moved on the server no longer stays in its old column. `useFetch.reload` resolves to its outcome; `refreshOrThrow`.
+
 ## [0.1.0] - 2026-11-25
 
 The first public release, together with [busyyaks](https://github.com/robertziel/busyyaks) 0.1.0 (its reference host;

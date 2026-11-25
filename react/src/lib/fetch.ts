@@ -7,7 +7,9 @@ export type Resource<T> = {
   data: T | undefined;
   error: Error | undefined;
   loading: boolean;
-  reload: () => Promise<void>;
+  // resolves to the outcome of the newest load: null = its data is shown, else its error (kept in `error`); a load a
+  // newer one overtook resolves to the newer one's outcome. Never rejects.
+  reload: () => Promise<Error | null>;
 };
 
 export function useFetch<T>(fn: () => Promise<T>, deps: unknown[]): Resource<T> {
@@ -17,19 +19,27 @@ export function useFetch<T>(fn: () => Promise<T>, deps: unknown[]): Resource<T> 
   const latest = useRef(fn);
   latest.current = fn;
   const seq = useRef(0);
-  const reload = useCallback(async () => {
+  const newest = useRef<Promise<Error | null> | null>(null);
+  const reload = useCallback((): Promise<Error | null> => {
     const n = ++seq.current;
-    try {
-      const d = await latest.current();
-      if (n !== seq.current) return; // a newer call landed meanwhile
-      setData(d);
-      setError(undefined);
-    } catch (e) {
-      if (n !== seq.current) return;
-      setError(e instanceof Error ? e : new Error(String(e)));
-    } finally {
-      if (n === seq.current) setLoading(false);
-    }
+    const load = (async (): Promise<Error | null> => {
+      try {
+        const d = await latest.current();
+        if (n !== seq.current) return newest.current!; // a newer call went out meanwhile: its outcome is the one shown
+        setData(d);
+        setError(undefined);
+        return null;
+      } catch (e) {
+        if (n !== seq.current) return newest.current!;
+        const err = e instanceof Error ? e : new Error(String(e));
+        setError(err);
+        return err;
+      } finally {
+        if (n === seq.current) setLoading(false);
+      }
+    })();
+    newest.current = load;
+    return load;
   }, []);
   const version = useDepsVersion(deps);
   useEffect(() => {
@@ -48,4 +58,13 @@ function useDepsVersion(deps: unknown[]): number {
     last.current = { deps, version: (prev?.version ?? 0) + 1 };
   }
   return last.current!.version;
+}
+
+// A live poll's onChange from a resource's reload: rejects with the reload's error, so useLiveRev asks it again on
+// the next poll instead of taking the new revision as shown.
+export function refreshOrThrow(reload: Resource<unknown>["reload"]): () => Promise<void> {
+  return async () => {
+    const e = await reload();
+    if (e) throw e;
+  };
 }

@@ -43,7 +43,7 @@ import { edgeBands, edgeScroller, glideTo, nearestStart, stepRoom, stepStart, ty
 import { cardFaceClass, carriedOnText, splitCard } from "../lib/card";
 import type { DictationApi } from "../lib/dictation";
 import { comboLabel, isMac, type KeyCombo } from "../lib/shortcut";
-import { useFetch } from "../lib/fetch";
+import { refreshOrThrow, useFetch } from "../lib/fetch";
 import { buttonText, leadEnded } from "../lib/launch";
 import { isoAgo, isoAt } from "../lib/format";
 import { useGlide } from "../lib/glide";
@@ -296,7 +296,7 @@ export function Board({
   pause.current = drag !== null || busy !== null;
   const live = useLiveRev(
     () => api.boardRev(slug, { archived: showArchived, onHold: showOnHold }),
-    () => void reload(),
+    refreshOrThrow(reload),
     { paused: () => pause.current },
   );
   // what the board's agent sessions do now (the host's optional boardLive port, one answer per poll for the whole

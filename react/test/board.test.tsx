@@ -1274,6 +1274,47 @@ describe("Board", () => {
       vi.useRealTimers();
     }
   });
+
+  // an agent moved a card, the revision changed, and the refetch that followed failed (a dropped
+  // connection, a 502). The revision was marked seen anyway, so the card stayed in its old column — with the live
+  // chip green — until the next change or a page reload.
+  it("refetches again after a failed refresh: an agent's move reaches the board, the failure is said meanwhile", async () => {
+    const before = [card({ id: 1, column: "todo" })];
+    const after = [card({ id: 1, column: "doing" })];
+    const api = fakeApi(boardData(coding, before), before);
+    let rev = "r1";
+    let state: "before" | "down" | "after" = "before";
+    api.boardRev = () => {
+      api.calls.push("boardRev");
+      return Promise.resolve(rev);
+    };
+    api.board = () => {
+      api.calls.push("board");
+      if (state === "down") return Promise.reject(new Error("502 Bad Gateway"));
+      return Promise.resolve(boardData(coding, state === "before" ? before : after));
+    };
+    const column = (id: number) =>
+      document.querySelector(`li.kb-card[data-id="${id}"]`)?.closest<HTMLElement>("[data-col]")?.dataset.col;
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<Host api={api} />);
+      await screen.findByText("Fix login");
+      await vi.advanceTimersByTimeAsync(3100);
+      expect(column(1)).toBe("todo");
+      state = "down";
+      rev = "r2"; // an agent moved card 1; the refetch fails
+      await vi.advanceTimersByTimeAsync(3100);
+      await waitFor(() => expect(document.querySelector(".kb-live")).toHaveTextContent("live · error"));
+      expect(document.querySelector(".kb-live")!.getAttribute("title")).toContain("502 Bad Gateway");
+      expect(column(1)).toBe("todo");
+      state = "after"; // the server answers again; the revision did not change since
+      await vi.advanceTimersByTimeAsync(3100);
+      await waitFor(() => expect(column(1)).toBe("doing"));
+      await waitFor(() => expect(document.querySelector(".kb-live")).toHaveTextContent(/^live$/));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // jsdom lays nothing out: the lists 230 px apart under a 100 px header, each card 60 px under the one before it; the
