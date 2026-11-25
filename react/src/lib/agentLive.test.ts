@@ -9,6 +9,7 @@ import {
   liveMoods,
   liveParts,
   liveSessionOf,
+  ownerStatus,
   workingPhase,
   workingWords,
 } from "./agentLive";
@@ -205,5 +206,63 @@ describe("the small label's words", () => {
     expect(a).toHaveLength(14);
     expect(b).toBe("work…-review_3");
     expect(shortSession("exactly_14_chr", "x")).toBe("exactly_14_chr");
+  });
+});
+
+describe("ownerStatus (the card face's tag beside the assignee)", () => {
+  const card: Parameters<typeof ownerStatus>[0] = {
+    owner_session: "w1",
+    assignee: "worker-w1",
+    gate_hold: null,
+    blocked: null,
+    needs_operator: false,
+    waiting: false,
+    waiting_for_worker: null,
+  };
+  const at = (l: Partial<SessionLive>, c: Partial<typeof card> = {}) =>
+    ownerStatus({ ...card, ...c }, "working", { w1: live(l) });
+  it("says what a working owner session does: its phase or tool, and for how long", () => {
+    expect(at({ phase: "thinking", elapsed_s: 125 })).toEqual({
+      text: "thinking · 2m",
+      tone: "working",
+      title: "w1: thinking… · 2m 5s",
+    });
+    expect(at({ phase: "tool", tool: "busyyaks · kanban_card" })?.text).toBe("kanban_card");
+    expect(at({ phase: "tool", tool: "Bash", elapsed_s: 7 })?.text).toBe("Bash · 7s");
+    expect(at({})?.text).toBe("working"); // working, no phase read: no guess
+  });
+  it("says needs you for a session stopped on a dialog", () => {
+    expect(at({ state: "blocked" })).toMatchObject({ text: "needs you", tone: "blocked" });
+  });
+  it("names what an idle owner's card waits for, else idle", () => {
+    expect(at({ state: "idle" })).toMatchObject({ text: "idle", tone: "idle" });
+    expect(at({ state: "finished" })?.text).toBe("finished");
+    expect(at({ state: "idle" }, { gate_hold: "PR #7: CI is still running" })).toEqual({
+      text: "waiting for CI",
+      tone: "wait",
+      title: "w1 is idle — PR #7: CI is still running",
+    });
+    expect(at({ state: "idle" }, { blocked: { reason: "upstream", url: null, by: null, at: null } })?.text).toBe(
+      "blocked externally",
+    );
+    expect(at({ state: "idle" }, { waiting: true })?.text).toBe("waiting for you");
+    expect(at({ state: "idle" }, { needs_operator: true, gate_hold: "x" })).toMatchObject({
+      text: "waiting for your answer",
+      tone: "blocked", // red: it needs you, as a dialog does
+    });
+    // a working session's own phase wins over what the card waits for
+    expect(at({ phase: "thinking" }, { gate_hold: "x" })?.text).toBe("thinking");
+  });
+  it("says unknown / not running as the host read it, never a guess", () => {
+    expect(at({ state: "unknown" })).toMatchObject({ text: "unknown", tone: "unknown" });
+    expect(ownerStatus(card, "working", { other: live({}) })).toMatchObject({ text: "not running", tone: "unknown" });
+  });
+  it("shows no tag without an owner or assignee, for a card waiting for a worker, a finished card, or no live read", () => {
+    const l = { w1: live({ phase: "thinking" }) };
+    expect(ownerStatus({ ...card, owner_session: null }, "working", l)).toBeNull();
+    expect(ownerStatus({ ...card, assignee: null }, "working", l)).toBeNull();
+    expect(ownerStatus({ ...card, waiting_for_worker: { since: null, stale: null } }, "working", l)).toBeNull();
+    for (const t of ["done", "cancelled"] as const) expect(ownerStatus(card, t, l)).toBeNull();
+    expect(ownerStatus(card, "working", null)).toBeNull();
   });
 });

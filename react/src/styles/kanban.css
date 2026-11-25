@@ -5181,6 +5181,33 @@
   align-items: center;
   gap: 3px;
 }
+/* the tag beside the assignee's face: what its owner session does now (lib/agentLive.ts ownerStatus) — blue working,
+   red needs you / waiting for your answer, amber waiting for CI / the world / you, faint idle / unknown; one line, cut with an ellipsis */
+.ak-root .kb-owner-status {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  padding: 0 0.45rem;
+  border-radius: var(--ak-radius-pill);
+  max-width: 12em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ak-ink-faint);
+  background: var(--ak-mat-fill);
+}
+.ak-root .kb-owner-status.t-working {
+  color: var(--ak-working);
+  background: color-mix(in srgb, var(--ak-working) 14%, transparent);
+}
+.ak-root .kb-owner-status.t-blocked {
+  color: var(--ak-bad);
+  background: rgba(var(--ak-bad-rgb), 0.12);
+}
+.ak-root .kb-owner-status.t-wait {
+  color: var(--ak-warn);
+  background: rgba(var(--ak-warn-rgb), 0.14);
+}
 @keyframes kb-here-in {
   from {
     opacity: 0;

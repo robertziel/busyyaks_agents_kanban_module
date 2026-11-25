@@ -8,6 +8,11 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Added
 
+- **What a card's agent is doing, on the card face**: beside the assignee's face, a small tag says what its owner
+  session does now — its phase or tool and for how long, `needs you` when it is stopped on a dialog, and while it is
+  idle what the card waits for (`waiting for your answer`, `waiting for CI`, `blocked externally`, `waiting for you`),
+  else `idle`; `not running` when the session is gone. Read from the board's existing `boardLive` poll; no tag while
+  that poll fails or on a host without it.
 - **The comment box stays at the bottom of the card**: in the card dialog the comment box (with the no-listener warning)
   sits at the card's bottom and stays there while the card scrolls, so writing a comment needs no scrolling; a long draft
   scrolls inside the box. A "Write a comment" button, shown on keyboard focus at the top of the card, jumps to it.
