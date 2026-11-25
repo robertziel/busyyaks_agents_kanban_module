@@ -173,3 +173,47 @@ const WORKING_WORDS: Record<WorkingPhase, string> = {
 export function workingWords(phase: WorkingPhase): string {
   return WORKING_WORDS[phase];
 }
+
+// The card face's status tag beside the assignee's face: what its OWNER session does now, in a word or two, read off
+// the host's boardLive answer — and, while that session has no turn of its own (idle / finished), what the card itself
+// says it waits for (the server's flags: gate_hold = its CI, blocked = the world, needs_operator / waiting = you). A
+// state the host could not read stays "unknown"; a session missing from the answer is "not running". No tag (null): no
+// owner session or no assignee, a card waiting for a worker (its own badge says so), a done / cancelled column, or a
+// failed / unread poll (`sessions` null: the header says why).
+export type OwnerStatus = { text: string; tone: "working" | "blocked" | "wait" | "idle" | "unknown"; title: string };
+export function ownerStatus(
+  card: Pick<
+    Card,
+    "owner_session" | "assignee" | "gate_hold" | "blocked" | "needs_operator" | "waiting" | "waiting_for_worker"
+  >,
+  column: ColumnTypeKey,
+  sessions: Record<string, SessionLive> | null,
+): OwnerStatus | null {
+  const s = card.owner_session;
+  if (!sessions || !s || !card.assignee || card.waiting_for_worker || column === "done" || column === "cancelled")
+    return null;
+  const l = sessions[s];
+  if (!l) return { text: "not running", tone: "unknown", title: `${s} is not running` };
+  if (l.state === "blocked")
+    return { text: "needs you", tone: "blocked", title: `${s} is stopped on a dialog or question` };
+  if (l.state === "working") {
+    const p = liveParts(l, -1);
+    const time = elapsedShort(l.elapsed_s);
+    return { text: time ? `${p.brief} · ${time}` : p.brief, tone: "working", title: `${s}: ${p.text}` };
+  }
+  if (l.state === "idle" || l.state === "finished") {
+    const why = (text: string, detail: string): OwnerStatus => ({
+      text,
+      tone: "wait",
+      title: `${s} is ${l.state} — ${detail}`,
+    });
+    // a question open on the card needs the operator as much as a dialog on screen: red, like the card's needs-you
+    if (card.needs_operator)
+      return { ...why("waiting for your answer", "a question to you is open on the card"), tone: "blocked" };
+    if (card.gate_hold) return why("waiting for CI", card.gate_hold);
+    if (card.blocked) return why("blocked externally", card.blocked.reason ?? "waits for the world");
+    if (card.waiting) return why("waiting for you", "the card waits for your review");
+    return { text: l.state, tone: "idle", title: `${s} is ${l.state}${l.state_by ? ` (${l.state_by})` : ""}` };
+  }
+  return { text: l.state, tone: "unknown", title: `${s}: ${l.state}${l.state_by ? ` (${l.state_by})` : ""}` };
+}

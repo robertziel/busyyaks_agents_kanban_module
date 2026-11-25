@@ -49,7 +49,7 @@ import { isoAgo, isoAt } from "../lib/format";
 import { useGlide } from "../lib/glide";
 import { foldSummary, type SumColumn } from "../lib/summary";
 import { noListener } from "../lib/listen";
-import { workingPhase, workingWords, type WorkingPhase } from "../lib/agentLive";
+import { ownerStatus, workingPhase, workingWords, type OwnerStatus, type WorkingPhase } from "../lib/agentLive";
 import { faceType, moodOf } from "../lib/face";
 import { useLivePoll, useLiveRev } from "../lib/live";
 
@@ -976,6 +976,7 @@ export function Board({
                               maxRounds={maxRounds}
                               live={data.live_sessions ?? null}
                               working={workingPhase(c, col.type, working)}
+                              status={ownerStatus(c, col.type, working)}
                               listened={data.listened_columns}
                               links={data.session_links}
                               agents={data.agents}
@@ -1111,6 +1112,7 @@ type CardItemProps = {
   maxRounds: number | null; // config.review_loop.max_rounds (null = no limit)
   live: string[] | null; // live agent session names; null = launcher down (no "gone" claims)
   working: WorkingPhase | null; // what its owner session does now (the blue glow); null = no evidence / not working
+  status: OwnerStatus | null; // the tag beside the assignee's face (lib/agentLive.ts ownerStatus); null = none
   listened: string[]; // columns where an assignee without an owner session is flagged "no listener"
   links: Record<string, SessionLinks> | undefined;
   agents: Record<string, string> | undefined; // agent name → agent type key (the faces' colours)
@@ -1136,6 +1138,7 @@ function CardItem({
   maxRounds,
   live,
   working,
+  status,
   listened,
   links,
   agents,
@@ -1357,6 +1360,11 @@ function CardItem({
           <span className="spacer" />
           <span className="kb-who">
             <HereNow present={others} agents={agents} label={`at work on card #${c.id} now`} />
+            {status && (
+              <span className={`kb-owner-status t-${status.tone}`} title={status.title}>
+                {status.text}
+              </span>
+            )}
             {c.assignee && (
               <Avatar
                 name={c.assignee}

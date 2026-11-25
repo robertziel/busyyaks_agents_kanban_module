@@ -742,6 +742,55 @@ describe("Board", () => {
     }
   });
 
+  it("each card face tags its assignee with what the owner session does now: phase, needs you, waiting for CI, idle; none when the poll fails", async () => {
+    const cards = [
+      card({ id: 21, column: "running", title: "Thinks", owner_session: "s1", assignee: "worker-a" }),
+      card({ id: 22, column: "running", title: "Dialog", owner_session: "s2", assignee: "worker-b" }),
+      card({
+        id: 23,
+        column: "running",
+        title: "CI",
+        owner_session: "s3",
+        assignee: "worker-c",
+        gate_hold: "PR #7: CI is still running",
+      }),
+      card({ id: 24, column: "running", title: "Rests", owner_session: "s3", assignee: "worker-c" }),
+      card({ id: 25, column: "running", title: "Gone", owner_session: "s9", assignee: "worker-z" }),
+      card({ id: 26, column: "running", title: "No assignee", owner_session: "s1" }),
+    ];
+    const api = fakeApi(boardData(content, cards), cards);
+    const s = (state: string, phase: "thinking" | null, elapsed_s: number | null = null) => ({
+      state,
+      phase,
+      elapsed_s,
+      tokens: null,
+      tool: null,
+      card: null,
+      subagents: null,
+    });
+    let fail = false;
+    api.boardLive = () =>
+      fail
+        ? Promise.reject(new Error("launcher down"))
+        : Promise.resolve({
+            sessions: { s1: s("working", "thinking", 90), s2: s("blocked", null), s3: s("idle", null) },
+          });
+    render(<Host api={api} />);
+    const tag = (title: string) => screen.getByText(title).closest("li")!.querySelector(".kb-owner-status");
+    await waitFor(() => expect(tag("Thinks")).toHaveTextContent("thinking · 1m"));
+    expect(tag("Thinks")).toHaveClass("t-working");
+    expect(tag("Dialog")).toHaveTextContent("needs you");
+    expect(tag("CI")).toHaveTextContent("waiting for CI");
+    expect(tag("CI")).toHaveAttribute("title", "s3 is idle — PR #7: CI is still running");
+    expect(tag("Rests")).toHaveTextContent("idle");
+    expect(tag("Gone")).toHaveTextContent("not running");
+    expect(tag("No assignee")).toBeNull();
+    // the tag sits beside the assignee's face, inside .kb-who
+    expect(tag("Thinks")!.parentElement).toHaveClass("kb-who");
+    fail = true;
+    await waitFor(() => expect(tag("Thinks")).toBeNull(), { timeout: 5000 });
+  });
+
   it("a host without boardLive: no poll, no glow, no agents error", async () => {
     const cards = [card({ id: 12, column: "running", title: "Owned", owner_session: "s1" })];
     const api = fakeApi(boardData(content, cards), cards);
