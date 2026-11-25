@@ -25,7 +25,7 @@ Hosts vendor the module at a commit (a release tag or `main`); there are no pack
 
 | Version | Supported |
 |---|---|
-| `1.0.0-beta.x` (the latest beta) and `main` | yes: fixes land on `main` and ship in the next beta |
+| `0.1.x` (the latest release) and `main` | yes: fixes land on `main` and ship in the next release |
 | an older release or commit | no: re-vendor the commit that carries the fix |
 
 ## Scope
