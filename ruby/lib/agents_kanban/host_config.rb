@@ -325,6 +325,19 @@ module AgentsKanban
       v.map(&:to_s).freeze
     end
 
+    # An agent type's `takes`: column types whose ownerless cards its sessions adopt — never one only the operator moves a
+    # card out of (parked: an agent never works a parked card).
+    def takes!(v, where)
+      t = types!(v, where)
+      closed = t.select { |k| ColumnTypes.fetch(k).operator_exit }
+      if closed.any?
+        raise ConfigError, "#{where}: #{closed.join(', ')} — only the operator moves a card out of a #{closed.first} " \
+                           "column; no agent type takes its cards"
+      end
+
+      t
+    end
+
     def parse_handoff(v)
       shape!(v, HANDOFF_KEYS, "handoff")
       min = v["qa_min_chars"]
@@ -602,7 +615,7 @@ module AgentsKanban
       end
       AgentType.new(
         key: v["key"], label: str!(v["label"], "#{where}.label"), launchers: ls.dup.freeze, model: model, prompt: v["prompt"],
-        agent_name: name, session_name: sname, takes: types!(v["takes"], "#{where}.takes"),
+        agent_name: name, session_name: sname, takes: takes!(v["takes"], "#{where}.takes"),
         max: v["max"]&.nonzero?, max_per_project: v["max_per_project"]&.nonzero?, under: under,
         standalone: standalone, launchable: launchable, launch_label: launch_label&.freeze
       ).freeze

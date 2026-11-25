@@ -58,6 +58,8 @@ export type ColumnType = {
   waiting: boolean;
   listened: boolean;
   operator_only: boolean;
+  // only the operator moves a card OUT of a column of this type, whatever the workflow says (parked)
+  operator_exit: boolean;
   agent_no_create: boolean;
   finishes: boolean;
   terminal: boolean;
@@ -88,6 +90,8 @@ export type BoardRules = {
   waiting: ColumnKey[];
   listened: ColumnKey[];
   operator_only: ColumnKey[];
+  // the columns only the operator moves a card out of (parked): no workflow edge out of them names agents
+  operator_exit: ColumnKey[];
   agent_no_create: ColumnKey[];
   // the terminal columns (done, cancelled): the work is over, the owner watchdog leaves the card alone
   terminal: ColumnKey[];

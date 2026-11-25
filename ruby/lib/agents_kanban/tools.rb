@@ -106,6 +106,13 @@ module AgentsKanban
                "Never ask it only in chat: a question in the terminal reaches nobody and the board shows nothing " \
                "waiting. A question about no card: create the card, then ask on it. Waiting for CI, an API or " \
                "somebody outside the board: kanban_block(id, reason, url), kanban_unblock when it clears."
+      if (parked = cfg.operator_exit).any?
+        cols = parked.map(&l).join(" / ")
+        parts << "Only the operator moves a card out of #{cols}: never prioritise, claim, spawn for or start a card " \
+                 "there (kanban_move, kanban_claim and kanban_spawn refuse it) — your new cards start there and only there. " \
+                 "\"Push\" or " \
+                 "\"update tickets\" means the cards already past #{cols}."
+      end
       lt = @config.lead_types.first
       if lt
         parts << "Lead-first boards: a board's #{lt.key} session starts its team — kanban_spawn(id, type, tmux_session) " \
@@ -158,6 +165,10 @@ module AgentsKanban
                      "card out of #{cfg.operator_only.map(&l).join(' / ')}."
       elsif cfg.operator_only.any?
         move_desc += " Only the operator moves a card out of #{cfg.operator_only.map(&l).join(' / ')}."
+      end
+      if cfg.operator_exit.any?
+        move_desc += " Only the operator moves a card out of #{cfg.operator_exit.map(&l).join(' / ')}, whatever the " \
+                     "workflow says."
       end
       move_desc += " A card flagged needs_operator (kanban_ask) or blocked_external (kanban_block) is not moved by " \
                    "agents until the operator answers / kanban_unblock."
@@ -699,6 +710,7 @@ module AgentsKanban
       c = @store.card!(int!(a, "id"))
       raise Denied, "card ##{c[:id]} is on #{c[:project_slug]}, not on #{lead[:project_slug]} (your board)" \
         unless c[:project_slug] == lead[:project_slug]
+      @store.parked_work!(@store.board_of(c[:project_slug]), c, "spawns for") # before the host is asked
       t = @config.agent_type(str!(a, "type"))
       raise Invalid, "agent type #{t.key} is not under #{lead[:type_key]}" unless t.under == lead[:type_key]
       unless c[:owner_session].nil? || c[:owner_session] == session

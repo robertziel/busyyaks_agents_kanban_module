@@ -98,8 +98,8 @@ class LeadUnassignableTest < Minitest::Test
       kb.create(slug: "g/r", title: "x", by: "claude-#{lead}", owner_session: lead, assignee: "claude-#{lead}")
     end
     assert_match(/claude-#{lead} is a lead/, e.message)
-    # kanban_create by the lead: owned by it, no assignee
-    c = call("kanban_create", project: "g/r", title: "made by the lead", author: "claude-#{lead}", column: "todo")
+    # kanban_create by the lead: owned by it, no assignee (in Backlog: agents create there only)
+    c = call("kanban_create", project: "g/r", title: "made by the lead", author: "claude-#{lead}")
     assert_equal [lead, nil], c.values_at("owner_session", "assignee")
     # a lead registration started for a card is refused, naming the rule
     e = assert_raises(AgentsKanban::Denied) do

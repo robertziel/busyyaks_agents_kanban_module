@@ -429,11 +429,12 @@ class ApiTest < Minitest::Test
     api = AgentsKanban::Api.new(store: kb, attachments: @att, markdown: md, projects: ->(s) { @projects[s] }, backlog: backlog)
     assert_equal [%w[TASK-1 qa]], api.board("g/r")[1][:backlog_md][:tasks].map { |t| t.values_at("id", "column") }
     shape = KanbanTest.board_hash("coding")
+    columns = shape["columns"].reject { |c| c["key"] == "qa" }
     transitions = [
-      { "name" => "Move", "from" => "*", "to" => "*", "by" => "any" },
+      { "name" => "Move", "from" => columns.map { |c| c["key"] } - ["backlog"], "to" => "*", "by" => "any" },
+      { "name" => "Move", "from" => "backlog", "to" => "*", "by" => "operator" },
       { "name" => "Approve", "from" => "human_check", "to" => "ready", "by" => "operator" },
     ]
-    columns = shape["columns"].reject { |c| c["key"] == "qa" }
     s, = api.board_shape_save("g/r", shape.merge("columns" => columns, "transitions" => transitions), by: "op")
     assert_equal 200, s
     s, j = api.board("g/r")

@@ -8,8 +8,10 @@ module AgentsKanban
   # its type here — one definition per concept, never a column key in code and never a per-column flag list in a
   # config file. Changing a column's type changes its rules. The set is FIXED (workflow v3): seven categories.
   #
-  #   parked     nobody listens; agents may create here; the owner watchdog still releases a card whose owner session
-  #              is gone, in place (Backlog)
+  #   parked     nobody listens; agents may create here, but only the operator moves a card out (an agent
+  #              never prioritises nor starts parked work — no workflow edge out of it may name agents, Board refuses
+  #              one; Store#move, kanban_claim and kanban_spawn refuse an agent there); the owner watchdog still
+  #              releases a card whose owner session is gone, in place (Backlog)
   #   queued     work waiting for a session: listened; the watchdog returns a released work card here; the board's lead
   #              takes its ownerless cards and starts a worker per card with kanban_spawn (To do)
   #   working    a work column (several per board: In progress, Author response): listened; the FIRST one in board
@@ -27,7 +29,9 @@ module AgentsKanban
   #              nothing (a child of a cancelled parent still waits — cancel it too), keeps owner / assignee as history
   #
   # Flags: waiting ("N waiting for you"), listened (an assignee with no owner session = "no listener"; the watchdog
-  # scans it), operator_only (agents never move a card out, nor in except through a gate), agent_no_create, finishes
+  # scans it), operator_only (agents never move a card out, nor in except through a gate), operator_exit (only the
+  # operator moves a card OUT — whatever the workflow says — and no agent works a card there: no claim, no spawn, no
+  # adoption; agents may still create and move cards IN), agent_no_create, finishes
   # (a parent in it is done), terminal (the card's work is over: the owner watchdog leaves it alone, the review rounds
   # stop counting), singleton (at most one column of the type per board: the rules that need ONE target).
   #
@@ -38,7 +42,7 @@ module AgentsKanban
   # #125: the terminal columns 24 h, the parked (backlog) columns a week, every other 72 h; a board's column may
   # override it (0 = never folded).
   module ColumnTypes
-    FLAGS = %i[waiting listened operator_only agent_no_create finishes terminal singleton].freeze
+    FLAGS = %i[waiting listened operator_only operator_exit agent_no_create finishes terminal singleton].freeze
     Type = Struct.new(:key, :label, :summary, :hide_after_hours, *FLAGS, keyword_init: true) do
       def to_h
         { key: key, label: label, summary: summary, hide_after_hours: hide_after_hours, **FLAGS.to_h { |f| [f, self[f]] } }
@@ -48,49 +52,57 @@ module AgentsKanban
     ALL = [
       Type.new(
         key: "parked", label: "Parked", hide_after_hours: 168,
-        summary: "nobody listens; agents may create here; a card whose owner session is gone is released in place",
-        waiting: false, listened: false, operator_only: false, agent_no_create: false, finishes: false, terminal: false,
+        summary: "nobody listens; agents may create here, but only the operator moves a card out (no agent " \
+                 "prioritises, claims or starts parked work); a card whose owner session is gone is released in place",
+        waiting: false, listened: false, operator_only: false, operator_exit: true,
+        agent_no_create: false, finishes: false, terminal: false,
         singleton: false
       ),
       Type.new(
         key: "queued", label: "Queued", hide_after_hours: 72,
         summary: "work waiting for a session: listened; released work cards return here; the board's lead starts " \
                  "one session per card",
-        waiting: false, listened: true, operator_only: false, agent_no_create: false, finishes: false, terminal: false,
+        waiting: false, listened: true, operator_only: false, operator_exit: false,
+        agent_no_create: false, finishes: false, terminal: false,
         singleton: true
       ),
       Type.new(
         key: "working", label: "Working", hide_after_hours: 72,
         summary: "a work column: listened; the first one is where the watchdog releases from and the idle watch looks",
-        waiting: false, listened: true, operator_only: false, agent_no_create: false, finishes: false, terminal: false,
+        waiting: false, listened: true, operator_only: false, operator_exit: false,
+        agent_no_create: false, finishes: false, terminal: false,
         singleton: false
       ),
       Type.new(
         key: "review", label: "Review", hide_after_hours: 72,
         summary: "a further work column (an agent's review, the system's): listened, no watchdog move; review rounds " \
                  "are counted per column",
-        waiting: false, listened: true, operator_only: false, agent_no_create: false, finishes: false, terminal: false,
+        waiting: false, listened: true, operator_only: false, operator_exit: false,
+        agent_no_create: false, finishes: false, terminal: false,
         singleton: false
       ),
       Type.new(
         key: "gate", label: "Gate", hide_after_hours: 72,
         summary: "waits for the operator: agents enter only with kanban_handoff; the operator's one forward exit " \
                  "approves; an agent leaves only along a named transition once approved",
-        waiting: true, listened: true, operator_only: true, agent_no_create: false, finishes: false, terminal: false,
+        waiting: true, listened: true, operator_only: true, operator_exit: false,
+        agent_no_create: false, finishes: false, terminal: false,
         singleton: false
       ),
       Type.new(
         key: "done", label: "Done", hide_after_hours: 24,
         summary: "finished: finishes a parent; terminal; the operator's (agents enter only from a gate, approved); " \
                  "agents cannot create here",
-        waiting: false, listened: false, operator_only: true, agent_no_create: true, finishes: true, terminal: true,
+        waiting: false, listened: false, operator_only: true, operator_exit: false,
+        agent_no_create: true, finishes: true, terminal: true,
         singleton: true
       ),
       Type.new(
         key: "cancelled", label: "Cancelled", hide_after_hours: 24,
         summary: "stopped: terminal; only the operator moves a card in or out; finishes nothing; agents cannot " \
                  "create here",
-        waiting: false, listened: false, operator_only: true, agent_no_create: true, finishes: false, terminal: true,
+        waiting: false, listened: false, operator_only: true, operator_exit: false,
+        agent_no_create: true, finishes: false, terminal: true,
         singleton: true
       ),
     ].each(&:freeze).freeze

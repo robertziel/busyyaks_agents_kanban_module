@@ -223,8 +223,12 @@ describe("BoardEditor", () => {
     expect(arrows).toHaveLength(9);
     expect(arrows[0]!.getAttribute("aria-label")).toBe("Transition Prioritise: Backlog → To do");
     expect(within(dlg).getByRole("group", { name: "Workflow graph: 7 columns, 9 arrows" })).toBeInTheDocument();
-    expect(within(dlg).getByText("Move")).toBeInTheDocument(); // the any → any catch-all, in the list
-    expect(within(dlg).getByText("any → any · any")).toBeInTheDocument();
+    // the catch-all, in the list: agents' from every column but Backlog, the operator's from Backlog
+    expect(within(dlg).getAllByText("Move")).toHaveLength(2);
+    expect(
+      within(dlg).getByText("To do, In progress, QA, Human Check, Ready to merge, Merged → any · any"),
+    ).toBeInTheDocument();
+    expect(within(dlg).getByText("Backlog → any · operator")).toBeInTheDocument();
   });
 
   it("a content board draws its four columns and only the list for its catch-all", async () => {
@@ -282,7 +286,15 @@ describe("BoardEditor", () => {
       to: "in_staging",
       by: "any",
     });
-    expect(s.transitions.find((t) => t.name === "Move")!.from).toBe("*"); // "*" round-trips
+    // a source list round-trips (the editor added in_staging to no transition)
+    expect(s.transitions.find((t) => t.name === "Move" && t.by === "any")!.from).toEqual([
+      "todo",
+      "doing",
+      "qa",
+      "human_check",
+      "ready",
+      "merged",
+    ]);
     expect(await within(dlg).findByText(/saved by me/)).toBeInTheDocument();
   });
 

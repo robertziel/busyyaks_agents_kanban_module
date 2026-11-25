@@ -564,6 +564,12 @@ module AgentsKanban
 
         raise Denied, "agents cannot create cards in #{b.label(column)}: only the operator moves a card there"
       end
+      # What gets worked is the operator's call — on a board with a parked column an agent's card starts there
+      # (Backlog), never straight in the work flow
+      if agent && b.operator_exit.any? && !b.operator_exit?(column)
+        raise Denied, "agents create cards only in #{b.operator_exit.map { |k| b.label(k) }.join(' / ')}: the operator " \
+                      "moves a card into the work flow (#{b.label(column)} refused)"
+      end
 
       by = who!(by)
       now = @clock.call
@@ -601,7 +607,7 @@ module AgentsKanban
                end
         log(id, "create", "created in #{b.label(column)}#{note}", by)
         log(id, "parent", "waits for card ##{pid}", by) if pid
-        promote_children(id, by) if b.done?(column)
+        promote_children(id, by) if b.done?(column) && !agent
         id
       end
     end
@@ -925,6 +931,7 @@ module AgentsKanban
       raise Invalid, "no card #{id}" if agent && on_hold?(c) # on hold: out of every agent's sight (Store#hold)
 
       b = board_of(c[:project_slug])
+      parked_exit!(b, c, named ? nil : column) if agent
       column = transition_target!(b, c, column, transition, agent) if named
       raise Invalid, "column or transition is required" if column.nil? || column.to_s.empty?
 
@@ -977,7 +984,8 @@ module AgentsKanban
             cards.where(id: c[:id]).update(approved_at: nil, approved_by: nil) if c[:approved_at] && !b.terminal?(column)
             enqueue_ping(c, "move", by, "moved #{b.label(c[:column])} → #{b.label(column)}:") unless agent
           end
-          promote_children(c[:id], by) if b.done?(column)
+          # Only the operator's finish of a parent promotes its parked children; an agent's leaves them parked
+          promote_children(c[:id], by) if b.done?(column) && !agent
           clear_flags_at_end(c, b, column, by) if b.terminal?(column)
         end
       end
@@ -1588,12 +1596,33 @@ module AgentsKanban
                       "it cannot own a card on #{c[:project_slug]}'s board — " \
                       "leave it to #{c[:project_slug]}'s sessions"
       end
+      parked_work!(board_of(c[:project_slug]), c, "claims")
       if lead_reg?(reg) || lead_agent?(assignee)
         raise Denied, "#{lead_reg?(reg) ? "session #{reg[:session]}" : assignee} is a lead and cannot claim card " \
                       "##{c[:id]}: #{NO_LEAD_ASSIGNEE}"
       end
       update(c[:id], { "assignee" => assignee }, by: assignee)
       set_owner(c[:id], session: session, socket: socket, by: assignee)
+    end
+
+    # only the operator moves a card out of a parked column (Backlog), whatever the workflow says: an agent's
+    # move out of one is refused before anything else is read (a reorder inside it stays; `column` nil = a named
+    # transition, always a way out). The workflow cannot open it either (Board#operator_exit!).
+    def parked_exit!(b, c, column)
+      return unless b.operator_exit?(c[:column])
+      return if column && column.to_s == c[:column]
+
+      raise Denied, "card ##{c[:id]} sits in #{b.label(c[:column])}: only the operator moves a card out of it — agents " \
+                    "never prioritise nor start parked work (kanban_ask on a card you own if it should be worked)"
+    end
+
+    # no agent works a card in a parked column: no claim, no spawn for it, no adoption (HostConfig refuses a
+    # parked type in `takes`). `what` = the act refused.
+    def parked_work!(b, c, what)
+      return unless b.operator_exit?(c[:column])
+
+      raise Denied, "card ##{c[:id]} sits in #{b.label(c[:column])}: no agent #{what} a parked card — only the operator " \
+                    "moves it out, and its work starts there"
     end
 
     # A session that may own a card here: the name alphabet, and — when the board names its sessions
@@ -1773,6 +1802,7 @@ module AgentsKanban
       agent = @config.agent_name(t, session: s, slug: project)
       now = @clock.call
       adopted = []
+      Array(for_cards).each { |cid| (c = card!(cid)) && parked_work!(board_of(c[:project_slug]), c, "spawns for") }
       key = key_to && @config.lead_type?(t) ? SecureRandom.hex(32) : nil
       @db.transaction do
         id = sessions_t.insert(session: s, socket: socket.to_s, project_slug: project, type_key: t.key, launcher_key: l,

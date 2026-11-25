@@ -276,7 +276,7 @@ class PrAssignTest < Minitest::Test
 
   def test_an_agent_leaving_the_work_column_needs_at_least_one_pr_of_each_required_role
     pr_roles.roles["local"][:required] = true
-    id = kb.create(slug: "g/r", title: "w", by: "agent-1")
+    id = kb.create(slug: "g/r", title: "w", by: "agent-1", column: "todo")
     kb.move(id, column: "doing", by: "agent-1", agent: true)
     msg = assert_raises(AgentsKanban::Denied) { kb.move(id, column: "qa", by: "agent-1", agent: true) }.message
     assert_match(/card ##{id} has no local PR assigned — open the PR and /, msg)

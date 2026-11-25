@@ -65,7 +65,7 @@ edited per gate in `BoardEditor` ("Requires green CI"; the gate's card then says
 
 | type | flags | the rules it carries |
 |---|---|---|
-| `parked` | — | nobody listens; agents may create here; a gone owner is released in place; `dependencies.promote.from` (Backlog, Waiting) |
+| `parked` | — | nobody listens; agents create here (and, on a board with one, only here); **only the operator moves a card out** (`operator_exit`: an agent's move out is `Denied` whatever the workflow says — a reorder inside stays —, `kanban_claim` / `kanban_spawn` refuse a card there, no agent type `takes` it (`ConfigError`), and a transition out of it `by: agent\|any` — a `"*"` source included — is `Invalid` on save and on load; Schema v19 rewrote the stored ones); a gone owner is released in place; `dependencies.promote.from` (Backlog, Waiting) |
 | `queued` | listened · one per board | released work cards return here (`gates.watchdog.to`); `dependencies.promote.to`; the lead's ownerless work, each card started by the lead's `kanban_spawn` (To do, Queued) |
 | `working` | listened | a work column — several per board (In progress, Author response); the FIRST one is `gates.watchdog.from` and `idle_column`; a released card in any other working column stays |
 | `review` | listened | a further work column, an agent's or the system's; no watchdog move; review ROUNDS are counted per LOOP column (`review_loop.columns`; Agent review) |
@@ -175,7 +175,7 @@ cards returned to the column of their last move into it, flagged; handoff / appr
 
 `HostConfig#digest` = sha256 of the canonical JSON the client receives (`to_h`); a host may pin it.
 
-## 3. Tables (`Schema`, v18)
+## 3. Tables (`Schema`, v19)
 
 `cards` (+ `parent_id`, `metadata` JSON text since v2), `card_activity`, `board_labels`, `checklists`,
 `checklist_items`, `card_pings`, `card_attachments`, `session_dialogs`, `agent_sessions` (v3: `session`, `socket`,
@@ -490,6 +490,28 @@ primitives, for a host without its own).
 ## 9. Breaking changes for hosts (config / API)
 
 Newest first; a heading names the `Schema::VERSION` step when the change brought one.
+
+### Schema v19 — only the operator moves a card out of a parked column
+
+- A data step, no DDL: `Schema.parked_exits!(db, prefix:, by:, now:)` (run by `migrate!(to: 19)`) rewrites every stored
+  board (template, projects, session boards) so no transition `by: agent|any` leaves a column whose type is
+  `operator_exit` (parked): its parked sources become a transition of the same name `by: operator` right after it (left
+  out where an operator edge of that name and target already leaves them), its other sources keep their `by` (a `"*"`
+  source becomes the list of the other columns — a column the operator adds later is in no such list: the operator
+  adds it to the agents' catch-all, or gives it its own transitions, by design: a way for agents is always declared).
+  Idempotent; the changed boards record `by` / `now` as their last
+  save. A host that keeps each board in a file must write the migrated board back
+  to it, else its next file sync is refused by the new rule. Rollback: nothing to undo (a v18 engine reads the result).
+- `Board` refuses an agent way out of a parked column (`Invalid`, naming the transition) on save AND on load: a stored
+  board v19 did not rewrite (a hand-edited file) no longer loads. `ColumnTypes` gains the flag `operator_exit`
+  (`types[]`, `rules.operator_exit`); `HostConfig` refuses an agent type whose `takes` names `parked`.
+- `Store#move` (agent) refuses any move out of a parked column before reading the workflow (`Denied`; a reorder inside
+  it stays); `Store#claim` and `register_session(for_cards:)` / `kanban_spawn` refuse a parked card. On a board with a
+  parked column an agent creates cards there only (`Store#create` `Denied` elsewhere; a board without one — a session
+  board — is unchanged). Dependencies: only the OPERATOR's finish of a parent promotes its parked children
+  (`promote_children`); an agent's leaves them parked. A host whose
+  agents worked a parked column (a Waiting column, say) retypes it `queued` or has the operator move cards out.
+- Agents: the `parked` summary, the MCP `instructions` and `kanban_move` say only the operator moves a card out.
 
 ### Schema v18 — comment actions
 

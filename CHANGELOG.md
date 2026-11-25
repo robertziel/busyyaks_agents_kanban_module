@@ -18,6 +18,17 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
   an agents-only edge or a fan-out. `Api#comment` takes `transition` / `column`; `KanbanApi.comment(id, body, move?)`.
   The local_v4 fixture marks Changes requested, Deploy failed, Reopen and Rework; `board.example.yml` marks Fixes needed.
 
+### Changed (breaking for hosts)
+
+- **BREAKING: only the operator moves a card out of a parked column — Schema v19.** An agent can no longer take a card
+  out of a `parked` column (Backlog), along any transition (`*` included), nor claim or register a session for a card
+  that sits in one. A workflow that gives `by: agent` or `by: any` a way out of a parked column is refused on save AND
+  on load, naming the transition. On a board with a parked column an agent creates cards only there, and only the
+  operator's finish of a parent promotes its parked children. Migration: a host migration `Schema.migrate!(db, prefix:,
+  to: 19)` (= `Schema.parked_exits!`, a data step, no DDL) rewrites every stored board: each such transition becomes
+  `by: operator`, and a `"*"` catch-all is split so agents keep it from every other column. Rollback: nothing to undo —
+  a v18 engine reads the rewritten boards.
+
 ### Fixed
 
 - **A failed board refresh is retried**: `useLiveRev` takes a new revision as seen only once its refresh landed; a

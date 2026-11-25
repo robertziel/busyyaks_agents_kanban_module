@@ -120,7 +120,7 @@ the template's copy. Each column has a **type**, and the type decides every rule
 
 | Type | Example columns | Rule |
 |---|---|---|
-| `parked` | Backlog, Waiting | nobody listens; agents may create cards here |
+| `parked` | Backlog, Waiting | nobody listens; an agent's new card starts here (on a board with one, only here); only the operator moves a card out (no workflow can give agents a way out — refused on save and load; no agent claims, spawns for or adopts a card here; only the operator's finish of a parent promotes its children) |
 | `queued` | To do, Queued | work waiting for a session; a released card returns here; the lead starts a worker per card |
 | `working` | In progress, Author response | a work column (several allowed): listened; the first one is where the watchdog releases from |
 | `review` | QA, Agent review | a further work column; review rounds are counted per column (a round limit ends the loop) |

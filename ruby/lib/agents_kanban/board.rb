@@ -82,6 +82,7 @@ module AgentsKanban
       @by_key = @columns.to_h { |c| [c.key, c] }.freeze
       singletons!
       @workflow = Workflow.new(h["transitions"], keys: keys)
+      operator_exit!
       @handoff = derive_handoff
       @approvals = derive_approvals
       @watchdog = derive_watchdog
@@ -116,6 +117,9 @@ module AgentsKanban
     def waiting = flagged(:waiting)
     def listened = flagged(:listened)
     def operator_only = flagged(:operator_only)
+    # The columns only the operator moves a card out of (parked) — whatever the workflow says.
+    def operator_exit = flagged(:operator_exit)
+    def operator_exit?(key) = column?(key) && type_of(key).operator_exit
     def agent_no_create = flagged(:agent_no_create)
     def no_create_for_agents = agent_no_create
     def terminal = flagged(:terminal)
@@ -166,6 +170,7 @@ module AgentsKanban
     # The rules the client renders from (the same derivation the engine enforces), beside the declared shape.
     def rules
       { default_column: default_column, waiting: waiting, listened: listened, operator_only: operator_only,
+        operator_exit: operator_exit,
         agent_no_create: no_create_for_agents, terminal: terminal,
         gates: { handoff: @handoff&.to_h, approvals: @approvals.map(&:to_h), watchdog: @watchdog&.to_h },
         dependencies: @dependencies && { done: @dependencies.done, blocked: @dependencies.blocked,
@@ -222,6 +227,24 @@ module AgentsKanban
       raise Invalid, "duplicate column key #{dup.first}" if dup.any?
 
       cols.freeze
+    end
+
+    # A column whose type is the operator's to leave (parked) has no way out for agents — a transition out of
+    # it `by: agent` or `by: any` (a "*" source included) is refused, naming it, on save AND on load: the rule is the
+    # type's, so no workflow (a hand-edited workflow file, a stored row) can open it. Into it stays open.
+    def operator_exit!
+      @workflow.to_a.each_with_index do |t, i|
+        next if t["by"] == "operator"
+
+        sources = t["from"] == Workflow::ANY ? keys : Array(t["from"])
+        out = sources.select { |k| operator_exit?(k) && t["to"] != k } # an edge into its own source is none
+        next if out.empty?
+
+        rest = sources.size > out.size ? " (its other sources in a transition of their own)" : ""
+        raise Invalid, "transitions[#{i}] #{t['name'].inspect} (by: #{t['by']}) leaves " \
+                       "#{out.map { |k| label(k) }.join(' / ')}: only the operator moves a card out of a " \
+                       "#{type_of(out.first).key} column — make it by: operator#{rest}"
+      end
     end
 
     def singletons!
