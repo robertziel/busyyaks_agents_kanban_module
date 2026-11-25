@@ -34,7 +34,11 @@ module AgentsKanban
   #                             registration id (agent_sessions.lead_id; the CHECK needs_lead = 0 OR lead_id IS NOT
   #                             NULL). No lead → refused, never started. Every type is a LEAD (some type is under
   #                             it), `under` one, or `standalone: true` — a plain session (takes nothing, no prompt):
-  #                             no type runs without a lead by omission.
+  #                             no type runs without a lead by omission. `launchable: false` (optional, needs `under`):
+  #                             the operator's Launch bar never offers the type and Api#launch refuses it — only its
+  #                             lead's kanban_spawn starts one (a worker for a card). `launch_label` (optional, null =
+  #                             the label): the Launch bar button's text ("Launch team lead"), the label staying the
+  #                             type's name everywhere else.
   #   concurrency               {max_sessions}: registered agent sessions running at once on the host (0 = no cap)
   #   owner_sessions            null (the host's rule) or session-name globs a card may be owned by
   #   table_prefix              namespaces the engine's tables ("" = the unprefixed names busyyaks started with)
@@ -86,9 +90,9 @@ module AgentsKanban
     LAUNCHER_COMMAND = /\A[A-Za-z0-9_][A-Za-z0-9_.\/-]{0,200}\z/
     Launcher = Struct.new(:key, :label, :kind, :command, :args, :via_shell, keyword_init: true)
     AGENT_TYPE_KEYS = %w[key label launchers model prompt agent_name session_name takes max max_per_project].freeze
-    OPTIONAL_AGENT_TYPE_KEYS = %w[under standalone].freeze
+    OPTIONAL_AGENT_TYPE_KEYS = %w[under standalone launchable launch_label].freeze
     AgentType = Struct.new(:key, :label, :launchers, :model, :prompt, :agent_name, :session_name, :takes, :max,
-                           :max_per_project, :under, :standalone, keyword_init: true) do
+                           :max_per_project, :under, :standalone, :launchable, :launch_label, keyword_init: true) do
       # The launcher key a start runs: the one named (refused unless the type lists it), or the type's ONLY launcher.
       # Several and none named → refused with the list: the code never picks one of them.
       def launcher!(key) = registered_launcher!(key)
@@ -546,6 +550,20 @@ module AgentsKanban
                              "is told what to do or adopts cards runs `under` the board's lead)"
         end
       end
+      launchable = v.fetch("launchable", true)
+      raise ConfigError, "#{where}.launchable must be true or false" unless [true, false].include?(launchable)
+      # a type the operator never launches is started by its lead's kanban_spawn: without a lead nothing could start it
+      unless launchable || under
+        raise ConfigError, "#{where}: launchable: false needs `under: <lead type>` — only its lead's kanban_spawn starts " \
+                           "such a session, and a type under no lead would never run"
+      end
+      launch_label = v["launch_label"]
+      unless launch_label.nil? || (launch_label.is_a?(String) && !launch_label.strip.empty?)
+        raise ConfigError, "#{where}.launch_label must be null (the button says the label) or a non-empty string"
+      end
+      if launch_label && !launchable
+        raise ConfigError, "#{where}: launch_label names a Launch bar button, and launchable is false"
+      end
       raise ConfigError, "#{where}.prompt must be a string or null" unless v["prompt"].nil? || v["prompt"].is_a?(String)
       # the prompt is ONE argv word: one starting with "-" would be read as an option (a `--settings` with hooks)
       raise ConfigError, "#{where}.prompt must not start with \"-\": #{Launch::PROMPT_DASH}" if v["prompt"]&.start_with?("-")
@@ -565,7 +583,7 @@ module AgentsKanban
         key: v["key"], label: str!(v["label"], "#{where}.label"), launchers: ls.dup.freeze, model: model, prompt: v["prompt"],
         agent_name: name, session_name: sname, takes: types!(v["takes"], "#{where}.takes"),
         max: v["max"]&.nonzero?, max_per_project: v["max_per_project"]&.nonzero?, under: under,
-        standalone: standalone
+        standalone: standalone, launchable: launchable, launch_label: launch_label&.freeze
       ).freeze
     end
 

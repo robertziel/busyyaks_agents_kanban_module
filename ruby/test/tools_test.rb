@@ -354,6 +354,26 @@ class ToolsTest < Minitest::Test
     end
   end
 
+  # A session started by hand is never told to register itself: no text an agent reads (the instructions, every tool's
+  # description, the lead-type refusal) tells a session that was not launched to call kanban_register — the tool says
+  # it is for when the operator asks, and a session started by hand works the board only when the operator asks.
+  def test_a_session_started_by_hand_is_never_told_to_register_itself
+    texts = [@tools.instructions, *@tools.definitions.map { |d| d[:description] }]
+    texts.each do |t|
+      refute_match(/when you were not launched/i, t)
+      refute_match(/register (?:as|yourself|your session)\b/i, t)
+      refute_match(/\(kanban_register(?: returns it)?\)/, t)
+    end
+    assert_match(/a session started by hand is not registered and does not register itself: it works the board only /,
+                 @tools.instructions)
+    reg = @tools.definitions.find { |d| d[:name] == "kanban_register" }[:description]
+    assert reg.start_with?("Only when the operator explicitly asks you to: register"), reg
+    assert_match(/Never on your own: a session started by hand works the board only when the operator asks/, reg)
+    @live << "by_hand"
+    msg = err("kanban_register", project: "g/r", type: "lead", tmux_session: "by_hand", author: "x")
+    assert_match(/never registered by hand — do not register: a session started by hand works the board only when/, msg)
+  end
+
   # The links rule, pinned: each reference links to where the thing it names lives, read from data; no `#N` in chat.
   def test_instructions_carry_the_links_rule
     text = @tools.instructions

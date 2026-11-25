@@ -1,6 +1,7 @@
 // The Launch bar's pure rules: why a type cannot start now (the cap it hits), the cap line, the launcher a viewer
 // last picked per type. Every number comes from the engine's Api#launches — nothing is counted here.
-import type { Concurrency, LaunchFailure, LaunchType } from "../types";
+import type { BoardLead, Concurrency, LaunchFailure, LaunchType } from "../types";
+import { isoAt } from "./format";
 
 // null = may start; else the reason, worded like the engine's refusal (the server is the judge; this only greys the button).
 export function launchBlocked(t: LaunchType, conc: Concurrency | null, sessionsError: string | null): string | null {
@@ -45,4 +46,18 @@ export function pickLauncher(t: LaunchType, remembered: string | null): string {
 // by when the start ended, so a set — not a highest id — keeps a lower id that ended later), newest first as sent.
 export function unseenFailures(failures: LaunchFailure[], dismissed: ReadonlySet<number>): LaunchFailure[] {
   return failures.filter((f) => !dismissed.has(f.id));
+}
+
+// The types the Launch bar offers: every one but those with launchable: false (only their lead's kanban_spawn starts
+// one — a worker for a card), in the engine's order.
+export const offered = (types: LaunchType[]): LaunchType[] => types.filter((t) => t.launchable);
+
+// A type's button text: its launch_label ("Launch team lead"), else its label.
+export const buttonText = (t: { label: string; launch_label?: string | null }): string => t.launch_label ?? t.label;
+
+// The board banner's "· <session> ended …" part: a session registered under an earlier session_name (old_name = the
+// name a launch gets now) is said as old, never shown as if it were today's lead.
+export function leadEnded(ended: NonNullable<BoardLead["ended"]>): string {
+  const name = ended.old_name ? `${ended.session} (old name · a launch now names it ${ended.old_name})` : ended.session;
+  return `${name} ended ${isoAt(ended.at)}${ended.reason ? ` (${ended.reason})` : ""}`;
 }

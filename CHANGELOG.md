@@ -8,6 +8,9 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Added
 
+- **A type only its lead starts** (`agent_types[].launchable: false`): the Launch bar never offers it and `Api#launch`
+  refuses it; its lead's `kanban_spawn` still starts one. **`launch_label`**: the Launch bar button's own text.
+- **An ended lead of an old session name is marked old** on the board's no-lead banner (`lead.ended.old_name`).
 - **The running lead hears about its workers**: one ping when a worker on its board asks, hands off,
   blocks or ends holding open cards, and on the progress watch's first step. None on a comment, when the lead acted or
   when no lead runs. A session's pings go one at a time: a row that may already sit in its input, then the operator's own,
@@ -27,6 +30,8 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Changed
 
+- **Agent-facing text**: no tool text tells a session that was not launched to register itself: `kanban_register` is
+  "only when the operator explicitly asks you to"; a session started by hand works the board only when the operator asks.
 - **Green CI is a gate column's setting, off by default**: `requires_green_ci: true` on a GATE
   column (Board, Schema v16 `board_columns.requires_green_ci`, `rules.green_ci`, the editor's "Requires green CI"
   checkbox, the gate's card "waits for you · CI") makes the approval out of that gate and a handoff into it wait for

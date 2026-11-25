@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Concurrency, LaunchType } from "../types";
-import { capLine, launchBlocked, launcherLock, pickLauncher } from "./launch";
+import { buttonText, capLine, launchBlocked, launcherLock, leadEnded, offered, pickLauncher } from "./launch";
 
 const type = (o: Partial<LaunchType> = {}): LaunchType => ({
   key: "lead",
@@ -17,6 +17,8 @@ const type = (o: Partial<LaunchType> = {}): LaunchType => ({
   running: 0,
   running_here: 0,
   under: null,
+  launchable: true,
+  launch_label: null,
   ...o,
 });
 const conc = (running: number, max = 6): Concurrency => ({
@@ -89,4 +91,37 @@ describe("under a lead (lead-first boards)", () => {
   });
   it("sessions unknown beats the lead rule (never a guess)", () =>
     expect(launchBlocked(type({ under: "lead" }), null, null)).toBe("sessions unknown"));
+});
+
+describe("offered", () => {
+  it("leaves out a type with launchable: false (only its lead's kanban_spawn starts one), keeps the order", () => {
+    const ts = [
+      type({ key: "lead" }),
+      type({ key: "worker", under: "lead", launchable: false }),
+      type({ key: "plain" }),
+    ];
+    expect(offered(ts).map((t) => t.key)).toEqual(["lead", "plain"]);
+  });
+});
+
+describe("buttonText", () => {
+  it("is the launch label when the type has one, else the label", () => {
+    expect(buttonText(type({ label: "Team lead", launch_label: "Launch team lead" }))).toBe("Launch team lead");
+    expect(buttonText(type({ label: "Sub team" }))).toBe("Sub team");
+    expect(buttonText({ label: "Team lead" })).toBe("Team lead");
+  });
+});
+
+describe("leadEnded", () => {
+  const at = "2026-11-25T10:00:00Z";
+  it("marks a session of an old name and names today's", () => {
+    const t = leadEnded({ session: "tl_g_r", reason: "gone", at, old_name: "by_g_r_teamlead" });
+    expect(t).toMatch(/^tl_g_r \(old name · a launch now names it by_g_r_teamlead\) ended .* \(gone\)$/);
+  });
+  it("says today's name as it is", () => {
+    expect(leadEnded({ session: "by_g_r_teamlead", reason: null, at, old_name: null })).toMatch(
+      /^by_g_r_teamlead ended /,
+    );
+    expect(leadEnded({ session: "by_g_r_teamlead", reason: null, at })).not.toMatch(/old name/);
+  });
 });

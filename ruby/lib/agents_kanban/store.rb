@@ -1792,17 +1792,29 @@ module AgentsKanban
       sessions_t.where(project_slug: r[:project_slug], type_key: r[:type_key]).where(Sequel[:id] > r[:id]).any?
     end
 
-    # The board's lead now (lead-first boards): nil on a host with no lead type; else {type, label, session (running, or
-    # nil), ended: {session, reason, at} (the newest lead registration when none runs, or nil)} — the board says
-    # "no lead: press Launch" from it.
+    # The board's lead now (lead-first boards): nil on a host with no lead type; else {type, label, launch_label,
+    # session (running, or nil), ended: {session, reason, at, old_name} (the newest lead registration when none runs,
+    # or nil)} — the board says "no lead: press Launch" from it. old_name = the name a launch of the type gets NOW
+    # (HostConfig#session_name) when the ended session's name is not one of those (registered under an earlier
+    # session_name: the board marks it old, never shows it as if it were today's lead), else nil.
     def lead_state(project, live:, grace:)
       lt = @config.lead_types.first or return nil
 
       r = running_lead(lt.key, project, live: live, grace: grace)
       last = !r && sessions_t.where(project_slug: project.to_s, type_key: lt.key).exclude(ended_at: nil)
                              .order(Sequel.desc(:ended_at), Sequel.desc(:id)).first
-      { type: lt.key, label: lt.label, session: r && r[:session],
-        ended: last ? { session: last[:session], reason: last[:end_reason], at: iso(last[:ended_at]) } : nil, }
+      ended = if last
+                { session: last[:session], reason: last[:end_reason], at: iso(last[:ended_at]),
+                  old_name: old_session_name(lt, project, last[:session]), }
+              end
+      { type: lt.key, label: lt.label, launch_label: lt.launch_label, session: r && r[:session], ended: ended }
+    end
+
+    # nil when `session` is a name a launch of `type` on `project` gets now (the base, or the base the host made unique
+    # with a suffix); else that base
+    def old_session_name(type, project, session)
+      base = @config.session_name(type, slug: project)
+      session.to_s.start_with?(base) ? nil : base
     end
 
     # The boards whose lead ENDED for any reason but the operator's stop (OPERATOR_STOP) — gone from the host's session

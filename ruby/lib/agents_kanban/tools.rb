@@ -92,9 +92,10 @@ module AgentsKanban
       l = ->(k) { cfg.label(k) }
       parts = ["Kanban: a board per project (kanban_board), columns #{cfg.labels.values.join(' → ')} " \
                "(a project's board may differ: kanban_board lists its columns)."]
-      parts << "Your tmux session (tmux display -p '#S') is your identity on the board: a session started for a " \
-               "project is registered (kanban_register when you were not launched through the board) and owns the " \
-               "cards it adopts; every card you create on your project's board is owned by your session " \
+      parts << "Your tmux session (tmux display -p '#S') is your identity on the board: a session the host launched " \
+               "for a project is registered already and owns the cards it adopts (a session started by hand is not " \
+               "registered and does not register itself: it works the board only when the operator asks); every card " \
+               "you create on your project's board is owned by your session " \
                "(kanban_create takes tmux_session, or your registered agent name as author) — one you create on ANOTHER " \
                "project's board is left to that project's sessions, and you cannot claim it; a card you start working " \
                "on that you do not own: kanban_claim first. Comments, the operator's moves and answers are typed into " \
@@ -168,7 +169,8 @@ module AgentsKanban
       nc = cfg.no_create_for_agents
       create_desc += " Agents cannot create in #{nc.map(&l).join(' or ')}." if nc.any?
       create_desc += " The card is OWNED by your session from the start (assignee = author, owner = tmux_session): " \
-                     "give tmux_session, or use your registered agent name as author (kanban_register) — an agent-made " \
+                     "give tmux_session, or use your registered agent name as author (your launch names it) — an " \
+                     "agent-made " \
                      "card is never ownerless on its own project's board; on ANOTHER project's board it is left unowned " \
                      "for that project's sessions (you are only created_by). No assignee field. A parent makes the card " \
                      "wait for it."
@@ -292,7 +294,9 @@ module AgentsKanban
                                        }, },
                          required: %w[id assignee tmux_session], }, },
         { name: "kanban_register",
-          description: "Register the tmux session you run in as an agent session of this board: type (one of " \
+          description: "Only when the operator explicitly asks you to: register the tmux session you run in as an " \
+                       "agent session of this board. Never on your own: a session started by hand works the board " \
+                       "only when the operator asks. type (one of " \
                        "#{host.agent_type_keys.join(', ')}), project, tmux_session. Refused beyond #{register_cap}the " \
                        "type's own caps — then stop and say so. A lead type is refused: a lead is started only by the " \
                        "operator's Launch. " \
@@ -576,8 +580,7 @@ module AgentsKanban
         # terminal session that called itself the lead would adopt the board's ownerless cards and run its team
         if @config.lead_type?(t)
           raise Denied, "#{t.key} is a lead type: a lead is started only by the operator's Launch, never registered by " \
-                        "hand — register as #{@config.agent_types.select { |x| x.under == t.key }.map(&:key).join(' / ')} " \
-                        "under the running lead, or do not register"
+                        "hand — do not register: a session started by hand works the board only when the operator asks"
         end
         @store.launch_check!(type: t.key, project: p[:slug], live: live, grace: @grace)
         lead = nil
@@ -822,7 +825,7 @@ module AgentsKanban
       return reg[:session] if reg
 
       raise Denied, "a card an agent creates is owned by its session: pass tmux_session (tmux display -p '#S'), " \
-                    "or author as the agent name of a registered session (kanban_register returns it) — " \
+                    "or author as the agent name of a registered session (the one your launch gave you) — " \
                     "#{a['author'].inspect} is neither"
     end
 
