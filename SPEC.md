@@ -22,7 +22,7 @@ code disagree, `ruby/` + `fixtures/` win and the fix starts there.
 | attachments | `root:` directory + `AttachmentPolicy.new(max_bytes:, types:)` from the host's settings | `api.attach` |
 | transport | — | the `api: KanbanApi` prop (react/src/api.ts): every call the board makes |
 | dictation | — | optional `dictation: DictationApi` prop of `<Board>` (react/src/lib/dictation.ts): `shortcut` (a `KeyCombo` or null, lib/shortcut.ts) + `transcribe(wav, prompt)` → `{text, words: [{word, start, end}]}` (16 kHz mono 16-bit WAV; `prompt` = the text confirmed so far), rejecting with the server's reason. The host's own route to its speech server (e.g. an OpenAI-compatible `/v1/audio/transcriptions`); absent = no mic anywhere |
-| live agent line | — | optional `api.sessionsLive(id)` → `{sessions: {name → SessionLive}}` (react/src/types.ts): what the card's agent sessions do now — `state`, and while working `phase` (thinking · tool · writing · subagents), `elapsed_s`, `tokens`, `tool`, the `card` a comment tool writes on, `subagents`; a field the host cannot read is null. The open card dialog polls it every 3 s (`useLivePoll`); absent = no live line |
+| live agent line | — | optional `api.sessionsLive(id)` → `{sessions: {name → SessionLive}}` (react/src/types.ts): what the card's agent sessions do now — `state`, and while working `phase` (thinking · tool · writing · subagents · background), `elapsed_s`, `tokens`, `tool`, the `card` a comment tool writes on, `subagents`, `background` (optional: the background work a `background` phase waits on, e.g. `1 monitor`); a field the host cannot read is null. The open card dialog polls it every 3 s (`useLivePoll`); absent = no live line |
 | board working glow | — | optional `api.boardLive(slug)` → `{sessions: {name → SessionLive}}` (`BoardLive`: no `present` — who is at work on a card is `boardPresence`), ONE answer for the whole board (at least each card's owner session): the board polls it every 3 s (`useLivePoll`); a card whose owner session is `working` with a `phase` glows blue (`.kb-card.agent-working`, token `--ak-working`), and every card with an owner session and an assignee carries a tag beside the assignee's face saying what that session does now (`.kb-owner-status`, `lib/agentLive.ts` `ownerStatus`: the phase / tool + elapsed · `needs you` · while idle what the card waits for — `waiting for your answer` / `waiting for CI` (`gate_hold`) / `blocked externally` / `waiting for you` — else `idle` / `finished` · `unknown` · `not running` when the session is missing from the answer; none for a card waiting for a worker, in a done / cancelled column, or while the poll fails); the answer is keyed on the slug (a board switch drops it at once) and dropped after 2 polls with no newer one ("live state unknown"); absent = no glow, no tag |
 | checkout (git) | `git:` on `CardLinks.build` (required, no default — the engine runs no git): `branches(project)` → Set of branch names (local + remote-tracking, remote dropped), `default_ref(project)` → the checked-out branch ("HEAD" when detached / unborn), `files_at(project, refs, files)` → `{file => first ref that has it}` (paths with `..` are never asked); a port that cannot read the checkout raises | — |
 | navigation | `card_path:` on `CardLinks::Refs`; `card_url: ->(slug, id) { absolute URL }` on Tools (required): every card a tool returns carries it as `url` | `navigate`, `projectHref`, `cardHref` props; `view` / `onView` own the URL |
@@ -694,10 +694,10 @@ Newest first; a heading names the `Schema::VERSION` step when the change brought
 
 - New optional `KanbanApi.boardLive(slug)` (§ 1): the board polls it every 3 s (`useLivePoll`, as the live agent line) —
   one call for the whole board, never one per card. A card whose OWNER session is `working` with a phase read off its
-  screen (thinking · tool · writing · subagents; `lib/agentLive.ts` `workingPhase`) gets `.kb-card.agent-working`: a
+  screen (thinking · tool · writing · subagents · background; `lib/agentLive.ts` `workingPhase`) gets `.kb-card.agent-working`: a
   blue frame + a soft pulsing glow in the new token `--ak-working` (light `#0a84ff`, dark `#409cff`; a host maps it in
   its `theme`), steady under `prefers-reduced-motion`, its aria-label "— its agent is thinking / running a tool /
-  writing / waiting on its subagents". No glow for a working session with no phase (no evidence), an idle / blocked / unknown
+  writing / waiting on its subagents / waiting on its background work". No glow for a working session with no phase (no evidence), an idle / blocked / unknown
   one, no owner, a card in a `done` / `cancelled` column (finished work), or before the first answer; a board switch drops the old
   board's answer at once (`useLivePoll` `key`), an answer with no newer one for 2 polls is dropped (`staleAfter`: the header
   shows `agents · live state unknown: no answer for 6 s`); a failed poll clears every glow (the last answer is never shown) and the
@@ -762,8 +762,8 @@ Newest first; a heading names the `Schema::VERSION` step when the change brought
 - Board JSON and the card body carry `agents` (agent name → registered type key). The React `Avatar` draws any
   identity that is not an email address (and not the operator, `me`) as a face (`AgentFace`, `lib/face.ts`): two eyes,
   their shape hashed from the name, on a disc coloured by the TYPE; a person keeps the initials. Moods (sleeping · idle ·
-  working · thinking · tool · writing · subagents · blocked) come from the host's `SessionLive` and are shown by the eyes
-  alone (blink, look up, squint, read along, glance, wide, closed); static under `prefers-reduced-motion`.
+  working · thinking · tool · writing · subagents · background · blocked) come from the host's `SessionLive` and are shown by the eyes
+  alone (blink, look up, squint, read along, glance, look down aside with slow blinks, wide, closed); static under `prefers-reduced-motion`.
 - Host config `face_roles` (required; null or `{role: [name globs]}`): a face whose name no session registered (a
   subagent's own name) wears the colour of the first role whose glob matches it (`faceType`: the registered type, else
   the role, else none). Config, never a name the code knows.
@@ -788,7 +788,7 @@ Newest first; a heading names the `Schema::VERSION` step when the change brought
   (`liveAnnounce`: "<session> is working / is waiting for you / is idle", in a visually hidden `aria-live` span), never
   the counter. Above the newest comment, the
   owner session's line (`li.kb-agent-live`): its name and what it does — `thinking… · 42s`,
-  `writing… · 1m 5s · ↓ 1.2k tokens` (the host names writing only from evidence, e.g. a rising token count), `running Bash`, `waiting for its subagents · 1 subagent` (no turn of its own), `writing a comment on this card` (a comment tool whose `card` is
+  `writing… · 1m 5s · ↓ 1.2k tokens` (the host names writing only from evidence, e.g. a rising token count), `running Bash`, `waiting for its subagents · 1 subagent` (no turn of its own), `waiting on 1 monitor` (phase `background`: its turn ended, work it started in the background — a watch, a shell — still runs and wakes it; the card face's tag `⏳ 1 monitor · 6m` — `elapsed_s` = how long it has waited, when the host read it, so presence's "wrote on the card this turn" rule skips it: a waiting session is not at work on a card), `writing a comment on this card` (a comment tool whose `card` is
   this card), `waiting for you (a dialog or question)` (blocked), `idle`, `state unknown`, `· N subagents`
   (`lib/agentLive.ts` `liveLine`); a failed poll shows `live status: <the reason>`. A pulsing dot (`.kb-live-dot.on`)
   marks the newest comment of each session whose turn runs now (`liveDots`: the author resolved to its session as the

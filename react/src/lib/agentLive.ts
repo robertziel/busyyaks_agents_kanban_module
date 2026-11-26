@@ -69,7 +69,12 @@ export function liveParts(l: SessionLive, cardId: number): LiveParts {
   if (l.phase === "thinking") what = "thinking…";
   else if (l.phase === "writing") what = "writing…";
   else if (l.phase === "subagents") what = "waiting for its subagents";
-  else if (l.phase === "tool") {
+  else if (l.phase === "background") {
+    // its turn ended; what it started in the background runs and wakes it — waiting on its own work, not idle
+    what = l.background ? `waiting on ${l.background}` : "waiting on its background work";
+    // the card face's tag has room for ~12em: the hourglass says waiting, the count what on (the tooltip says it whole)
+    brief = l.background ? `⏳ ${l.background}` : "⏳ waiting";
+  } else if (l.phase === "tool") {
     brief = l.tool ? l.tool.split("·").pop()!.trim() : "tool";
     if (l.tool && COMMENT_TOOL.test(l.tool))
       what =
@@ -147,11 +152,11 @@ export function liveAnnounce(l: LiveLine): string {
 }
 
 // The board's working glow (SPEC § 9): the phase a card's OWNER session is in, read off the host's boardLive answer —
-// only a working session with evidence of what it does (thinking · tool · writing · subagents) glows; idle, blocked,
+// only a working session with evidence of what it does (thinking · tool · writing · subagents · background) glows; idle, blocked,
 // unknown, a working session with no phase (no evidence), no owner, a card in a done / cancelled column (finished work:
 // its session works on something else), or a failed / unread poll (`sessions` null) → null.
 export type WorkingPhase = Exclude<SessionLive["phase"], null>;
-const WORKING: readonly WorkingPhase[] = ["thinking", "tool", "writing", "subagents"];
+const WORKING: readonly WorkingPhase[] = ["thinking", "tool", "writing", "subagents", "background"];
 export function workingPhase(
   card: Pick<Card, "owner_session">,
   column: ColumnTypeKey,
@@ -169,6 +174,7 @@ const WORKING_WORDS: Record<WorkingPhase, string> = {
   tool: "running a tool",
   writing: "writing",
   subagents: "waiting on its subagents",
+  background: "waiting on its background work",
 };
 export function workingWords(phase: WorkingPhase): string {
   return WORKING_WORDS[phase];

@@ -8,6 +8,10 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Added
 
+- **A session waiting on its own background work is not idle**: `SessionLive.phase` `background` (+ optional
+  `background`, e.g. `1 monitor`, `3 shells`) — its turn ended, but what it started in the background (a watch on its
+  tests, a shell) still runs and wakes it. The card face's tag says `⏳ 1 monitor · 6m` (how long it has waited, when
+  the host reads it), the live line `waiting on 1 monitor · 6m 37s`, the card glows as working, and the face wears its own mood (looking down aside, slow blinks).
 - **What a card's agent is doing, on the card face**: beside the assignee's face, a small tag says what its owner
   session does now — its phase or tool and for how long, `needs you` when it is stopped on a dialog, and while it is
   idle what the card waits for (`waiting for your answer`, `waiting for CI`, `blocked externally`, `waiting for you`),

@@ -818,7 +818,7 @@
     var(--ak-shadow-card),
     inset 0 0 0 1.5px var(--ak-vivid-red);
 }
-/* its owner agent session works now (thinking · tool · writing · subagents; lib/agentLive.ts workingPhase): a blue frame
+/* its owner agent session works now (thinking · tool · writing · subagents · background; lib/agentLive.ts workingPhase): a blue frame
    + a soft pulsing glow, the red needs-you family; a steady glow under prefers-reduced-motion. Never with needs-you. */
 .ak-root .kb-card.agent-working {
   border-left-color: var(--ak-working);
@@ -4912,6 +4912,10 @@
 .ak-face.m-subagents {
   --yf-x: -10px; /* looking aside, at them */
 }
+.ak-face.m-background {
+  --yf-x: 8px; /* looking down and aside, at what it left running */
+  --yf-y: 6px;
+}
 .ak-face.m-blocked {
   --yf-sx: 1.32; /* wide open, at you */
   --yf-sy: 1.32;
@@ -4969,6 +4973,10 @@
 /* waiting for its subagents: looking from one to the other */
 .ak-face.m-subagents .yf-look {
   animation: yf-watch 3.6s var(--yf-d, 0s) infinite;
+}
+/* waiting on its background work: slow, patient blinks, still otherwise */
+.ak-face.m-background .yf-eye {
+  animation-duration: 9s;
 }
 /* waiting for you: a small double hop, the wide eyes swelling a little */
 .ak-face.m-blocked .yf-eye {

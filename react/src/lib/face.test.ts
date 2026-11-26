@@ -64,6 +64,7 @@ describe("moodOf", () => {
     expect(m("working", "tool")).toBe("tool");
     expect(m("working", "writing")).toBe("writing");
     expect(m("working", "subagents")).toBe("subagents");
+    expect(m("working", "background")).toBe("background");
     expect(m("working")).toBe("working");
     expect(m("working", "a phase this version does not know")).toBe("working");
   });

@@ -2131,7 +2131,9 @@ module AgentsKanban
     # registration of this project whose live state is working or blocked counts, on a card of this project when:
     #   tool     — the tool it runs now names the card (live `card`);
     #   activity — its agent name wrote on the card (a comment, a move, an edit…) since its current turn began (now −
-    #              elapsed_s; no elapsed reading → this rule says nothing, never a guessed window);
+    #              elapsed_s; no elapsed reading → this rule says nothing, never a guessed window). Phase `background` has
+    #              no turn running: its elapsed_s is how long it has WAITED, so this rule skips it —
+    #              a session waiting on its own background work is not at work on a card;
     #   blocked  — stopped on a dialog / question (state blocked): the card it last wrote on since it registered — the
     #              one it waits on (the agent the operator most needs to see).
     # → {card id => [{session, agent, type, why}]} (tool before activity); a session that stops working, or ends, is gone
@@ -2157,7 +2159,7 @@ module AgentsKanban
                            .reverse(:created_at, :id).get(:card_id)
           out[last] << who.merge(why: "blocked") if last && last != tool_card
         end
-        next unless l[:elapsed_s].is_a?(Integer)
+        next unless l[:elapsed_s].is_a?(Integer) && l[:phase].to_s != "background"
 
         activity_t.where(author: r[:agent_name], card_id: ids.to_a).where { created_at >= now - l[:elapsed_s] }
                   .distinct.select_map(:card_id).each do |cid|
