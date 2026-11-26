@@ -4,6 +4,17 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Dictate a new card**: the "+ Add a card" box has the dictation mic beside Add (on a host that injects `dictation`).
+  Once the recording stops, the card is created at once — its title cut from the words as a typed text is, its
+  description the whole spoken text — and its dialog opens. A failed transcription creates nothing and says why.
+- **Dictate a card's title and description**: the open card's title has its own mic (saved once the recording stops) and
+  the description editor has the same mic as the comment box (Save waits for the final words). Esc while dictating stops
+  the dictation instead of closing the editor or the card.
+
 ## [0.2.0] - 2026-11-26
 
 Together with [busyyaks](https://github.com/robertziel/busyyaks) 0.2.0 (the two always carry the same version).

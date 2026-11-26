@@ -376,6 +376,7 @@ describe("openMic", () => {
   it("reads the level from the newest samples, and a released microphone reads 0", async () => {
     const stop = vi.fn();
     let heard = 0.25;
+    let closes = 0;
     const node = () => ({ connect: vi.fn(), disconnect: vi.fn() });
     const meter = {
       ...node(),
@@ -394,7 +395,10 @@ describe("openMic", () => {
         createScriptProcessor = () => ({ ...node(), onaudioprocess: null });
         createAnalyser = () => meter;
         resume = () => Promise.resolve();
-        close = () => Promise.resolve();
+        close = () => {
+          closes++;
+          return Promise.resolve();
+        };
       },
     );
     const mic = await openMic();
@@ -407,6 +411,9 @@ describe("openMic", () => {
     mic.release();
     expect(mic.level()).toBe(0);
     expect(stop).toHaveBeenCalledTimes(1);
+    mic.release(); // card 662: stop() then cancel() — the second release does nothing (no second AudioContext close)
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(closes).toBe(1);
     vi.unstubAllGlobals();
   });
 

@@ -40,7 +40,7 @@ import {
   type Order,
 } from "../lib/board";
 import { edgeBands, edgeScroller, glideTo, nearestStart, stepRoom, stepStart, type EdgeBands } from "../lib/autoscroll";
-import { approvedQueueText, cardFaceClass, carriedOnText, splitCard } from "../lib/card";
+import { approvedQueueText, cardFaceClass, carriedOnText, dictatedCard, splitCard } from "../lib/card";
 import type { DictationApi } from "../lib/dictation";
 import { comboLabel, isMac, type KeyCombo } from "../lib/shortcut";
 import { refreshOrThrow, useFetch } from "../lib/fetch";
@@ -59,6 +59,7 @@ import type {
   HostConfig,
   BoardData,
   Card,
+  CardData,
   CardFull,
   ColumnKey,
   SessionLinks,
@@ -71,6 +72,8 @@ import { WorkflowMini } from "./WorkflowMini";
 import { CardDialog, PANELS, type Panel } from "./CardDialog";
 import { KbIcon } from "./KbIcon";
 import { Select } from "./Select";
+import { MicButton } from "./MicButton";
+import { useDictation } from "./useDictation";
 
 const LIVE_POLL_MS = 3000; // the working glow's boardLive poll
 
@@ -1055,6 +1058,8 @@ export function Board({
                       setOpen={(o) => setAddCol(o ? col.column : null)}
                       onAdded={() => void act(null, async () => {})}
                       onError={setErr}
+                      dictation={dictation ?? null}
+                      onOpen={(id) => openCard(id)}
                     />
                   )}
                 </section>
@@ -1489,27 +1494,66 @@ type QuickAddProps = {
   setOpen: (o: boolean) => void;
   onAdded: () => void;
   onError: (m: string) => void;
+  dictation: DictationApi | null; // the host's speech to text: a mic beside Add (null = none)
+  onOpen: (id: number) => void; // open a card's dialog (a dictated card opens once it is created)
 };
 
-function QuickAdd({ api, slug, column, colLabel, open, setOpen, onAdded, onError }: QuickAddProps) {
+// The quick-add at the bottom of a list. With the host's dictation (card 662) a mic sits beside Add: the words land in the
+// box while you speak, and once the recording stops the card is created at once — its title cut as typed text is, its
+// description the whole spoken text (lib/card.ts dictatedCard) — and its dialog opens. A failed transcription keeps the
+// words heard so far in the box and creates nothing.
+function QuickAdd({ api, slug, column, colLabel, open, setOpen, onAdded, onError, dictation, onOpen }: QuickAddProps) {
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
-  // never rejects: a failed create goes to onError (the board's error flash)
-  const submit = async (e: FormEvent): Promise<void> => {
-    e.preventDefault();
-    const card = splitCard(title);
-    if (!card.title) return;
+  const add = async (card: { title: string; description: string }): Promise<CardData | null> => {
+    if (!card.title) return null;
     setBusy(true);
     try {
-      await api.createCard(slug, { title: card.title, description: card.description, column });
+      const made = await api.createCard(slug, { title: card.title, description: card.description, column });
       setTitle("");
+      voice.clearError();
       onAdded();
+      return made;
     } catch (err) {
       onError(errMsg(err));
+      return null;
     } finally {
       setBusy(false);
     }
   };
+  const voice = useDictation({
+    dictation,
+    text: title,
+    setText: setTitle,
+    onDone: async (text, current) => {
+      const made = await add(dictatedCard(text));
+      if (made && current()) {
+        setOpen(false);
+        onOpen(made.card.id);
+      }
+    },
+  });
+  const mic = voice.phase;
+  const micErr = voice.error;
+  // the box closed another way (another list's "+ Add a card", the n key, a list menu's Add): the mic stops with it
+  const abortRef = useRef(voice.abort);
+  abortRef.current = voice.abort;
+  useEffect(() => {
+    if (!open) abortRef.current();
+  }, [open]);
+  // never rejects: a failed create goes to onError (the board's error flash)
+  const submit = async (e: FormEvent): Promise<void> => {
+    e.preventDefault();
+    if (mic !== "idle") return; // the text is not final while dictating
+    await add(splitCard(title));
+  };
+  const toggleMic = () => (busy ? Promise.resolve() : voice.toggle());
+  const cancel = () => {
+    voice.abort();
+    voice.clearError();
+    setOpen(false);
+  };
+  const dictating = mic !== "idle";
   if (!open)
     return (
       <div className="kb-add">
@@ -1524,13 +1568,17 @@ function QuickAdd({ api, slug, column, colLabel, open, setOpen, onAdded, onError
         autoFocus
         rows={3}
         required
+        readOnly={dictating}
         className="kb-add-text"
         placeholder="Card title — paste a whole task; the first line becomes the title"
         aria-label={`New card title in ${colLabel}`}
         value={title}
-        onChange={(e) => setTitle(e.target.value)}
+        onChange={(e) => {
+          setTitle(e.target.value);
+          voice.clearError();
+        }}
         onKeyDown={(e) => {
-          if (e.key === "Escape") setOpen(false);
+          if (e.key === "Escape") cancel();
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             void submit(e);
@@ -1539,19 +1587,35 @@ function QuickAdd({ api, slug, column, colLabel, open, setOpen, onAdded, onError
       />
       {(() => {
         const c = splitCard(title);
-        return c.description ? (
+        return c.description && !dictating ? (
           <p className="kb-add-split" aria-live="polite">
             <b>{c.title}</b> <span>+ description · {c.description.length} chars</span>
           </p>
         ) : null;
       })()}
+      {micErr && (
+        <p className="kb-add-err" role="alert">
+          {micErr}
+        </p>
+      )}
       <div className="kb-add-row">
-        <button className="btn primary small" disabled={busy}>
+        <button className="btn primary small" disabled={busy || dictating}>
           Add
         </button>
-        <button type="button" className="btn small" onClick={() => setOpen(false)}>
+        <button type="button" className="btn small" onClick={cancel}>
           Cancel
         </button>
+        {dictation && (
+          <span className="kb-add-mic">
+            <MicButton
+              phase={mic}
+              mic={voice.capture}
+              warn={voice.warn}
+              keyHint={null}
+              onToggle={() => void toggleMic()}
+            />
+          </span>
+        )}
       </div>
     </form>
   );

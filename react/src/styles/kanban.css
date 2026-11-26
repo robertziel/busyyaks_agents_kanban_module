@@ -1027,7 +1027,20 @@
 }
 .ak-root .kb-add-row {
   display: flex;
+  align-items: center;
   gap: 6px;
+  width: 100%;
+}
+/* card 662: the quick-add's mic, at the row's trailing edge: the recording pill grows leftwards from it */
+.ak-root .kb-add-mic {
+  margin-left: auto;
+  display: flex;
+  min-width: 0;
+}
+.ak-root .kb-add-err {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ak-bad);
 }
 .ak-root
   :is(.kb-add, .ak-root .kb-detail, .ak-root .kb-filter)
@@ -1122,6 +1135,21 @@
   field-sizing: content;
   box-shadow: none;
   background: transparent;
+}
+/* card 662: the title's mic at its trailing edge: the recording pill grows leftwards over the row's gap */
+.ak-root .kb-ttl-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ak-root .kb-ttl-row > textarea.kb-ttl {
+  flex: 1;
+  min-width: 0;
+}
+.ak-root .kb-ttl-err {
+  margin: 2px 8px 0;
+  font-size: 12px;
+  color: var(--ak-bad);
 }
 .ak-root .kb-detail textarea.kb-ttl:focus {
   box-shadow: inset 0 0 0 1.5px rgba(var(--ak-accent-rgb), 0.6);

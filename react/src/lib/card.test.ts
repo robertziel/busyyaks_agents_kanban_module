@@ -6,6 +6,7 @@ import {
   cardFaceClass,
   carriedOnText,
   jumpNeedsDetails,
+  dictatedCard,
   splitCard,
   TITLE_MAX,
 } from "./card";
@@ -125,5 +126,26 @@ describe("approvedQueueText", () => {
     );
     expect(approvedQueueText({ column: "m", position: 1, of: 1, ahead: [] })).toBeNull();
     expect(approvedQueueText(null)).toBeNull();
+  });
+});
+
+// card 662: a dictated quick-add is created at once, the description holding every word heard
+describe("dictatedCard", () => {
+  it("repeats a short text as the description", () => {
+    expect(dictatedCard("  Fix the login button \n")).toEqual({
+      title: "Fix the login button",
+      description: "Fix the login button",
+    });
+  });
+  it("cuts a long text's title as splitCard does and keeps the whole text below", () => {
+    const t =
+      "The board header wraps on phones. It should stay on one line and scroll sideways like the columns already do on every narrow screen we test.";
+    expect(dictatedCard(t)).toEqual({ title: "The board header wraps on phones.", description: t });
+  });
+  it("keeps every line of a multi-line text in the description", () => {
+    expect(dictatedCard("Title\r\nmore words")).toEqual({ title: "Title", description: "Title\nmore words" });
+  });
+  it("gives nothing for a blank text", () => {
+    expect(dictatedCard(" \n ")).toEqual({ title: "", description: "" });
   });
 });

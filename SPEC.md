@@ -818,6 +818,20 @@ Newest first; a heading names the `Schema::VERSION` step when the change brought
   records; a failed pass shows the reason and retries, a failed final pass is shown and keeps the text confirmed so far.
   `KanbanHostValue.dictation` (null when absent; a host that builds the value itself adds it), `MarkdownEditor`
   `dictate` / `dictateToggle` (a `DictateHandle {toggle, hold}`), `openMic`, `startDictation`, `composeDictation`, `pcmToWav`.
+- The quick-add ("+ Add a card") gets the same mic beside Add (card 662): the words land in its box while you speak
+  (read-only, Add off), and once the recording stops the card is created at once — title = `splitCard`'s, description =
+  the whole spoken text (`lib/card.ts` `dictatedCard`) — and its dialog opens (`onView({card})`). A failed final pass
+  creates nothing, keeps the words confirmed so far in the box and says why; a recording that heard nothing says so.
+  Text typed before the mic opened stays in front of the words; Cancel, Escape or the box closing another way (another
+  list's add, `n`) lets the recording and a final pass still answering go — nothing is created (`useDictation`, the
+  plain-field dictation shared with the title).
+- The card dialog's title and description dictate too (card 662): the title has its own mic (`Dictate title`; words after
+  its text, read-only while it records, a blur saves nothing until the recording stops, then the title is saved), the
+  description editor is a `MarkdownEditor` with `dictate` (its Save waits; an editor opened with `autoFocus` starts with
+  the caret at the end of its text, so the words go after the description, never in front of it). In any editor Esc while it records stops the
+  dictation instead of cancelling the editor; Esc / the backdrop stop whichever field dictates instead of closing the
+  card (one slot per field: a field going idle frees only its own). One microphone at a time: a field that starts
+  dictating stops the one already recording, whose words land as usual. The host's shortcut still dictates into the comment box, or into the description while its text has the focus.
 - The control (`components/MicButton.tsx`, phases `idle starting rec stt done` on `data-phase`): while it listens the
   mic is a pill — a stop square, 7 level bars and the elapsed time — and the formatting tools and the paperclip are
   disabled and step aside (the text is read-only). The bars and the pill's halo show the REAL microphone level:

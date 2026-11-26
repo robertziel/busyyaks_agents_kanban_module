@@ -31,9 +31,10 @@ type Props = {
   warn?: boolean; // rec only: a window could not be transcribed (it is retried) — the pill takes the warning tone
   keyHint: string | null;
   onToggle: () => void;
+  label?: string; // what it dictates into, when the button sits beside another field's mic (card 662: "title")
 };
 
-export function MicButton({ phase, mic, warn, keyHint, onToggle }: Props) {
+export function MicButton({ phase, mic, warn, keyHint, onToggle, label }: Props) {
   const btn = useRef<HTMLButtonElement>(null);
   const bars = useRef<HTMLSpanElement>(null);
   const time = useRef<HTMLSpanElement>(null);
@@ -74,15 +75,16 @@ export function MicButton({ phase, mic, warn, keyHint, onToggle }: Props) {
   const rec = phase === "rec";
   const busy = phase === "starting" || phase === "stt";
   const hint = keyHint ? ` (${keyHint})` : "";
+  const what = label ? ` ${label}` : "";
   return (
     <button
       ref={btn}
       type="button"
       className={`mde-tool t-mic${rec ? " on" : ""}`}
       data-phase={phase}
-      title={rec ? "Stop dictation" : phase === "stt" ? "Transcribing…" : `Dictate${hint}`}
+      title={rec ? "Stop dictation" : phase === "stt" ? "Transcribing…" : `Dictate${what}${hint}`}
       data-warn={rec && warn ? "" : undefined}
-      aria-label={rec ? "Stop dictation" : phase === "stt" ? "Transcribing" : "Dictate"}
+      aria-label={rec ? "Stop dictation" : phase === "stt" ? "Transcribing" : `Dictate${what}`}
       aria-pressed={rec}
       aria-disabled={busy || undefined}
       onMouseDown={(e) => e.preventDefault()}

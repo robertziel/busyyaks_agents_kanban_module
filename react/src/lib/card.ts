@@ -23,6 +23,13 @@ export function splitCard(text: string): {
   return { title: cut(t), description: t };
 }
 
+// card 662: a quick-add filled by dictation becomes a card at once — its title as splitCard cuts it, its description the
+// whole spoken text (also when the title already holds all of it), so the opened card shows every word heard
+export function dictatedCard(text: string): { title: string; description: string } {
+  const { title } = splitCard(text);
+  return { title, description: title ? text.replace(/\r\n?/g, "\n").trim() : "" };
+}
+
 function cut(s: string): string {
   const sentence = s.match(/^(.{12,}?[.!?])(\s|$)/)?.[1] ?? s.match(/^(.{12,}?)\s[—–-]\s/)?.[1];
   if (sentence && sentence.length <= SHORT) return sentence.trim();
