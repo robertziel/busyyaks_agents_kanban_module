@@ -571,3 +571,349 @@ describe("comment dictation", () => {
     expect(clock(-5)).toBe("0:00");
   });
 });
+
+// card 662: the quick-add's mic — the spoken words become a card at once (description = the whole text) and it opens
+describe("quick-add dictation", () => {
+  function renderQuickAdd(dictation?: DictationApi, extra: Partial<KanbanApi> = {}) {
+    const created: { title: string; description?: string; column: string }[] = [];
+    const onView = vi.fn();
+    const api = fakeApi({
+      createCard: (_slug, body) => {
+        created.push(body);
+        return Promise.resolve({ card: { ...theCard, id: 42 }, activity: [] } as unknown as CardData);
+      },
+      ...extra,
+    });
+    render(
+      <Board
+        api={api}
+        me="me"
+        slug="g/r"
+        view={{ card: null, panel: null, archived: false }}
+        onView={onView}
+        dictation={dictation}
+      />,
+    );
+    return { created, onView };
+  }
+  const openAdd = async () => {
+    fireEvent.click((await screen.findAllByText("+ Add a card", undefined, SLOW))[1]!);
+    return screen.getByRole("textbox", { name: /New card title/ });
+  };
+
+  it("no DictationApi → no mic beside Add", async () => {
+    renderQuickAdd();
+    await openAdd();
+    expect(screen.queryByRole("button", { name: "Dictate" })).toBeNull();
+  });
+
+  it("Dictate → Stop creates the card with the words as title and description, then opens it", async () => {
+    mic.open = () => Promise.resolve(speakingMic());
+    const transcribe = vi.fn(() =>
+      Promise.resolve({
+        text: " Fix the login button.",
+        words: [w(" Fix", 0, 0.2), w(" the", 0.2, 0.3), w(" login", 0.3, 0.6), w(" button.", 0.6, 0.9)],
+      }),
+    );
+    const { created, onView } = renderQuickAdd({ transcribe, shortcut: null });
+    const box = await openAdd();
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    await screen.findByRole("button", { name: "Stop dictation" }, SLOW);
+    expect(box).toHaveAttribute("readonly");
+    expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Stop dictation" }));
+    await waitFor(() => expect(created).toHaveLength(1), SLOW);
+    expect(created[0]).toEqual({
+      title: "Fix the login button.",
+      description: "Fix the login button.",
+      column: created[0]!.column,
+    });
+    await waitFor(() => expect(onView).toHaveBeenCalledWith({ card: 42, panel: null }), SLOW);
+  });
+
+  it("a failed transcription creates nothing and says why; nothing heard creates nothing", async () => {
+    mic.open = () => Promise.resolve(speakingMic());
+    const transcribe = vi.fn<DictationApi["transcribe"]>(() =>
+      Promise.reject(new Error("502 · speech server unreachable")),
+    );
+    const { created } = renderQuickAdd({ transcribe, shortcut: null });
+    await openAdd();
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop dictation" }, SLOW));
+    expect(await screen.findByRole("alert", undefined, SLOW)).toHaveTextContent(
+      "Couldn't transcribe: 502 · speech server unreachable",
+    );
+    transcribe.mockImplementation(() => Promise.resolve({ text: "", words: [] }));
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop dictation" }, SLOW));
+    expect(await screen.findByText("Nothing heard.", undefined, SLOW)).toBeInTheDocument();
+    expect(created).toHaveLength(0);
+  });
+
+  it("text typed before the mic stays in front of the spoken words, in the box and the created card", async () => {
+    mic.open = () => Promise.resolve(speakingMic());
+    const transcribe = vi.fn(() =>
+      Promise.resolve({ text: " login button", words: [w(" login", 0, 0.3), w(" button", 0.3, 0.6)] }),
+    );
+    const { created } = renderQuickAdd({ transcribe, shortcut: null });
+    const box = await openAdd();
+    fireEvent.change(box, { target: { value: "Fix the" } });
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop dictation" }, SLOW));
+    await waitFor(() => expect(created).toHaveLength(1), SLOW);
+    expect(created[0]).toMatchObject({ title: "Fix the login button", description: "Fix the login button" });
+  });
+
+  it("Cancel while the last words are transcribed creates nothing and opens nothing", async () => {
+    mic.open = () => Promise.resolve(speakingMic());
+    let answer: (t: { text: string; words: ReturnType<typeof w>[] }) => void = () => {};
+    const transcribe = vi.fn<DictationApi["transcribe"]>(() => new Promise((r) => (answer = r)));
+    const { created, onView } = renderQuickAdd({ transcribe, shortcut: null });
+    await openAdd();
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop dictation" }, SLOW));
+    await waitFor(() => expect(transcribe).toHaveBeenCalled(), SLOW);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await act(async () => {
+      answer({ text: " Too late.", words: [w(" Too", 0, 0.3), w(" late.", 0.3, 0.6)] });
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(created).toHaveLength(0);
+    expect(onView).not.toHaveBeenCalled();
+  });
+
+  it("closing the box another way (another list's + Add a card) stops the recording", async () => {
+    const released = vi.fn();
+    mic.open = () => Promise.resolve({ ...speakingMic(), release: released });
+    const { created } = renderQuickAdd({ transcribe: () => Promise.resolve({ text: "", words: [] }), shortcut: null });
+    await openAdd();
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    await screen.findByRole("button", { name: "Stop dictation" }, SLOW);
+    fireEvent.click(screen.getAllByText("+ Add a card")[0]!);
+    await waitFor(() => expect(released).toHaveBeenCalled(), SLOW);
+    expect(screen.queryByRole("button", { name: "Stop dictation" })).toBeNull();
+    expect(created).toHaveLength(0);
+  });
+
+  it("Enter while it records adds nothing (the words are not final yet)", async () => {
+    mic.open = () => Promise.resolve(speakingMic());
+    const { created } = renderQuickAdd({ transcribe: () => Promise.resolve({ text: "", words: [] }), shortcut: null });
+    const box = await openAdd();
+    fireEvent.change(box, { target: { value: "Typed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    await screen.findByRole("button", { name: "Stop dictation" }, SLOW);
+    fireEvent.keyDown(box, { key: "Enter" });
+    await act(async () => new Promise((r) => setTimeout(r, 30)));
+    expect(created).toHaveLength(0);
+  });
+
+  it("a refused microphone says why and the mic is ready again; typing clears the message", async () => {
+    mic.open = () => Promise.reject(Object.assign(new Error("Permission denied"), { name: "NotAllowedError" }));
+    renderQuickAdd({ transcribe: () => Promise.resolve({ text: "", words: [] }), shortcut: null });
+    const box = await openAdd();
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Microphone blocked — allow it for this site");
+    expect(screen.getByRole("button", { name: "Dictate" })).toHaveAttribute("data-phase", "idle");
+    fireEvent.change(box, { target: { value: "typed instead" } });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+// card 662: the open card's title and description dictate too
+describe("title and description dictation", () => {
+  const words = { text: " Ship it today.", words: [w(" Ship", 0.0, 0.3), w(" it", 0.3, 0.6), w(" today.", 0.6, 0.9)] };
+
+  it("the title's mic: the words go after the title, the box is read-only while it records, Stop saves it", async () => {
+    mic.open = () => Promise.resolve(speakingMic());
+    const updates: unknown[] = [];
+    renderBoardIn(
+      { transcribe: () => Promise.resolve(words), shortcut: null },
+      {
+        update: (_id, body) => {
+          updates.push(body);
+          return Promise.resolve({} as CardData);
+        },
+      },
+    );
+    const title = await screen.findByRole("textbox", { name: "Title" }, SLOW);
+    fireEvent.click(screen.getByRole("button", { name: "Dictate title" }));
+    await screen.findByRole("button", { name: "Stop dictation" }, SLOW);
+    expect(title).toHaveAttribute("readonly");
+    // the words not final yet are already in the box: a blur now would save them without the guard
+    await waitFor(() => expect(title).toHaveValue("Talk Ship it today."), { timeout: 6000 });
+    fireEvent.blur(title); // a blur while it records saves nothing: the words are not final
+    await act(async () => new Promise((r) => setTimeout(r, 30)));
+    expect(updates).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Stop dictation" }));
+    await waitFor(() => expect(updates).toEqual([{ title: "Talk Ship it today." }]), SLOW);
+    expect(title).not.toHaveAttribute("readonly");
+  });
+
+  it("Esc while the title records stops it and keeps the card open", async () => {
+    mic.open = () => Promise.resolve(speakingMic());
+    const updates: unknown[] = [];
+    const { container } = renderBoardIn(
+      { transcribe: () => Promise.resolve(words), shortcut: null },
+      {
+        update: (_id, body) => {
+          updates.push(body);
+          return Promise.resolve({} as CardData);
+        },
+      },
+    );
+    await screen.findByRole("textbox", { name: "Title" }, SLOW);
+    fireEvent.click(screen.getByRole("button", { name: "Dictate title" }));
+    await screen.findByRole("button", { name: "Stop dictation" }, SLOW);
+    const dialog = container.querySelector("dialog")!;
+    fireEvent(dialog, new Event("cancel", { cancelable: true }));
+    await waitFor(() => expect(updates).toEqual([{ title: "Talk Ship it today." }]), SLOW);
+    expect(dialog).toHaveAttribute("open");
+  });
+
+  it("the description editor's mic: words at the caret, Save waits, Esc stops it without closing the editor", async () => {
+    mic.open = () => Promise.resolve(speakingMic());
+    const updates: unknown[] = [];
+    renderBoardIn(
+      { transcribe: () => Promise.resolve(words), shortcut: null },
+      {
+        update: (_id, body) => {
+          updates.push(body);
+          return Promise.resolve({} as CardData);
+        },
+      },
+    );
+    fireEvent.click(await screen.findByText("Add a more detailed description…", undefined, SLOW));
+    const box = screen.getByRole("textbox", { name: "Description" });
+    const editor = box.closest(".mde")!;
+    fireEvent.click(within(editor as HTMLElement).getByRole("button", { name: "Dictate" }));
+    await within(editor as HTMLElement).findByRole("button", { name: "Stop dictation" }, SLOW);
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    fireEvent.keyDown(box, { key: "Escape" });
+    await waitFor(() => expect(box).toHaveValue("Ship it today."), SLOW);
+    expect(screen.getByRole("textbox", { name: "Description" })).toBe(box); // the editor stayed open
+    await waitFor(() => expect(save).not.toBeDisabled(), SLOW);
+    fireEvent.click(save);
+    await waitFor(() => expect(updates).toEqual([{ description: "Ship it today." }]), SLOW);
+  });
+
+  it("a live re-render while the comment records keeps Esc stopping it (the card stays open)", async () => {
+    mic.open = () => Promise.resolve(speakingMic());
+    const api = fakeApi();
+    const dictation = { transcribe: () => Promise.resolve(words), shortcut: null };
+    const onView = vi.fn();
+    const board = (archived: boolean) => (
+      <Board
+        api={api}
+        me="me"
+        slug="g/r"
+        view={{ card: 7, panel: null, archived }}
+        onView={onView}
+        dictation={dictation}
+      />
+    );
+    const view = render(board(false));
+    const box = await screen.findByRole("textbox", { name: "Comment" }, SLOW);
+    fireEvent.click(within(box.closest(".mde") as HTMLElement).getByRole("button", { name: "Dictate" }));
+    await screen.findByRole("button", { name: "Stop dictation" }, SLOW);
+    view.rerender(board(true)); // the Board re-renders the open dialog (a live poll does the same)
+    view.rerender(board(false));
+    const dialog = view.baseElement.querySelector("dialog")!;
+    fireEvent(dialog, new Event("cancel", { cancelable: true }));
+    await waitFor(() => expect(box).toHaveValue("Ship it today."), SLOW);
+    expect(onView).not.toHaveBeenCalledWith(expect.objectContaining({ card: null }));
+  });
+
+  it("one microphone at a time: the description's mic stops the title's recording first", async () => {
+    let opened = 0;
+    mic.open = () => {
+      opened++;
+      return Promise.resolve(speakingMic());
+    };
+    const updates: unknown[] = [];
+    renderBoardIn(
+      { transcribe: () => Promise.resolve(words), shortcut: null },
+      {
+        update: (_id, body) => {
+          updates.push(body);
+          return Promise.resolve({} as CardData);
+        },
+      },
+    );
+    await screen.findByRole("textbox", { name: "Title" }, SLOW);
+    fireEvent.click(screen.getByRole("button", { name: "Dictate title" }));
+    await screen.findByRole("button", { name: "Stop dictation" }, SLOW);
+    fireEvent.click(screen.getByText("Add a more detailed description…"));
+    const editor = screen.getByRole("textbox", { name: "Description" }).closest(".mde") as HTMLElement;
+    fireEvent.click(within(editor).getByRole("button", { name: "Dictate" }));
+    await waitFor(() => expect(updates).toEqual([{ title: "Talk Ship it today." }]), SLOW); // the title stopped + saved
+    await within(editor).findByRole("button", { name: "Stop dictation" }, SLOW);
+    expect(screen.getAllByRole("button", { name: "Stop dictation" })).toHaveLength(1);
+    expect(opened).toBe(2);
+  });
+
+  it("dictating into an existing description puts the words after it (the editor opens with the caret at the end)", async () => {
+    mic.open = () => Promise.resolve(speakingMic());
+    const withDesc: CardData = {
+      card: {
+        ...theCard,
+        attachments: [],
+        description: "Old text.",
+        description_html: "<p>Old text.</p>",
+        checklists: [],
+      },
+      activity: [],
+      pings: [],
+      links: [],
+    };
+    renderBoardIn(
+      { transcribe: () => Promise.resolve(words), shortcut: null },
+      { card: () => Promise.resolve(withDesc) },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }, SLOW));
+    const box = screen.getByRole("textbox", { name: "Description" });
+    const editor = box.closest(".mde") as HTMLElement;
+    fireEvent.click(within(editor).getByRole("button", { name: "Dictate" }));
+    fireEvent.click(await within(editor).findByRole("button", { name: "Stop dictation" }, SLOW));
+    await waitFor(() => expect(box).toHaveValue("Old text. Ship it today."), SLOW);
+  });
+});
+
+// card 662: a Cancel while the dictated card is still being created: the card exists, its dialog does not open
+describe("quick-add dictation, a Cancel during the create", () => {
+  it("the card is made, its dialog does not open", async () => {
+    mic.open = () => Promise.resolve(speakingMic());
+    let made: (d: CardData) => void = () => {};
+    const created: unknown[] = [];
+    const onView = vi.fn();
+    const api = fakeApi({
+      createCard: (_slug, body) => {
+        created.push(body);
+        return new Promise<CardData>((r) => (made = r));
+      },
+    });
+    render(
+      <Board
+        api={api}
+        me="me"
+        slug="g/r"
+        view={{ card: null, panel: null, archived: false }}
+        onView={onView}
+        dictation={{
+          transcribe: () => Promise.resolve({ text: " Fix it.", words: [w(" Fix", 0, 0.3), w(" it.", 0.3, 0.6)] }),
+          shortcut: null,
+        }}
+      />,
+    );
+    fireEvent.click((await screen.findAllByText("+ Add a card", undefined, SLOW))[1]!);
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop dictation" }, SLOW));
+    await waitFor(() => expect(created).toHaveLength(1), SLOW);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await act(async () => {
+      made({ card: { ...theCard, id: 43 }, activity: [] } as unknown as CardData);
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(onView).not.toHaveBeenCalledWith(expect.objectContaining({ card: 43 }));
+  });
+});

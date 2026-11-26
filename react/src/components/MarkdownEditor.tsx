@@ -296,6 +296,13 @@ export function MarkdownEditor({
   useEffect(() => () => release.current?.(), []);
   const holdRef = useRef(hold);
   holdRef.current = hold;
+  // an editor opened on a text (the description's Edit) starts with the caret at its end: typing or dictating goes after
+  // what is there, never in front of it (card 662)
+  const focusAtOpen = useRef(autoFocus); // read once, when the editor opens
+  useLayoutEffect(() => {
+    const el = ta.current;
+    if (focusAtOpen.current && el) el.setSelectionRange(el.value.length, el.value.length);
+  }, []);
   // a layout effect: the handle exists as soon as the box is on screen, so a shortcut pressed right away is not lost
   useLayoutEffect(() => {
     if (!dictateToggle) return;
@@ -423,6 +430,11 @@ export function MarkdownEditor({
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && onSubmit) {
       e.preventDefault();
       onSubmit();
+      return;
+    }
+    if (e.key === "Escape" && micState.current !== "idle") {
+      e.preventDefault(); // stop the dictation, never close the editor (or the card) with its words not final
+      if (micState.current === "rec") void toggleDictation();
       return;
     }
     if (e.key === "Escape" && onCancel) {

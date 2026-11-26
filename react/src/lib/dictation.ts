@@ -202,6 +202,7 @@ function micOf(
       return rmsLevel(window);
     },
     release: () => {
+      if (released) return; // stop() then cancel() (a box let go during the final pass): the context is closed once
       released = true;
       proc.onaudioprocess = null;
       proc.disconnect();

@@ -33,6 +33,8 @@ import { AgentsAtWork } from "./Faces";
 import { CardLinks } from "./CardLinkRow";
 import { KbIcon, type IconName } from "./KbIcon";
 import { MarkdownEditor, UploadChips, type DictateHandle } from "./MarkdownEditor";
+import { MicButton } from "./MicButton";
+import { useDictation } from "./useDictation";
 import { matchesCombo, type KeyCombo } from "../lib/shortcut";
 import {
   approvedNext,
@@ -59,6 +61,8 @@ type DialogProps = {
   dictationShortcut: KeyCombo | null; // the host's dictation key (null: none)
 };
 
+type DictatingField = "comment" | "description" | "title";
+
 export function CardDialog(props: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   // the dictation shortcut (push-to-talk) anywhere while the card is open dictates into the comment box. Caught on the
@@ -78,9 +82,26 @@ export function CardDialog(props: DialogProps) {
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, []);
-  // while the comment box dictates, Esc and a click on the backdrop stop the dictation instead of closing the card (the
-  // words spoken so far would be lost with it)
-  const dictating = useRef(false);
+  // while an editor of the card dictates (the comment box, the description, the title), Esc and a click on the backdrop
+  // stop that dictation instead of closing the card (the words spoken so far would be lost with it)
+  // one slot per field (comment, description, title): a field going idle frees only its own slot, never another's
+  const stopDictation = useRef(new Map<DictatingField, () => void>());
+  const stopAny = () => {
+    const stop = stopDictation.current.values().next().value;
+    if (!stop) return false;
+    stop();
+    return true;
+  };
+  // stable: the Board re-renders the dialog on every live poll, and a field's effect keyed on it must not re-run
+  // one microphone at a time: a field that starts dictating stops the one already recording (its words land as usual)
+  const onDictating = useCallback((field: DictatingField, stop: (() => void) | null) => {
+    if (!stop) {
+      stopDictation.current.delete(field);
+      return;
+    }
+    for (const [other, stopOther] of [...stopDictation.current]) if (other !== field) stopOther();
+    stopDictation.current.set(field, stop);
+  }, []);
   // The modal opens once per card id, not on every render: the host passes a new onClose closure each time, so Esc
   // reads the CURRENT one from a ref instead of re-running the effect (which would close and reopen the dialog).
   const onClose = useRef(props.onClose);
@@ -93,10 +114,7 @@ export function CardDialog(props: DialogProps) {
     const onCancel = (e: Event) => {
       e.preventDefault();
       if (d.querySelector(".kb-lightbox")) return; // Esc closes the picture first (its own key handler), not the card
-      if (dictating.current) {
-        dictateComment.current?.toggle();
-        return;
-      }
+      if (stopAny()) return;
       onClose.current();
     };
     d.addEventListener("cancel", onCancel);
@@ -112,19 +130,11 @@ export function CardDialog(props: DialogProps) {
       aria-label="Card"
       onClick={(e) => {
         if (e.target !== ref.current) return;
-        if (dictating.current) dictateComment.current?.toggle();
-        else props.onClose();
+        if (!stopAny()) props.onClose();
       }}
       onKeyDown={(e) => e.stopPropagation()}
     >
-      <CardDetail
-        key={props.id}
-        {...props}
-        dictateComment={dictateComment}
-        onDictating={(on) => {
-          dictating.current = on;
-        }}
-      />
+      <CardDetail key={props.id} {...props} dictateComment={dictateComment} onDictating={onDictating} />
     </dialog>
   );
 }
@@ -196,8 +206,11 @@ function CardDetail({
   projectHref,
   dictateComment,
   onDictating,
-}: DialogProps & { dictateComment: MutableRefObject<DictateHandle | null>; onDictating: (on: boolean) => void }) {
-  const { api, me, config, board: shape, cardTerminals } = useKanbanHost();
+}: DialogProps & {
+  dictateComment: MutableRefObject<DictateHandle | null>;
+  onDictating: (field: DictatingField, stop: (() => void) | null) => void; // a field dictates: how to stop it (null: none)
+}) {
+  const { api, me, config, board: shape, cardTerminals, dictation } = useKanbanHost();
   const colLabel = (k: string) => labelOf(shape, k);
   const gates = shape.rules.gates;
   const { data, error, loading, reload } = useFetch<CardData>(() => api.card(id), [id]);
@@ -208,7 +221,17 @@ function CardDetail({
   const dictatingChanged = useCallback(
     (on: boolean) => {
       setCommentDictating(on);
-      onDictating(on);
+      onDictating("comment", on ? () => dictateComment.current?.toggle() : null);
+    },
+    [onDictating, dictateComment],
+  );
+  // card 662: the description editor dictates too (its mic, or the shortcut while its text has the focus)
+  const dictateDesc = useRef<DictateHandle | null>(null);
+  const [descDictating, setDescDictating] = useState(false); // its Save waits for the final text
+  const descDictatingChanged = useCallback(
+    (on: boolean) => {
+      setDescDictating(on);
+      onDictating("description", on ? () => dictateDesc.current?.toggle() : null);
     },
     [onDictating],
   );
@@ -330,6 +353,27 @@ function CardDetail({
     }
   };
   const patch = (body: Parameters<typeof api.update>[1]) => run(() => api.update(id, body));
+  // card 662: the title dictates too — the words go after the title's text, and once the recording stops it is saved
+  const titleVoice = useDictation({
+    dictation,
+    text: title ?? "",
+    setText: setTitle,
+    onDone: async (t, current) => {
+      const v = t.trim();
+      if (current() && v && v !== data?.card.title) await patch({ title: v });
+    },
+  });
+  const titleDictating = titleVoice.phase !== "idle";
+  const titleStop = useRef(titleVoice.toggle);
+  titleStop.current = titleVoice.toggle;
+  useEffect(
+    () => onDictating("title", titleDictating ? () => void titleStop.current() : null),
+    [titleDictating, onDictating],
+  );
+  // the description editor closed while it dictated (its Cancel): nothing is left to stop
+  useEffect(() => {
+    if (desc == null && descDictating) descDictatingChanged(false);
+  }, [desc, descDictating, descDictatingChanged]);
   // the operator takes an assigned PR off the card, with the reason typed into the rail row's form (logged on the
   // card) → null, or the refusal's text for the form to show
   const unassignPr = async (l: CardLink, reason: string): Promise<string | null> => {
@@ -513,21 +557,45 @@ function CardDetail({
           <span>{err}</span>
         </div>
       )}
-      <textarea
-        className="kb-ttl"
-        rows={1}
-        maxLength={200}
-        aria-label="Title"
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        onBlur={saveTitle}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            (e.target as HTMLTextAreaElement).blur();
-          }
-        }}
-      />
+      <div className="kb-ttl-row">
+        <textarea
+          className="kb-ttl"
+          rows={1}
+          maxLength={200}
+          aria-label="Title"
+          value={title}
+          readOnly={titleDictating}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            titleVoice.clearError();
+          }}
+          onBlur={() => {
+            if (!titleDictating) saveTitle(); // the words are not final yet: saved once the recording stops
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              if (titleDictating) void titleVoice.toggle();
+              else (e.target as HTMLTextAreaElement).blur();
+            }
+          }}
+        />
+        {dictation && (
+          <MicButton
+            phase={titleVoice.phase}
+            mic={titleVoice.capture}
+            warn={titleVoice.warn}
+            keyHint={null}
+            label="title"
+            onToggle={() => void titleVoice.toggle()}
+          />
+        )}
+      </div>
+      {titleVoice.error && (
+        <p className="kb-ttl-err" role="alert">
+          {titleVoice.error}
+        </p>
+      )}
 
       <div className="kb-dbody">
         <div className="kb-main">
@@ -787,6 +855,9 @@ function CardDetail({
                   value={desc}
                   onChange={setDesc}
                   onUpload={uploadFile}
+                  dictate
+                  dictateToggle={dictateDesc}
+                  onDictatingChange={descDictatingChanged}
                   ariaLabel="Description"
                   rows={8}
                   autoFocus
@@ -795,7 +866,11 @@ function CardDetail({
                   placeholder="Markdown: **bold**, `code`, - lists, - [ ] tasks, @name"
                 />
                 <div className="kb-row">
-                  <button className="btn primary small" disabled={busy}>
+                  <button
+                    className="btn primary small"
+                    disabled={busy || descDictating}
+                    title={descDictating ? "Stop the dictation first: its words are not final yet" : undefined}
+                  >
                     Save
                   </button>
                   <button type="button" className="btn small" onClick={() => setDesc(null)}>
