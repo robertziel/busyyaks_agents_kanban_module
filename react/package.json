@@ -1,6 +1,6 @@
 {
   "name": "@agents-kanban/react",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The agents_kanban board for a React 18 host: Board, CardDialog, MarkdownEditor over an injected KanbanApi; the board's shape from the server's config.",
   "type": "module",
   "private": true,

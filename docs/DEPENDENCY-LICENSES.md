@@ -5,7 +5,7 @@ bundle is published. Its dependencies are downloaded when a suite's image is bui
 `react/Dockerfile`, `scripts/lint/`, `scripts/hooks/`). Material that IS in the repository is listed in
 [`NOTICE`](../NOTICE).
 
-Read from the lockfiles at 0.1.0; re-check after a dependency change with the commands at the end.
+Read from the lockfiles at 0.2.0; re-check after a dependency change with the commands at the end.
 
 ## Ruby gems (`ruby/Gemfile.lock`, 35 gems)
 
