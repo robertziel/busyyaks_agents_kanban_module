@@ -40,6 +40,10 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 
 ### Fixed
 
+- **A handoff's screenshots show once**: the card dialog's handoff panel no longer repeats every picture attached to
+  the card — they show in Attachments; the panel's "UI change · N screenshots in Attachments ↓" brings that list into
+  view. `kanban_handoff` refuses a `qa` that links or embeds one of the card's attachments (nothing written), naming
+  it.
 - **A failed board refresh is retried**: `useLiveRev` takes a new revision as seen only once its refresh landed; a
   refresh that fails is asked again on the next poll and its error is the live state's ("refresh failed: …"), so a card
   moved on the server no longer stays in its old column. `useFetch.reload` resolves to its outcome; `refreshOrThrow`.

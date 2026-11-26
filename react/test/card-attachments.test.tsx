@@ -207,3 +207,66 @@ describe("card attachments", () => {
     }
   });
 });
+
+// card 646: a handoff's screenshots ARE the card's attachments — shown once, in Attachments; the handoff panel
+// carries only their count, a button that brings the Attachments list into view
+describe("the handoff panel and the attachments", () => {
+  function handoffApi(): KanbanApi {
+    const handed = {
+      ...theCard,
+      column: "human_check",
+      handoff: "2026-11-18T13:00:00Z",
+      handoff_by: "agent-1",
+      pr_url: "https://github.com/g/r/pull/5",
+      ci_url: "https://ci.example/job/5",
+      ui_change: true,
+      qa_html: "<p>open the board</p>",
+    } as Card;
+    const cardData: CardData = {
+      card: { ...handed, attachments: files, description: "", description_html: "", checklists: [] },
+      activity,
+      pings: [],
+      links: [],
+    };
+    const data = boardData(coding, [handed]);
+    const known: Partial<KanbanApi> = {
+      board: () => Promise.resolve(data),
+      boardRev: () => Promise.resolve("r1"),
+      card: () => Promise.resolve(cardData),
+      cardRev: () => Promise.resolve("c1"),
+      markdownPreview: () => Promise.resolve("<p>preview</p>"),
+    };
+    return new Proxy({} as KanbanApi, {
+      get: (_t, k: string) => (known as Record<string, unknown>)[k] ?? (() => Promise.resolve({})),
+    });
+  }
+
+  it("shows no picture in the handoff, only the count, which jumps to Attachments", async () => {
+    const scrolled: Element[] = [];
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    try {
+      render(
+        <Board
+          api={handoffApi()}
+          me="me"
+          slug="g/r"
+          view={{ card: 7, panel: null, archived: false }}
+          onView={() => {}}
+        />,
+      );
+      const panel = await screen.findByRole("region", { name: "Human Check handoff" });
+      expect(within(panel).queryAllByRole("img")).toHaveLength(0);
+      expect(panel.querySelector(".kb-handoff-shots")).toBeNull();
+      const row = screen.getByRole("list", { name: "Attachments, newest first" });
+      expect(within(row).getByRole("button", { name: "Open shot1.png" })).toBeInTheDocument();
+      fireEvent.click(within(panel).getByRole("button", { name: "UI change · 2 screenshots in Attachments ↓" }));
+      expect(scrolled).toEqual([row]);
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, "scrollIntoView", original);
+      else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+});

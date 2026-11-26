@@ -246,6 +246,8 @@ function CardDetail({
   const [dragging, setDragging] = useState(false);
   const [lightbox, setLightbox] = useState<{ url: string; name: string; a?: Attachment; video?: boolean } | null>(null);
   const picker = useRef<HTMLInputElement>(null);
+  // the Attachments list: the handoff's screenshot count jumps to it (the pictures are shown there only, card 646)
+  const attachmentsRef = useRef<HTMLUListElement>(null);
   // the sticky blocks' heights, as the dialog's scroll-padding-bottom (kanban.css): a field focused or scrolled into view
   // is placed above the action bar and the comment box, never under them
   const [acts, setActs] = useState<HTMLDivElement | null>(null);
@@ -628,10 +630,17 @@ function CardDetail({
                         CI build ↗
                       </a>
                     )}
-                    {c.ui_change ? (
-                      <span className="kb-ui-flag">
-                        UI change · {pictures.length} screenshot{pictures.length === 1 ? "" : "s"}
-                      </span>
+                    {c.ui_change && pictures.length > 0 ? (
+                      // the screenshots are the card's attachments: shown once, in Attachments — this jumps there
+                      <button
+                        type="button"
+                        className="kb-ui-flag"
+                        onClick={() => attachmentsRef.current?.scrollIntoView({ block: "center", behavior: "smooth" })}
+                      >
+                        UI change · {pictures.length} screenshot{pictures.length === 1 ? "" : "s"} in Attachments ↓
+                      </button>
+                    ) : c.ui_change ? (
+                      <span className="kb-ui-flag">UI change · 0 screenshots</span>
                     ) : (
                       <span className="muted">no UI change</span>
                     )}
@@ -640,21 +649,6 @@ function CardDetail({
                     <span className="kb-fact-h">How to QA</span>
                     <Html className="md" html={c.qa_html ?? ""} />
                   </div>
-                  {c.ui_change && pictures.length > 0 && (
-                    <div className="kb-handoff-shots">
-                      {pictures.map((a) => (
-                        <button
-                          type="button"
-                          key={a.id}
-                          className="kb-shot"
-                          onClick={() => setLightbox({ url: a.url, name: a.filename, a })}
-                          title={a.filename}
-                        >
-                          <img src={a.url} alt={a.filename} loading="lazy" />
-                        </button>
-                      ))}
-                    </div>
-                  )}
                   {c.ui_change && pictures.length === 0 && (
                     <p className="kb-handoff-warn">
                       UI change without screenshots — ask the agent for before/after shots
@@ -834,7 +828,7 @@ function CardDetail({
               }
             >
               <UploadChips uploads={uploads} dismiss={(k) => setUploads((u) => u.filter((x) => x.key !== k))} />
-              <ul className="kb-att-row" aria-label="Attachments, newest first">
+              <ul ref={attachmentsRef} className="kb-att-row" aria-label="Attachments, newest first">
                 {strip.map((a, i) => (
                   <AttachmentTile
                     key={a.id}

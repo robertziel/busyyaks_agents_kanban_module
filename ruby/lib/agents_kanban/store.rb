@@ -94,6 +94,12 @@ module AgentsKanban
                                 known: ->(s) { !session_slug?(s) && boards.call(s) })
       @session_board = session_board_shape(config)
       @attachment_ref = %r{\(#{Regexp.escape(config.attachment_url_prefix)}/(\d+)(?:/download)?\)}
+      # an attachment a handoff's qa may not show (card 646): any "<prefix>/<id>" in its text — a link or picture in
+      # any markdown form (title, <…>, spaces, a reference definition, a query, any host) or a bare URL — and any
+      # src / href of what it renders to (an entity-escaped path)
+      pfx = Regexp.escape(config.attachment_url_prefix)
+      @attachment_path = %r{#{pfx}/(\d+)(?!\d)}
+      @attachment_html = %r{\s(?:src|href)="(?:https?://[^/"]*)?#{pfx}/(\d+)(?:/download)?(?:[?#][^"]*)?"}
       check_priorities!
     end
 
@@ -1310,6 +1316,13 @@ module AgentsKanban
       qa = qa.to_s.strip
       if qa.length < g.qa_min_chars
         raise Invalid, "qa is required: how to check it — steps, URLs (preview/prod), what to look for"
+      end
+      shown = qa_attachments(c[:id], qa)
+      if shown.any?
+        # card 646: the card's attachments show in its Attachments section — the QA embedding them showed each twice
+        raise Invalid, "qa shows the card's attachment#{shown.size == 1 ? '' : 's'} " \
+                       "#{shown.map { |a| "#{a[:filename]} (#{config.attachment_url_prefix}/#{a[:id]})" }.join(', ')} " \
+                       "— they already show in the card's Attachments: take #{shown.size == 1 ? 'it' : 'them'} out of qa"
       end
       urls = { "pr_url" => [pr_url, g.requires_pr_url, "the GitHub PR"],
                "ci_url" => [ci_url, g.requires_ci_url, "the CI (Jenkins) build"], }
@@ -4223,6 +4236,14 @@ module AgentsKanban
                    .where(newest: 1)
                    .all
                    .to_h { |a| [a[:card_id], picture_json(a)] }
+    end
+
+    # the card's own live attachments a text links, embeds or names by URL (@attachment_path, @attachment_html)
+    def qa_attachments(card_id, text)
+      ids = (text.scan(@attachment_path) + @markdown.card(text).scan(@attachment_html)).flatten.map(&:to_i).uniq
+      return [] if ids.empty?
+
+      attachments_t.where(id: ids, card_id: card_id, deleted_at: nil).order(:id).select(:id, :filename).all
     end
 
     def picture_json(a) = { id: a[:id], filename: a[:filename], url: "#{config.attachment_url_prefix}/#{a[:id]}" }
