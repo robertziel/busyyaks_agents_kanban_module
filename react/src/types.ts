@@ -380,17 +380,21 @@ export type SessionLinks = {
   model?: string | null;
 };
 // What an agent session does now (the host's sessionsLive port; SPEC § 1, § 9): its state, and — while it works and the host can
-// read it — the phase (thinking · tool · writing), how long the turn runs, the tokens its status shows, the running tool
-// and the card a comment-writing tool writes on. A field the host cannot read is null, never guessed.
+// read it — the phase (thinking · tool · writing · subagents · background), how long the turn runs, the tokens its status
+// shows, the running tool, the card a comment-writing tool writes on, and the background work it waits on. A field the
+// host cannot read is null, never guessed.
 export type SessionLive = {
   state: string; // the host's session state, e.g. working · blocked · idle · unknown
   state_by?: string | null; // which reading said so
-  phase: "thinking" | "tool" | "writing" | "subagents" | null; // subagents = no turn of its own, its subagents run
+  // subagents = no turn of its own, its subagents run; background = its turn ended, work it started in the background
+  // (a watch, a shell) still runs and wakes it
+  phase: "thinking" | "tool" | "writing" | "subagents" | "background" | null;
   elapsed_s: number | null;
   tokens: string | null; // as the status line shows it, e.g. "↓ 1.6k"
   tool: string | null;
   card: number | null;
   subagents: number | null;
+  background?: string | null; // the background work as the host read it, e.g. "1 monitor", "3 shells"; absent = not read
 };
 // An agent at work on a card right now (the host computes it): the card's owner, one whose tool call names the card,
 // or one that just acted on it

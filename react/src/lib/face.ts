@@ -22,7 +22,17 @@ export const agentFace = (name: string): Face => ({ eyes: EYES[faceHash(name) % 
 export const wearsFace = (identity: string): boolean => !identity.includes("@");
 
 // What a face is doing. The host's words for a session's state and phase map onto these (moodOf); null = a still face.
-export const MOODS = ["sleeping", "idle", "working", "thinking", "tool", "writing", "subagents", "blocked"] as const;
+export const MOODS = [
+  "sleeping",
+  "idle",
+  "working",
+  "thinking",
+  "tool",
+  "writing",
+  "subagents",
+  "background",
+  "blocked",
+] as const;
 export type Mood = (typeof MOODS)[number];
 
 export const MOOD_WORDS: Record<Mood, string> = {
@@ -33,6 +43,7 @@ export const MOOD_WORDS: Record<Mood, string> = {
   tool: "running a tool",
   writing: "writing",
   subagents: "waiting for its subagents",
+  background: "waiting on its background work",
   blocked: "waiting for you",
 };
 
@@ -81,7 +92,13 @@ export function faceType(
 export function moodOf(live: { state: string; phase: string | null }): Mood | null {
   if (live.state === "blocked") return "blocked";
   if (live.state === "working") {
-    if (live.phase === "thinking" || live.phase === "tool" || live.phase === "writing" || live.phase === "subagents")
+    if (
+      live.phase === "thinking" ||
+      live.phase === "tool" ||
+      live.phase === "writing" ||
+      live.phase === "subagents" ||
+      live.phase === "background"
+    )
       return live.phase;
     return "working";
   }

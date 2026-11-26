@@ -1236,6 +1236,9 @@ ping[:text])
     assert_equal({ b => [lead.merge(why: "blocked")] }, kb.presence("g/r", live: { "tl_g_r" => { state: "blocked" } }),
                  "stopped on a dialog: present on the card it waits on")
     assert_equal({}, kb.presence("g/r", live: { "tl_g_r" => { "state" => "idle", "elapsed_s" => 30, "card" => a } }))
+    # its turn ended, its background work runs: elapsed_s is how long it has waited, not a turn — no activity presence
+    waits = { "tl_g_r" => { "state" => "working", "phase" => "background", "elapsed_s" => 30, "background" => "1 monitor" } }
+    assert_equal({}, kb.presence("g/r", live: waits))
     assert_equal({}, kb.presence("g/r", live: {}), "a session the host does not see is gone")
     kb.end_session("tl_g_r", reason: "done", by: "op")
     assert_equal({}, kb.presence("g/r", live: working), "an ended registration is not at work")

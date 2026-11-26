@@ -41,6 +41,10 @@ describe("liveLine", () => {
     expect(liveLine(live({ phase: "tool" }), 1).text).toBe("running a tool");
     expect(liveLine(live({}), 1).text).toBe("working");
     expect(liveLine(live({ phase: "subagents", subagents: 1 }), 1).text).toBe("waiting for its subagents · 1 subagent");
+    // its turn ended, its background work runs and wakes it: waiting on it, never idle
+    const bg = liveLine(live({ phase: "background", background: "3 shells" }), 1);
+    expect(bg).toEqual({ text: "waiting on 3 shells", tone: "working", running: true });
+    expect(liveLine(live({ phase: "background" }), 1).text).toBe("waiting on its background work");
   });
 
   it("names the card a comment tool writes on", () => {
@@ -112,7 +116,7 @@ describe("announcing and polling", () => {
 describe("workingPhase (the board's blue glow)", () => {
   const card = { owner_session: "lead" };
   it("glows on each phase a working owner session shows evidence of", () => {
-    for (const phase of ["thinking", "tool", "writing", "subagents"] as const)
+    for (const phase of ["thinking", "tool", "writing", "subagents", "background"] as const)
       expect(workingPhase(card, "working", { lead: live({ phase }) })).toBe(phase);
     expect(workingWords("tool")).toBe("running a tool");
     expect(workingWords("subagents")).toBe("waiting on its subagents"); // "its agent is waiting on its subagents"
@@ -176,6 +180,8 @@ describe("the small label's words", () => {
     expect(brief({ phase: "thinking", elapsed_s: 42 })).toBe("thinking");
     expect(brief({ phase: "writing", tokens: "↓ 1k" })).toBe("writing");
     expect(brief({ phase: "subagents", subagents: 3 })).toBe("subagents");
+    expect(brief({ phase: "background", background: "1 monitor" })).toBe("⏳ 1 monitor");
+    expect(brief({ phase: "background" })).toBe("⏳ waiting");
     expect(brief({ phase: "tool", tool: "busyyaks · kanban_card" })).toBe("kanban_card");
     expect(brief({ phase: "tool", tool: "busyyaks · kanban_comment", card: 1 })).toBe("kanban_comment");
     expect(brief({ phase: "tool", tool: "Bash" })).toBe("Bash");
@@ -230,6 +236,14 @@ describe("ownerStatus (the card face's tag beside the assignee)", () => {
     expect(at({ phase: "tool", tool: "busyyaks · kanban_card" })?.text).toBe("kanban_card");
     expect(at({ phase: "tool", tool: "Bash", elapsed_s: 7 })?.text).toBe("Bash · 7s");
     expect(at({})?.text).toBe("working"); // working, no phase read: no guess
+  });
+  it("a turn that ended while its background work runs (a watch on its tests, a shell) waits on it — never idle", () => {
+    // how long it has waited rides along (a wait that never ends shows its age)
+    expect(at({ phase: "background", background: "1 monitor", elapsed_s: 397 })).toEqual({
+      text: "⏳ 1 monitor · 6m",
+      tone: "working",
+      title: "w1: waiting on 1 monitor · 6m 37s",
+    });
   });
   it("says needs you for a session stopped on a dialog", () => {
     expect(at({ state: "blocked" })).toMatchObject({ text: "needs you", tone: "blocked" });
