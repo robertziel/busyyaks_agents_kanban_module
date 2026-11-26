@@ -4,14 +4,12 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-11-26
+
+Together with [busyyaks](https://github.com/robertziel/busyyaks) 0.2.0 (the two always carry the same version).
 
 ### Added
 
-- **A session waiting on its own background work is not idle**: `SessionLive.phase` `background` (+ optional
-  `background`, e.g. `1 monitor`, `3 shells`) — its turn ended, but what it started in the background (a watch on its
-  tests, a shell) still runs and wakes it. The card face's tag says `⏳ 1 monitor · 6m` (how long it has waited, when
-  the host reads it), the live line `waiting on 1 monitor · 6m 37s`, the card glows as working, and the face wears its own mood (looking down aside, slow blinks).
 - **What a card's agent is doing, on the card face**: beside the assignee's face, a small tag says what its owner
   session does now — its phase or tool and for how long, `needs you` when it is stopped on a dialog, and while it is
   idle what the card waits for (`waiting for your answer`, `waiting for CI`, `blocked externally`, `waiting for you`),
@@ -30,6 +28,10 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
   adopts first, which ping is typed first, and the **approved queue** — the cards approved into one column (Awaiting
   merge: the merge order) by priority, then the oldest approval. Card JSON `approved_queue` `{column, position, of,
   ahead}`; the approve ping names the cards ahead; a "⇅ queue n/m" badge on the card face. Order only, nothing refused.
+- **A session waiting on its own background work is not idle**: `SessionLive.phase` `background` (+ optional
+  `background`, e.g. `1 monitor`, `3 shells`) — its turn ended, but what it started in the background (a watch on its
+  tests, a shell) still runs and wakes it. The card face's tag says `⏳ 1 monitor · 6m` (how long it has waited, when
+  the host reads it), the live line `waiting on 1 monitor · 6m 37s`, the card glows as working, and the face wears its own mood (looking down aside, slow blinks).
 
 ### Changed (breaking for hosts)
 
@@ -301,4 +303,5 @@ schema steps may still change, each change recorded here.
   a host reads it — and inside which limits — is the host's. `CardLinks.branches`, `file_at?`, `default_ref` and
   `GIT_ENV` are gone; a host that passes no port fails on the first build (`ArgumentError`).
 
+[0.2.0]: https://github.com/robertziel/busyyaks_agents_kanban_module/releases/tag/v0.2.0
 [0.1.0]: https://github.com/robertziel/busyyaks_agents_kanban_module/releases/tag/v0.1.0
