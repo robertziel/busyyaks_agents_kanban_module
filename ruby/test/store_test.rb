@@ -409,6 +409,27 @@ class StoreTest < Minitest::Test
     assert_match(/attach screenshots first/, assert_raises(Invalid) { kb.handoff(id, **ok, ui_change: true) }.message)
     kb.attachments_t.insert(card_id: id, filename: "after.png", content_type: "image/png", size: 10, sha256: "x" * 64,
                             stored_path: "/tmp/x", uploaded_by: "claude-shop-lead", created_at: 1)
+    # card 646: a qa that embeds or links the card's own attachment is refused, nothing written — it shows in Attachments
+    shot = kb.attachments_t.where(card_id: id).get(:id)
+    pfx = kb.config.attachment_url_prefix
+    ["![after.png](#{pfx}/#{shot})", "[after.png](#{pfx}/#{shot}/download)",
+     "![after.png](https://board.example.com#{pfx}/#{shot})", "![a](#{pfx}/#{shot} \"shot\")", "![a](<#{pfx}/#{shot}>)",
+     "![a]( #{pfx}/#{shot} )", "![a](#{pfx}/#{shot}?x=1)", "![a][r]\n\n[r]: #{pfx}/#{shot}",
+     "see https://board.example.com#{pfx}/#{shot}", "<https://board.example.com#{pfx}/#{shot}>",
+     "![a](#{pfx.gsub('/', '&#47;')}&#47;#{shot})",].map { "#{ok[:qa]} #{_1}" }.each do |embeds|
+      msg = assert_raises(Invalid) { kb.handoff(id, **ok, qa: embeds, ui_change: true) }.message
+      assert_equal "qa shows the card's attachment after.png (#{pfx}/#{shot}) — they already show in the card's " \
+                   "Attachments: take it out of qa", msg
+      assert_nil kb.card(id)[:handoff]
+    end
+    # another card's attachment, or a deleted one of this card, is not this card's Attachments: no refusal on it
+    other = owned_card
+    away = kb.attachments_t.insert(card_id: other, filename: "x.png", content_type: "image/png", size: 10,
+                                   sha256: "x" * 64, stored_path: "/tmp/y", uploaded_by: "claude-shop-lead", created_at: 1)
+    gone = kb.attachments_t.insert(card_id: id, filename: "old.png", content_type: "image/png", size: 10,
+                                   sha256: "x" * 64, stored_path: "/tmp/z", uploaded_by: "claude-shop-lead", created_at: 1,
+                                   deleted_at: 2)
+    assert_empty kb.send(:qa_attachments, id, "![x](#{pfx}/#{away}) ![o](#{pfx}/#{gone}) #{pfx}/#{shot}0")
     kb.handoff(id, **ok, ui_change: true)
     c = kb.card(id)
     assert_equal ["human_check", "https://github.com/o/r/pull/100", true], c.values_at(:column, :pr_url, :ui_change)

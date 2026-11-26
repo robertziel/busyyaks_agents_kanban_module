@@ -50,6 +50,8 @@ class ToolsTest < Minitest::Test
     handoff = defs.find { |t| t[:name] == "kanban_handoff" }
     assert_equal %w[id qa ui_change author pr_url ci_url], handoff[:inputSchema][:required]
     assert_includes handoff[:inputSchema][:properties].keys, :transition
+    # card 646: the screenshots are shown once, in the card's Attachments — a qa that shows one is refused
+    assert_match(/attach screenshots FIRST.*Attachments: a qa that links or embeds one is refused/, handoff[:description])
     assert_match(/round limit \(3\).*review_summary.*label "unresolved" only when needs_human \+ open/, handoff[:description])
     assert_equal %w[fixed resolved_by_argument needs_human open],
                  handoff[:inputSchema][:properties][:review_summary][:required]

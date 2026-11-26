@@ -414,7 +414,8 @@ module AgentsKanban
         parts << "ui_change (true when it changes anything visible)"
         screenshots = if hg.ui_change_needs_screenshots
                         "For a UI change, attach screenshots FIRST with kanban_attach (before/after, mobile + desktop) " \
-                          "or it is refused. "
+                          "or it is refused — they show in the card's Attachments: a qa that links or embeds one is " \
+                          "refused. "
                       else
                         ""
                       end

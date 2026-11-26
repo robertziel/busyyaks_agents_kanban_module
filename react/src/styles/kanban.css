@@ -3452,7 +3452,7 @@
   font-size: 11.5px;
 }
 
-/* Human Check handoff (kanban_handoff): how to QA, PR + CI links, screenshots */
+/* Human Check handoff (kanban_handoff): how to QA, PR + CI links, the screenshot count (the pictures: Attachments) */
 .ak-root .kb-handoff {
   border-radius: var(--ak-radius-band);
   padding: 10px 12px;
@@ -3496,30 +3496,24 @@
   font-weight: 600;
   color: var(--ak-accent);
 }
+.ak-root button.kb-ui-flag {
+  all: unset;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ak-accent);
+  cursor: pointer;
+  border-radius: var(--ak-radius-ctl-sm);
+}
+.ak-root button.kb-ui-flag:hover {
+  text-decoration: underline;
+}
+.ak-root button.kb-ui-flag:focus-visible {
+  outline: 2px solid var(--ak-accent);
+  outline-offset: 2px;
+}
 .ak-root .kb-handoff-qa .md {
   font-size: 13.5px;
 }
-.ak-root .kb-handoff-shots {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 6px;
-}
-.ak-root .kb-shot {
-  all: unset;
-  cursor: zoom-in;
-  border-radius: var(--ak-radius-ctl-sm);
-  overflow: hidden;
-  box-shadow: inset 0 0 0 0.5px var(--ak-line-strong);
-  aspect-ratio: 16 / 10;
-  background: var(--ak-panel-2);
-}
-.ak-root .kb-shot img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
 /* Human input (kanban_ask): the open question, its answer buttons, "waiting for you" counts */
 .ak-root .kb-waiting {
   display: inline-flex;
