@@ -4,7 +4,9 @@ All notable changes to busyyaks_agents_kanban_module are recorded here. The form
 [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-11-28
+
+Together with [busyyaks](https://github.com/robertziel/busyyaks) 0.3.0 (the two always carry the same version).
 
 ### Added
 
@@ -314,5 +316,6 @@ schema steps may still change, each change recorded here.
   a host reads it — and inside which limits — is the host's. `CardLinks.branches`, `file_at?`, `default_ref` and
   `GIT_ENV` are gone; a host that passes no port fails on the first build (`ArgumentError`).
 
+[0.3.0]: https://github.com/robertziel/busyyaks_agents_kanban_module/releases/tag/v0.3.0
 [0.2.0]: https://github.com/robertziel/busyyaks_agents_kanban_module/releases/tag/v0.2.0
 [0.1.0]: https://github.com/robertziel/busyyaks_agents_kanban_module/releases/tag/v0.1.0
